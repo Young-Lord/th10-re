@@ -60,4 +60,11 @@ void FireEntityHandleEaxAbi(u32 *handle);
 i32 IsOutsidePlayfieldBox(const float position[2], float half_x,
                           float half_y);
 
+// TH10 0x004493e0. Native EAX = manager, EDX = resource pointer: walks the
+// list-A and list-B chains (manager+0x72dad4 / +0x72dadc, nodes
+// {entity, next}) and applies the 0x4000000 release flag at entity+0x35c
+// to every entity whose +0x308 resource pointer equals the argument.
+// Returns the last list-B node (or zero).
+void *ReleaseEntitiesUsingResourceEaxEdxAbi(void *manager, u32 resource);
+
 } // namespace th10

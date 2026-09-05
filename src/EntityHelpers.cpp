@@ -327,4 +327,26 @@ i32 IsOutsidePlayfieldBox(const float position[2], float half_x,
         : 0;
 }
 
+
+// TH10 0x004493e0. Native EAX = manager, EDX = resource pointer.
+void *ReleaseEntitiesUsingResourceEaxEdxAbi(void *manager, u32 resource)
+{
+    u8 *const base = static_cast<u8 *>(manager);
+    const u32 list_heads[2] = {0x72dad4U, 0x72dadcU};
+    void *last_node = 0;
+    for (u32 i = 0; i < 2U; ++i) {
+        u32 *node = *reinterpret_cast<u32 **>(base + list_heads[i]);
+        while (node != 0) {
+            u32 *const next = reinterpret_cast<u32 *>(node[1]);
+            u8 *const entity = reinterpret_cast<u8 *>(node[0]);
+            if (*reinterpret_cast<u32 *>(entity + 0x308U) == resource) {
+                *reinterpret_cast<u32 *>(entity + 0x35cU) |= 0x4000000U;
+            }
+            node = next;
+        }
+        last_node = node;
+    }
+    return last_node;
+}
+
 } // namespace th10

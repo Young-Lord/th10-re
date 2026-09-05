@@ -86,8 +86,8 @@ bool AdvanceBlockTimer(u8 *block)
 // TH10 0x00404610. Block layout: cur @0, end @0xc, handle1 @0x18,
 // handle2/vel @0x24, timer @0x30, duration @0x44, mode @0x48. Mode 7
 // mutates the start position; 0x11 integrates velocity; 8 rides the cubic
-// Hermite through both handles; the default eases with the mode value as
-// the curve selector (mode 0xf = 1.0, 0x10 = 0.5 per 0x444c350).
+// Hermite through both handles; everything else eases with the mode value
+// as the curve selector (mode 0xf = 0.0, 0x10 = 1.0 per 0x44c350).
 void TickVec3Interpolator(void *block_memory, float out_vec3[3])
 {
     u8 *const block = static_cast<u8 *>(block_memory);
@@ -123,26 +123,93 @@ void TickVec3Interpolator(void *block_memory, float out_vec3[3])
                     h10 * ReadFloat(block, 0x18 + component * 4) +
                     h11 * ReadFloat(block, 0x24 + component * 4);
         } else {
-            float factor;
-            switch (mode) {
-            case 1: factor = t * t; break;
-            case 2: factor = t * t * t; break;
-            case 3: factor = t * t * t * t; break;
-            case 4: factor = 1.0f - (1.0f - t) * (1.0f - t); break;
-            case 5:
-                factor = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
-                break;
-            case 6:
-                factor = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t) *
-                                   (1.0f - t);
-                break;
-            case 0xf: factor = 1.0f; break;
-            case 0x10: factor = 0.5f; break;
-            default: factor = t; break;
-            }
+            const double factor = EasingCurveSelectorEaxStackAbi(
+                mode, ReadFloat(block, 0x38),
+                static_cast<float>(*reinterpret_cast<const i32 *>(
+                    block + 0x44)));
             value = pos + (end - pos) * factor;
         }
         out_vec3[component] = value;
+    }
+}
+
+// TH10 0x0044C350. The shared easing-curve selector behind every
+// interpolator block. Computes t = value / denominator once, then picks
+// the curve from EAX (block mode field, raw values 1..16). Constants are
+// TH10 flt_470AFC = 1.0, flt_470B04 = 0.0, flt_470B08 = 2.0,
+// flt_470B0C = 0.5. The in/out pairs compare 2*t against 1.0 with
+// FCOM/FNSTSW: a NaN takes the "out" branch (the unordered case sets the
+// parity flag the same as "not below"), preserved by negating the less
+// test. Modes 7 and 8 never reach the selector (handled inline by the
+// callers), and modes 0/7/8/>16 fall through to the raw ratio.
+double EasingCurveSelectorEaxStackAbi(i32 mode, float value,
+                                      float denominator)
+{
+    const double t = static_cast<double>(value) /
+                     static_cast<double>(denominator);
+    switch (mode) {
+    case 1:
+        return t * t;
+    case 2:
+        return t * t * t;
+    case 3:
+        return t * t * t * t;
+    case 4:
+        return 1.0 - (1.0 - t) * (1.0 - t);
+    case 5:
+        return 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t);
+    case 6:
+        return 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t) * (1.0 - t);
+    case 9: {
+        const double doubled = t + t;
+        if (!(doubled < 1.0))
+            return (2.0 - (2.0 - doubled) * (2.0 - doubled)) * 0.5;
+        return doubled * doubled * 0.5;
+    }
+    case 10: {
+        const double doubled = t + t;
+        if (!(doubled < 1.0)) {
+            const double mirrored = 2.0 - doubled;
+            return (2.0 - mirrored * mirrored * mirrored) * 0.5;
+        }
+        return doubled * doubled * doubled * 0.5;
+    }
+    case 11: {
+        const double doubled = t + t;
+        if (!(doubled < 1.0)) {
+            const double mirrored = 2.0 - doubled;
+            return (2.0 - mirrored * mirrored * mirrored * mirrored) * 0.5;
+        }
+        return doubled * doubled * doubled * doubled * 0.5;
+    }
+    case 12: {
+        const double doubled = t + t;
+        if (!(doubled < 1.0))
+            return (doubled - 1.0) * (doubled - 1.0) * 0.5 + 0.5;
+        return 0.5 - (1.0 - doubled) * (1.0 - doubled) * 0.5;
+    }
+    case 13: {
+        const double doubled = t + t;
+        if (!(doubled < 1.0))
+            return (doubled - 1.0) * (doubled - 1.0) * (doubled - 1.0) *
+                       0.5 + 0.5;
+        return 0.5 - (1.0 - doubled) * (1.0 - doubled) * (1.0 - doubled) *
+                         0.5;
+    }
+    case 14: {
+        const double doubled = t + t;
+        if (!(doubled < 1.0))
+            return (doubled - 1.0) * (doubled - 1.0) * (doubled - 1.0) *
+                       (doubled - 1.0) * 0.5 + 0.5;
+        return 0.5 - (1.0 - doubled) * (1.0 - doubled) * (1.0 - doubled) *
+                         (1.0 - doubled) * 0.5;
+    }
+    case 15:
+        return 0.0;
+    case 16:
+        return 1.0;
+    default:
+        return t;
     }
 }
 

@@ -20,6 +20,7 @@ th10_cl /nologo /c /TP /I src src/AsciiHudRenderer.cpp /Fobuild\\cpp\\AsciiHudRe
 th10_cl /nologo /c /TP /I src src/AsciiOverlayCallbacks.cpp /Fobuild\\cpp\\AsciiOverlayCallbacks.obj
 th10_cl /nologo /c /TP /I src src/AsciiOverlayFactory.cpp /Fobuild\\cpp\\AsciiOverlayFactory.obj
 th10_cl /nologo /c /TP /I src src/AsciiSceneObjectRenderer.cpp /Fobuild\\cpp\\AsciiSceneObjectRenderer.obj
+th10_cl /nologo /c /TP /I src src/AsciiHudOverlayUpdate.cpp /Fobuild\\cpp\\AsciiHudOverlayUpdate.obj
 th10_cl /nologo /c /TP /I src src/PlayerObjectLifecycle.cpp /Fobuild\\cpp\\PlayerObjectLifecycle.obj
 th10_cl /nologo /c /TP /I src src/PlayerModeDispatcher.cpp /Fobuild\\cpp\\PlayerModeDispatcher.obj
 th10_cl /nologo /c /TP /I src src/PlayerOptionRecords.cpp /Fobuild\\cpp\\PlayerOptionRecords.obj
@@ -86,7 +87,11 @@ th10_cl /nologo /c /TP /I src src/MainChainD3DDevice.cpp /Fobuild\\cpp\\MainChai
 th10_cl /nologo /c /TP /I src src/MainChainStartupInputState.cpp /Fobuild\\cpp\\MainChainStartupInputState.obj
 th10_cl /nologo /c /TP /I src src/MainChainFileProbe.cpp /Fobuild\\cpp\\MainChainFileProbe.obj
 th10_cl /nologo /c /TP /I src src/TitleGameManagerLifecycle.cpp /Fobuild\\cpp\\TitleGameManagerLifecycle.obj
+th10_cl /nologo /c /TP /I src src/TitleCalcCluster.cpp /Fobuild\\cpp\\TitleCalcCluster.obj
+th10_cl /nologo /c /TP /I src src/TitleScreenCalcBody.cpp /Fobuild\\cpp\\TitleScreenCalcBody.obj
 th10_cl /nologo /c /TP /I src src/GameManagerState.cpp /Fobuild\\cpp\\GameManagerState.obj
+th10_cl /nologo /c /TP /I src src/ReplaySave.cpp /Fobuild\\cpp\\ReplaySave.obj
+th10_cl /nologo /c /TP /I src src/ScoreSave.cpp /Fobuild\\cpp\\ScoreSave.obj
 th10_cl /nologo /c /TP /I src src/GameManagerStateBodies.cpp /Fobuild\\cpp\\GameManagerStateBodies.obj
 th10_cl /nologo /c /TP /I src src/MainChainRenderRecovery.cpp /Fobuild\\cpp\\MainChainRenderRecovery.obj
 th10_cl /nologo /c /TP /I src src/GeneratedFontTable.cpp /Fobuild\\cpp\\GeneratedFontTable.obj
@@ -97,10 +102,21 @@ th10_cl /nologo /c /TP /I src src/MainChainBackgroundThread.cpp /Fobuild\\cpp\\M
 th10_cl /nologo /c /TP /I src src/MainChainThreadCreation.cpp /Fobuild\\cpp\\MainChainThreadCreation.obj
 th10_cl /nologo /c /TP /I src src/MainChainSoundWorker.cpp /Fobuild\\cpp\\MainChainSoundWorker.obj
 th10_cl /nologo /c /TP /I src src/MainChainInput.cpp /Fobuild\\cpp\\MainChainInput.obj
+th10_cl /nologo /c /TP /I src src/JoystickConfigPoll.cpp /Fobuild\\cpp\\JoystickConfigPoll.obj
+th10_cl /nologo /c /TP /I src src/KeyConfigScreens.cpp /Fobuild\\cpp\\KeyConfigScreens.obj
+th10_cl /nologo /c /TP /I src src/EclScriptLibrary.cpp /Fobuild\\cpp\\EclScriptLibrary.obj
+th10_cl /nologo /c /TP /I src src/TextureDilateFilter.cpp /Fobuild\\cpp\\TextureDilateFilter.obj
+th10_cl /nologo /c /TP /I src src/ResultScreenDigits.cpp /Fobuild\\cpp\\ResultScreenDigits.obj
+th10_cl /nologo /c /TP /I src src/EclSelectMenu.cpp /Fobuild\\cpp\\EclSelectMenu.obj
+th10_cl /nologo /c /TP /I src src/ManagerReleaseWrappers.cpp /Fobuild\\cpp\\ManagerReleaseWrappers.obj
+th10_cl /nologo /c /TP /I src src/TitleScoreAnimTriggers.cpp /Fobuild\\cpp\\TitleScoreAnimTriggers.obj
+th10_cl /nologo /c /TP /I src src/ManagerCreation.cpp /Fobuild\\cpp\\ManagerCreation.obj
 th10_cl /nologo /c /TP /I src src/MainChainDirectInputAdapter.cpp /Fobuild\\cpp\\MainChainDirectInputAdapter.obj
 th10_cl /nologo /c /TP /I src src/MainChainResourceThread.cpp /Fobuild\\cpp\\MainChainResourceThread.obj
 th10_cl /nologo /c /TP /I src src/MainChainSoundLoading.cpp /Fobuild\\cpp\\MainChainSoundLoading.obj
 th10_cl /nologo /c /TP /I src src/PackedArchive.cpp /Fobuild\\cpp\\PackedArchive.obj
+th10_cl /nologo /c /TP /I src src/ResultScreenScript.cpp /Fobuild\\cpp\\ResultScreenScript.obj
+th10_cl /nologo /c /TP /I src src/ResultScreenUpdate.cpp /Fobuild\\cpp\\ResultScreenUpdate.obj
 printf 'Wrote %s\n' "$repo_root/build/cpp/MainChainContext.obj"
 printf 'Wrote %s\n' "$repo_root/build/cpp/AsciiManagerLifecycle.obj"
 printf 'Wrote %s\n' "$repo_root/build/cpp/AsciiAnimationVm.obj"
@@ -176,3 +192,4 @@ printf 'Wrote %s\n' "$repo_root/build/cpp/MainChainDirectInputAdapter.obj"
 printf 'Wrote %s\n' "$repo_root/build/cpp/MainChainResourceThread.obj"
 printf 'Wrote %s\n' "$repo_root/build/cpp/MainChainSoundLoading.obj"
 printf 'Wrote %s\n' "$repo_root/build/cpp/PackedArchive.obj"
+th10_cl /nologo /c /TP /I src src/ResultScreenScript.cpp /Fobuild\cpp\ResultScreenScript.obj

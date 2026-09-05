@@ -12,9 +12,31 @@ Module: `src/VmLeafHelpers.cpp/.hpp`, plus corrections applied to
   this is the inverse window of the delta-shift helper). Completion
   outputs the endpoint (mode 7 outputs the mutated start). Mode 7 adds a
   delta, 0x11 integrates velocity (`vel += end` after `pos += vel`), 8
-  rides the cubic Hermite through both handles, and the default eases with
-  the mode value as the curve selector (1..6 powers, 0xf = 1, 0x10 = 0.5;
-  the 9..0xe S-curves remain in the timeline port).
+  rides the cubic Hermite through both handles, and everything else eases
+  with the mode value as the curve selector `0x0044c350` (see below).
+- `0x0044c350 EasingCurveSelectorEaxStackAbi`: the shared easing-curve
+  selector. Native ABI: EAX = curve mode (raw 1..16), two float stack
+  arguments `{value, denominator}` (`retn 8`), result returned as a
+  double in ST0. Computes `t = value / denominator` once (caller passes
+  the block accumulator float and the duration converted by `FILD`), then
+  dispatches through a 16-entry jump table at `0x44c550` guarded by
+  `dec eax; cmp eax, 0xf; ja default`:
+  - 1..3 ease-in `t^2..t^4`; 4..6 ease-out `1-(1-t)^2..^4`.
+  - 9..11 ease-in-out: `u = t+t`; `!(u < 1.0)` branch `(2-(2-u)^n)/2`,
+    else `u^n/2`, with n = 2/3/4.
+  - 12..14 the mirrored in-out formulations: `!(u < 1.0)` branch
+    `(u-1)^n/2 + 0.5`, else `0.5 - (1-u)^n/2` (same shapes, different
+    x87 operation order — kept as written).
+  - 15 returns 0.0 (`flt_470b04`), 16 returns 1.0 (`flt_470afc`).
+  - Default (modes 0, 7, 8 and anything above 16) returns the raw ratio.
+  Quirks preserved: the FCOM/FNSTSW `test ah, 5 / jp` comparison sends
+  NaN down the "out" branch of each pair (unordered sets the parity flag),
+  modeled by negating the `<` test; all math runs in x87 extended
+  precision, modeled as doubles. Not self-recursive (the switch cases
+  share merge blocks; no call to itself exists). The earlier note
+  "0xf = 1.0, 0x10 = 0.5" in this file was a misread of the constant
+  block and has been corrected — the two constants are 0.0 and 1.0, and
+  the old inline switch omitted the 9..14 S-curves entirely.
 - `0x004050d0 ResetVec3InterpolatorTimer`: lazy sentinel init then the
   unconditional stopped-timer reset; the `0xfff0bdc1` poison in prev is
   never read as a float (overwritten by `prev = cur` on the first tick).

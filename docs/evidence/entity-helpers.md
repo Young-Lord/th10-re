@@ -63,3 +63,16 @@ becomes the old head and the old head's prev becomes the new node; when
 empty the tail at `+0x72dad8` is set once. The head is always the new node.
 Native keeps a dead branch (`v5 = new->next` right after it was zeroed)
 that has no observable effect.
+
+## Resource-keyed release walk (0x004493e0)
+
+`ReleaseEntitiesUsingResourceEaxEdxAbi` (native EAX = manager, EDX =
+resource pointer) walks the list-A and list-B node chains
+(`manager+0x72dad4` / `+0x72dadc`, nodes `{entity, next}`) and applies
+`entity+0x35c |= 0x4000000` to every entity whose `+0x308` resource
+pointer equals EDX. Returns the last list-B node (or zero).
+
+Note: the 0x00405ed0 wrapper passes its ECX (never established by any
+call site — caller garbage) as the manager and its +0x3e0bb0 slot as the
+resource; the wrapper remains a boundary until that indeterminacy is
+pinned down.

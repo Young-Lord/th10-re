@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include <string.h>
 
 #include "CallbackScheduler.hpp"
@@ -8,6 +9,13 @@
 #include "Th10Platform.hpp"
 #include "Th10Types.hpp"
 #include "ThreadControl.hpp"
+#include "BgmRuntime.hpp"
+#include "MainChainRuntime.hpp"
+#include "TimelineContinuation.hpp"
+#include "TimelineRenderObjects.hpp"
+#include "ScoreSave.hpp"
+#include "TitleCalcCluster.hpp"
+#include "TitleScreenCalcBody.hpp"
 
 namespace th10 {
 
@@ -88,9 +96,9 @@ extern void ReportMainChainErrorText(void *receiver,
 // subsystem set and returns 0 on success / -1 on failure.
 extern i32 RunTitleScreenStartupBody(void *title_screen); // TH10 0x00417870
 // Title-screen per-frame calc controller (0x00418190), forwarded to by the
-// title calculation-record callback at 0x004187c0.
-extern i32 RunTitleScreenCalcBody(void *title_screen); // TH10 0x00418190
-extern void TeardownTitleScreenInPlace(void *title_screen); // TH10 0x00417c80
+// title calculation-record callback at 0x004187c0; the semantic body lives
+// in TitleScreenCalcBody.cpp (included at the top of this file).
+i32 TH10_STDCALL TeardownTitleScreenStackAbi(void *title_screen); // TH10 0x00417c80 (body below)
 // Shared frame/state block rooted at DAT_00474c40 and the float whose address
 // the block stores (flt_00476f78); both are fixed globals used by the title
 // and game-manager controllers.
@@ -621,7 +629,7 @@ i32 TitleScreenDrawCallback(void *title_screen)
 // ECX) to the title calc controller at 0x00418190.
 i32 TitleScreenCalcCallback(void *title_screen)
 {
-    return RunTitleScreenCalcBody(title_screen);
+    return RunTitleScreenCalcBodyStackAbi(title_screen);
 }
 
 } // namespace
@@ -656,15 +664,405 @@ void *CreateTitleScreen(u32 mode)
     return title;
 }
 
+
 // TH10 0x00418150. Null-checks the object, runs the in-place teardown at
 // 0x00417c80 (which itself clears DAT_00477810) and releases the outer
 // allocation. The wrapper does not clear the global.
 void DestroyTitleScreen(void *title_screen)
 {
     if (title_screen != 0) {
-        TeardownTitleScreenInPlace(title_screen);
+        TeardownTitleScreenStackAbi(title_screen);
         FreeMainChainObject(title_screen);
     }
+}
+
+namespace {
+
+// Boundary set for the title-screen teardown (0x00417c80). Each native entry
+// below destroys one main-chain manager; the caller then releases the outer
+// allocation with the shared operator delete (FreeMainChainObject).
+extern void DestroyOpaqueMainChainManagerInPlace(void *object); // TH10 0x004294a0 (already declared above)
+extern void DestroyTitleScreenVmRecordInPlace(void *record); // TH10 0x00401ff0, native __thiscall ECX=record
+extern void CleanupAsciiHudOwnerSubBlocksStackAbi(void *object); // TH10 0x00414370, one stack argument
+extern void ReleaseAsciiHudOwnerTimelineSlotEaxStackAbi(void *entity, u32 arg); // TH10 0x004493e0, native EAX = entity
+extern void DestroyGameStateObjectInPlace(void *object); // TH10 0x00422220 (DAT_00477830)
+extern void DestroyPlayerStateBlockInPlace(void *object); // TH10 0x00424ed0 (DAT_00477834)
+extern void DestroyEffectManagerRootInPlace(void *object); // TH10 0x00405f70 (DAT_004776f0)
+extern void DestroyBulletManagerInPlace(void *object); // TH10 0x0041adf0 (DAT_00477818)
+extern void DestroyBulletListRootInPlace(void *object); // TH10 0x0041c1c0 (DAT_0047781c)
+extern void DestroyTextLayerManagerInPlace(void *object); // TH10 0x00418ee0 (DAT_00477814)
+extern void DestroyMainChainObject840InPlace(void *object); // TH10 0x0042b570 (DAT_00477840)
+extern void DestroyAsciiHudConditionalStateEax(void *state); // TH10 0x0040d530, native EAX argument
+extern void DestroyMainChainObject6fcInPlace(void *object); // TH10 0x0040af00 (DAT_004776fc)
+extern void DestroyGameContextInPlace(void *object); // TH10 0x00405620 (DAT_004776ec)
+extern void DestroySpellBulletBaseInPlace(void *object); // TH10 0x00408af0 (DAT_004776f4)
+// Native EAX argument: the shared DAT_00474c40 frame-state block.
+extern void ResetMainChainFrameStateBlockEax(void *block); // TH10 0x00418a90
+// Native EBX argument: the score-save record image (scoreth10.dat writer).
+// Semantic body reconstructed in src/ScoreSave.cpp (header included above).
+// Pointer variable whose value 0x00417c80 hands to 0x0042b1e0 in EBX.
+extern void *g_TitleScoreSaveRecord; // TH10 DAT_0047783c
+// Native EBX argument: frees replay/save scratch hanging off the HUD owner.
+extern void ReleaseAsciiHudOwnerBuffersEbx(void *owner); // TH10 0x00414570
+
+extern void *g_TitleScreenStatePrimary; // TH10 DAT_004776e4 (freed, then re-seeded from the secondary)
+extern void *g_TitleScreenStateSecondary; // TH10 DAT_004776e8
+extern void *g_GameStateManager; // TH10 DAT_00477830
+extern void *g_AsciiHudOwner; // TH10 DAT_0047770c
+extern u8 *g_OptionPositionBase; // TH10 DAT_00477834
+extern void *g_GameModeObject; // TH10 DAT_00477838
+extern void *g_EffectManagerRoot; // TH10 DAT_004776f0
+extern u8 *g_BulletManagerSlot; // TH10 DAT_00477818
+extern void *g_BulletListRoot; // TH10 DAT_0047781c
+extern void *g_TextLayerManagerSlot; // TH10 DAT_00477814
+extern void *g_MainChainObject840; // TH10 DAT_00477840
+extern void *g_AsciiHudConditionalState; // TH10 DAT_00477704
+extern void *g_MainChainObject6fc; // TH10 DAT_004776fc
+extern void *g_GameContext; // TH10 DAT_004776ec
+extern void *g_SpellBulletBase; // TH10 DAT_004776f4
+extern u32 g_MainChainRuntimeOptions; // TH10 DAT_00491d78
+extern u32 g_MainChainClearColor; // TH10 DAT_004923a8
+extern Win32CriticalSection g_CallbackSchedulerLock; // TH10 DAT_00492274
+extern u8 g_CallbackSchedulerActivityDepth; // TH10 DAT_0049231c
+extern TransitionRootPartial g_TransitionRoot; // TH10 DAT_00492590
+
+// AsciiManager tail fields used by the mode-10 (in-game) teardown path.
+struct AsciiManagerContinuationSlice {
+    u8 unknown_0000[0x8994];
+    void *ascii_animation_work;
+    u8 unknown_8998[4];
+    void *text_animation_work;
+    u8 unknown_89a0[4];
+    i32 continuation_handle;
+    u8 unknown_89a8[8];
+};
+
+typedef char AssertTeardownContinuationHandleOffset[
+    offsetof(AsciiManagerContinuationSlice, continuation_handle) == 0x89a4
+        ? 1 : -1];
+
+extern AsciiManagerContinuationSlice *g_AsciiManager; // TH10 DAT_004776e0
+
+typedef void (*TeardownDestroyFn)(void *);
+
+void DestroyAndFreeSlot(void **slot, TeardownDestroyFn destroy_in_place)
+{
+    if (*slot == 0)
+        return;
+    destroy_in_place(*slot);
+    FreeMainChainObject(*slot);
+}
+
+// The reuse path only clears the enabled bit (bit 1) of the scheduler chain
+// records referenced from the manager objects; the managers stay alive.
+void ClearChainRecordEnabledBit(void *base, u32 offset)
+{
+    void *record =
+        *reinterpret_cast<void **>(static_cast<u8 *>(base) + offset);
+    if (record != 0)
+        *reinterpret_cast<u32 *>(static_cast<u8 *>(record) + 4) &= ~2U;
+}
+
+} // namespace
+
+// TH10 0x00417c80. Title-screen / game-manager lifecycle teardown, native
+// ABI stdcall ret 4 with the 0x60-byte title screen as the only stack
+// argument. This is the shared exit path for every g_MainChainSharedStatus
+// (0x00491fb8) transition:
+//  - saves scoreth10.dat first (0x0042b1e0, EBX = DAT_0047783c record),
+//  - clears mode flags bits 0/1 of DAT_00474ca0 and restores the 1.0 time
+//    scale target (flt_00476f78),
+//  - status 11: starts the timeline continuation at 224x416 and latches
+//    mode-flag bit 1 (keep-managers reuse),
+//  - status 4/15: starts the continuation at 480x392,
+//  - status 13: continuation 480x392 plus, when the stage selectors
+//    (DAT_00474c80/7c) differ, the frame-state reset (0x00418a90, EAX =
+//    DAT_00474c40) and mode-flag bit 3; bit 0 always latched,
+//  - status 10 (in-game): seeds the continuation render handle at
+//    AsciiManager+0x89a4 (kind 6, work +0x8994) when empty, and latches bit 0
+//    only when the selectors are equal.
+// The big manager release sweep only runs when mode-flag bit 1 is clear; the
+// reuse path instead frees just the primary state buffer, swaps in the
+// secondary, clears the enabled bit of scheduler records referenced from
+// DAT_00477830/DAT_004776f0/DAT_00477838 (+8/+0xc, +0x1cc/+0xc) and zeroes
+// 0x21cea0 bytes at DAT_00477818+0x14. Everything else (HUD conditional
+// state, slot releases, callback-record removal, title global clear, BGM
+// stop command, release gate and clear-color publication) is unconditional.
+// TH10 0x00402440. In-place destructor of the 0x2a78-byte title-screen state
+// object (DAT_004776e4/e8). Removes the three scheduler records at +0x08,
+// +0x0c and +0x2a40 under the scheduler lock (records are not cleared),
+// frees the three scratch buffers at +0x10 / +0x2a44 / +0x17c through the
+// CRT free (the +0x2a44 slot is cleared twice, matching the native),
+// releases the render-owner large slot selected by (object+0x2a30 & 1) + 4
+// when the immediate-clear mode flag bit 0 is clear, clears the primary /
+// secondary state globals when they point at this object, and finally runs
+// the eh vector destructor iterators over the 3-record array at +0x1f08 and
+// the 8-record array at +0x180 (0x3ac-byte records each).
+
+void DestroyTitleScreenStateBufferInPlace(void *object)
+{
+    u8 *const state = static_cast<u8 *>(object);
+    const u32 record_slots[3] = {0x08U, 0x0cU, 0x2a40U};
+    for (u32 i = 0; i < 3U; ++i) {
+        ChainElem *const record = *reinterpret_cast<ChainElem **>(
+            state + record_slots[i]);
+        if (record == 0) {
+            continue;
+        }
+        EnterCriticalSectionInternal(&g_CallbackSchedulerLock);
+        ++g_CallbackSchedulerActivityDepth;
+        CallbackSchedulerApi::Remove(g_CallbackScheduler, record);
+        LeaveCriticalSectionInternal(&g_CallbackSchedulerLock);
+        --g_CallbackSchedulerActivityDepth;
+    }
+
+    const u32 buffer_slots[3] = {0x10U, 0x2a44U, 0x17cU};
+    for (u32 i = 0; i < 3U; ++i) {
+        void *buffer = *reinterpret_cast<void **>(state + buffer_slots[i]);
+        if (buffer == 0) {
+            continue;
+        }
+        ReleaseResourceBuffer(buffer);
+        *reinterpret_cast<u32 *>(state + buffer_slots[i]) = 0U;
+        if (buffer_slots[i] == 0x2a44U) {
+            // The native clears +0x2a44 again while testing +0x17c.
+            *reinterpret_cast<u32 *>(state + 0x2a44U) = 0U;
+        }
+    }
+
+    if ((g_GlobalModeFlags & 1U) == 0U) {
+        u32 index = (*reinterpret_cast<const u32 *>(state + 0x2a30U) & 1U) + 4U;
+        if (index < 0x21U) {
+            u32 *const slot = reinterpret_cast<u32 *>(
+                reinterpret_cast<u8 *>(g_MainChainRenderOwner)
+                + index * 4U + 0x3ad06cU);
+            if (*slot != 0U) {
+                ReleaseLargeRenderOwnerSlot();
+                FreeMainChainObject(reinterpret_cast<void *>(*slot));
+                *slot = 0U;
+            }
+        }
+    }
+
+    if (g_TitleScreenStateSecondary == object) {
+        g_TitleScreenStateSecondary = 0;
+    }
+    if (g_TitleScreenStatePrimary == object) {
+        g_TitleScreenStatePrimary = 0;
+    }
+
+    // eh vector destructor iterator bodies, inlined: 3 records at +0x1f08
+    // and 8 records at +0x180, each 0x3ac bytes, scalar dtor 0x00401ff0.
+    const u32 array_slots[2] = {0x1f08U, 0x180U};
+    const u32 array_counts[2] = {3U, 8U};
+    for (u32 i = 0; i < 2U; ++i) {
+        u8 *record = state + array_slots[i];
+        for (u32 j = 0; j < array_counts[i]; ++j) {
+            DestroyTitleScreenVmRecordInPlace(record);
+            record += 0x3acU;
+        }
+    }
+}
+
+
+// TH10 0x004145f0. In-place destructor of the ASCII HUD owner (DAT_0047770c,
+// 0x9e90+ bytes). Runs the 0x414370 sub-block cleanup (boundary), removes the
+// two scheduler records at +0x08/+0x0c under the scheduler lock, soft-releases
+// the entity id at +0x9e90, walks the eight ids at +0x9da4 marking each found
+// entity (list A then list B) with the 0x4000000 release flag and propagating
+// it over the +0x14 child chain when the +0x18 count is zero, calls the
+// 0x4493e0 boundary with the last found entity and the +0x9e88 word, frees the
+// +0x9d60 buffer through the CRT free, clears the owner global, and finally
+// runs the six eh vector destructor iterators over the HUD glyph VM pools
+// (7 records at +0x8094, 2 at +0x793c, 4 at +0x6a8c, 9 at +0x4980, 10 at
+// +0x24c8 and 10 at +0x10; all 0x3ac-byte records, scalar dtor 0x00401ff0).
+void DestroyAsciiHudOwnerInPlace(void *object)
+{
+    u32 *const owner = static_cast<u32 *>(object);
+    CleanupAsciiHudOwnerSubBlocksStackAbi(object);
+
+    const u32 record_slots[2] = {0x08U, 0x0cU};
+    for (u32 i = 0; i < 2U; ++i) {
+        ChainElem *const record =
+            *reinterpret_cast<ChainElem **>(reinterpret_cast<u8 *>(owner)
+                                            + record_slots[i]);
+        if (record == 0) {
+            continue;
+        }
+        EnterCriticalSectionInternal(&g_CallbackSchedulerLock);
+        ++g_CallbackSchedulerActivityDepth;
+        CallbackSchedulerApi::Remove(g_CallbackScheduler, record);
+        LeaveCriticalSectionInternal(&g_CallbackSchedulerLock);
+        --g_CallbackSchedulerActivityDepth;
+    }
+    owner[2] = 0U;
+
+    ReleaseEntityById(g_MainChainRenderOwner, owner[10132]);
+    owner[10132] = 0U;
+
+    void *last_found = 0;
+    u32 *const ids = owner + 10109;
+    for (u32 i = 0; i < 8U; ++i) {
+        const u32 id = ids[i];
+        last_found = 0;
+        if (id != 0U) {
+            u8 *const entity = static_cast<u8 *>(
+                FindEntityEdxStackAbi(g_MainChainRenderOwner, id));
+            if (entity != 0) {
+                *reinterpret_cast<u32 *>(entity + 0x35cU) |= 0x4000000U;
+                if (*reinterpret_cast<u32 *>(entity + 0x18U) == 0U) {
+                    u32 *child_link =
+                        *reinterpret_cast<u32 **>(entity + 0x14U);
+                    while (child_link != 0) {
+                        u8 *const child =
+                            reinterpret_cast<u8 *>(child_link[0]);
+                        *reinterpret_cast<u32 *>(child + 0x35cU)
+                            |= 0x4000000U;
+                        child_link =
+                            *reinterpret_cast<u32 **>(child_link + 4U);
+                    }
+                }
+                last_found = entity;
+            }
+        }
+        ids[i] = 0U;
+    }
+    ReleaseAsciiHudOwnerTimelineSlotEaxStackAbi(last_found, owner[10162]);
+
+    void *buffer = reinterpret_cast<void *>(owner[10088]);
+    g_AsciiHudOwner = 0;
+    if (buffer != 0) {
+        ReleaseResourceBuffer(buffer);
+    }
+    owner[10088] = 0U;
+
+    const u32 array_slots[6] = {
+        0x8094U, 0x793cU, 0x6a8cU, 0x4980U, 0x24c8U, 0x10U
+    };
+    const u32 array_counts[6] = {7U, 2U, 4U, 9U, 10U, 10U};
+    for (u32 i = 0; i < 6U; ++i) {
+        u8 *record = reinterpret_cast<u8 *>(owner) + array_slots[i];
+        for (u32 j = 0; j < array_counts[i]; ++j) {
+            DestroyTitleScreenVmRecordInPlace(record);
+            record += 0x3acU;
+        }
+    }
+}
+
+i32 TH10_STDCALL TeardownTitleScreenStackAbi(void *title_screen)
+{
+    const u8 *const title = static_cast<const u8 *>(title_screen);
+    SaveScoreRecordFileEbx(g_TitleScoreSaveRecord);
+    g_GlobalModeFlags &= ~3U;
+    g_MainChainTimeScaleTarget = 1.0f;
+
+    i32 status = g_MainChainSharedStatus;
+    if (status != 10) {
+        if (status == 11) {
+            StartTimelineContinuation(224.0f, 416.0f);
+            g_GlobalModeFlags |= 2U;
+        } else if (status == 4 || status == 15) {
+            StartTimelineContinuation(480.0f, 392.0f);
+        } else if (status == 13) {
+            StartTimelineContinuation(480.0f, 392.0f);
+            if (g_StageSelectorCurrent != g_StageSelectorIndex) {
+                ResetMainChainFrameStateBlockEax(g_MainChainFrameStateBlock);
+                g_GlobalModeFlags |= 8U;
+            }
+            g_GlobalModeFlags |= 1U;
+        }
+    } else {
+        // In-game teardown: ensure the continuation render object exists and
+        // keep the whole manager set allocated.
+        if (g_AsciiManager->continuation_handle == 0) {
+            const float params[3] = {480.0f, 392.0f, 0.0f};
+            void *const node = CreateTimelineContinuationRenderObject(
+                g_AsciiManager->ascii_animation_work, 6, params);
+            g_AsciiManager->continuation_handle =
+                *reinterpret_cast<i32 *>(node);
+        }
+        if (g_StageSelectorCurrent == g_StageSelectorIndex)
+            g_GlobalModeFlags |= 1U;
+    }
+
+    if ((g_GlobalModeFlags & 2U) != 0) {
+        // Reuse path: the managers survive into the next mode.
+        ReleaseAsciiHudOwnerBuffersEbx(g_AsciiHudOwner);
+        if (g_TitleScreenStatePrimary != 0) {
+            DestroyTitleScreenStateBufferInPlace(g_TitleScreenStatePrimary);
+            FreeMainChainObject(g_TitleScreenStatePrimary);
+        }
+        g_TitleScreenStatePrimary = g_TitleScreenStateSecondary;
+        ClearChainRecordEnabledBit(g_GameStateManager, 0x08);
+        ClearChainRecordEnabledBit(g_GameStateManager, 0x0c);
+        ClearChainRecordEnabledBit(g_EffectManagerRoot, 0x08);
+        ClearChainRecordEnabledBit(g_EffectManagerRoot, 0x0c);
+        ClearChainRecordEnabledBit(g_GameModeObject, 0x1cc);
+        ClearChainRecordEnabledBit(g_GameModeObject, 0x0c);
+        memset(g_BulletManagerSlot + 0x14, 0, 0x21cea0U);
+    } else {
+        // Full release path. The game-mode object is intentionally kept when
+        // the status is 14/15 (demo transitions).
+        if (status != 14 && status != 15 && g_GameModeObject != 0) {
+            DestroyOpaqueMainChainManagerInPlace(g_GameModeObject);
+            FreeMainChainObject(g_GameModeObject);
+        }
+        DestroyAndFreeSlot(&g_TitleScreenStateSecondary,
+                           DestroyTitleScreenStateBufferInPlace);
+        DestroyAndFreeSlot(&g_TitleScreenStatePrimary,
+                           DestroyTitleScreenStateBufferInPlace);
+        DestroyAndFreeSlot(&g_GameStateManager, DestroyGameStateObjectInPlace);
+        DestroyAndFreeSlot(&g_AsciiHudOwner, DestroyAsciiHudOwnerInPlace);
+        DestroyAndFreeSlot(reinterpret_cast<void **>(&g_OptionPositionBase),
+                           DestroyPlayerStateBlockInPlace);
+        DestroyAndFreeSlot(&g_EffectManagerRoot,
+                           DestroyEffectManagerRootInPlace);
+        DestroyAndFreeSlot(reinterpret_cast<void **>(&g_BulletManagerSlot),
+                           DestroyBulletManagerInPlace);
+        DestroyAndFreeSlot(&g_BulletListRoot, DestroyBulletListRootInPlace);
+        DestroyAndFreeSlot(&g_TextLayerManagerSlot,
+                           DestroyTextLayerManagerInPlace);
+        DestroyAndFreeSlot(&g_MainChainObject840,
+                           DestroyMainChainObject840InPlace);
+    }
+
+    if ((g_GlobalModeFlags & 9U) != 0) {
+        ReleaseAsciiHudConditionalState(g_AsciiHudConditionalState);
+    } else if (g_AsciiHudConditionalState != 0) {
+        DestroyAsciiHudConditionalStateEax(g_AsciiHudConditionalState);
+        FreeMainChainObject(g_AsciiHudConditionalState);
+    }
+    DestroyAndFreeSlot(&g_MainChainObject6fc, DestroyMainChainObject6fcInPlace);
+    DestroyAndFreeSlot(&g_GameContext, DestroyGameContextInPlace);
+    DestroyAndFreeSlot(&g_SpellBulletBase, DestroySpellBulletBaseInPlace);
+
+    // Remove the title screen's calculation/draw scheduler records. The
+    // native code brackets 0x00449f60 with the scheduler lock and the
+    // activity-depth byte and does not clear the record slots.
+    for (u32 slot = 0x08; slot <= 0x0c; slot += 4) {
+        ChainElem *const record = *reinterpret_cast<ChainElem *const *>(
+            title + slot);
+        if (record == 0)
+            continue;
+        EnterCriticalSectionInternal(&g_CallbackSchedulerLock);
+        ++g_CallbackSchedulerActivityDepth;
+        CallbackSchedulerApi::Remove(g_CallbackScheduler, record);
+        LeaveCriticalSectionInternal(&g_CallbackSchedulerLock);
+        --g_CallbackSchedulerActivityDepth;
+    }
+
+    g_TitleScreen = 0;
+    if ((g_GlobalModeFlags & 0x22U) == 0) {
+        QueueBgmCommand(&g_TransitionRoot, "dummy",
+                        (g_MainChainRuntimeOptions & 0x10U) != 0 ? 4 : 3, 0);
+    }
+    g_MainChainManagerGate = 1;
+    // Clear color: opaque black unless the immediate-clear flag (bit 0) is
+    // set, in which case the frame is not faded.
+    const i32 clear_color =
+        (g_GlobalModeFlags & 1U) != 0 ? 0 : static_cast<i32>(0xff000000U);
+    g_MainChainClearColor = static_cast<u32>(clear_color);
+    return clear_color;
 }
 
 // TH10 0x0042cd50. Allocates the 0x5acc-byte game manager, runs the

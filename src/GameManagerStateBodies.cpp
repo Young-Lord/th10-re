@@ -6,6 +6,7 @@
 
 #include "EntityHelpers.hpp"
 #include "GameManagerState.hpp"
+#include "ReplaySave.hpp"
 #include "Th10Types.hpp"
 
 namespace th10 {
@@ -79,7 +80,10 @@ extern void ResetBgmQueue(u32 channel, u32 value); // TH10 0x00420b10
 extern i32 QueryNameInputInitialCursor(void); // TH10 0x00421fa0
 extern void ResetNameInputPresentation(u32 value); // TH10 0x00405410
 extern void SaveReplayNameInput(void); // TH10 0x004297b0
-extern void CommitReplayNameInput(const char *name); // TH10 0x00429b60
+
+// Replay save context (TH10 DAT_00477838 game-mode object) passed to the
+// replay-save writer 0x00429b60.
+extern void *g_GameModeObject; // TH10 DAT_00477838
 extern i32 LoadScoreDisplayRecords(void **out_records, u32 unused); // TH10 0x0044b360
 extern void ReleaseScoreDisplayRecord(void *record); // TH10 0x00434a20
 extern void ReleaseScoreDisplayText(void *text); // TH10 0x004349e0
@@ -1295,7 +1299,9 @@ i32 RunManagerStateBody10(void *game_manager)
                 sprintf(replay_name, "th10_%.2d.rpy", words[0x59c4 / 4] + 1);
                 ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0x2c, 0);
                 SaveReplayNameInput();
-                CommitReplayNameInput(name_buffer);
+                // TH10 0x00429b60 (native ECX = DAT_00477838 game-mode
+                // object, EDX = file name, stack = player name).
+                CommitReplaySave(g_GameModeObject, replay_name, name_buffer);
                 DestroyDemoParseObject(reinterpret_cast<void *>(
                     words[(0x59e4 + 4 * words[0x59c4 / 4]) / 4]));
                 words[(0x59e4 + 4 * words[0x59c4 / 4]) / 4] =

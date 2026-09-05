@@ -331,3 +331,81 @@ machine from `manager + 0x1c`:
 
 
 
+
+## 0x00417C80 TeardownTitleScreenStackAbi (2026-09-05)
+
+Reconstructed in `src/TitleGameManagerLifecycle.cpp` as
+`TeardownTitleScreenStackAbi` (semantic C++; native ABI is stdcall `ret 4`,
+one stack argument = the 0x60-byte title screen). Call sites:
+`DestroyTitleScreen` (0x00418150, same file) and
+`DestroyAllMainChainObjects` (0x004203f0, via a thin cdecl adapter in
+`src/MainChainGlobalTeardown.cpp`).
+
+### Native flow
+
+1. `0x0042b1e0` score-save writer, **EBX = value of `DAT_0047783c`** (the
+   score record image; the callee treats EBX as `record*` and writes
+   `scoreth10.dat`). Register-ABI boundary `SaveScoreRecordFileEbx`.
+2. `DAT_00474ca0` (`g_GlobalModeFlags`) `&= ~3`; `flt_00476f78`
+   (`g_MainChainTimeScaleTarget`) `= 1.0`.
+3. Mode dispatch on `dword_00491fb8` (`g_MainChainSharedStatus`):
+   - **10** (in-game): if `AsciiManager+0x89a4` (continuation handle) is 0,
+     create the continuation render object via `0x00448d50`
+     (`CreateTimelineContinuationRenderObject`, manager-work `+0x8994`,
+     kind 6, params `{480.0, 392.0, 0.0}`) and store its handle at `+0x89a4`.
+     If `DAT_00474c80 == DAT_00474c7c` (stage selector equal), latch bit 0.
+   - **11**: `0x0040c540` `StartTimelineContinuation(224.0, 416.0)`, then
+     latch bit 1 (manager-reuse flag).
+   - **4/15**: `StartTimelineContinuation(480.0, 392.0)` only.
+   - **13**: `StartTimelineContinuation(480.0, 392.0)`; if selectors differ,
+     `0x00418a90` (**EAX = DAT_00474c40**, frame-state block reset) and latch
+     bit 3; always latch bit 0.
+4. Manager sweep, gated on mode-flag bit 1 (`test byte ptr, 2` with EBX=2):
+   - **Bit 1 set (reuse path)**: `0x00414570` (**EBX = DAT_0047770c**) frees
+     HUD-owner scratch; free `DAT_004776e4` (0x00402440 + delete) and
+     re-seed it from `DAT_004776e8` without clearing the secondary; clear
+     enabled bit (bit 1 of `record+4`) of the scheduler records referenced at
+     `DAT_00477830+8/+0xc`, `DAT_004776f0+8/+0xc`, `DAT_00477838+0x1cc/+0xc`
+     (null-checked per slot); `memset(DAT_00477818+0x14, 0, 0x21cea0)` via
+     `rep stosd` (ECX=0x873a8 dwords, **no null check**).
+   - **Bit 1 clear (full release)**: delete `DAT_00477838` (0x004294a0)
+     **only when status is not 14/15** (demo transitions keep it), then
+     destructor+delete pairs: `DAT_004776e8`/`DAT_004776e4` (0x00402440),
+     `DAT_00477830` (0x00422220), `DAT_0047770c` (0x004145f0),
+     `DAT_00477834` (0x00424ed0), `DAT_004776f0` (0x00405f70),
+     `DAT_00477818` (0x0041adf0), `DAT_0047781c` (0x0041c1c0),
+     `DAT_00477814` (0x00418ee0), `DAT_00477840` (0x0042b570).
+5. Unconditional tail:
+   - `DAT_00477704` (`g_AsciiHudConditionalState`): when mode flags `& 9`,
+     `0x00409f90` only (object stays allocated); otherwise destructor
+     `0x0040d530` (**EAX argument**) + delete.
+   - destructor+delete for `DAT_004776fc` (0x0040af00), `DAT_004776ec`
+     (0x00405620), `DAT_004776f4` (0x00408af0).
+   - The title screen's scheduler records at `title+8` and `title+0xc` are
+     removed via `0x00449f60` (`CallbackSchedulerApi::Remove`, ECX=record,
+     EDX=scheduler `DAT_00491be4`), bracketed by
+     Enter/LeaveCriticalSection(`DAT_00492274`) and the activity-depth byte
+     `DAT_0049231c`. Record slots are not cleared; null-checked.
+   - `DAT_00477810` (`g_TitleScreen`) `= 0` (written mid-epilogue in the
+     binary, after the record removals).
+   - When mode flags `& 0x22 == 0`: `0x0043e460` `QueueBgmCommand`
+     (`DAT_00492590`, `"dummy"`, opcode = 4 if `DAT_00491d78 & 0x10` else 3,
+     track 0).
+   - `DAT_004918a4` (`g_MainChainManagerGate`) `= 1`.
+   - Clear color `DAT_004923a8 = (flags & 1) ? 0 : 0xFF000000`, also the
+     return value in EAX.
+
+### Quirks preserved
+
+- The score save runs before any flag or mode handling; if the record
+  pointer is null the callee returns -1 and the teardown continues.
+- Statuses other than 10/11/4/13/15 fall through to the sweep with no
+  continuation start and no flag latches (bit 1 cannot be set, so they take
+  the full-release path).
+- The reuse path never frees the secondary state buffer and the full path
+  never re-seeds the primary from it.
+- Status 14/15 skip the `DAT_00477838` release, leaving the game-mode object
+  allocated across demo transitions.
+- `DAT_00477818` is dereferenced without a null check in the reuse path.
+- The 0x21cea0-byte zero covers the whole bullet-manager area beyond the
+  manager header (`+0x14`), matching the `rep stosd` byte count.

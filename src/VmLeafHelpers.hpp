@@ -8,6 +8,15 @@ namespace th10 {
 // Ticks the vec3 animation block (modes 7/8/0x11/default easing).
 void TickVec3Interpolator(void *block, float out_vec3[3]);
 
+// TH10 0x0044C350. Native EAX = curve mode, stack = {value, denominator}
+// (retn 8), result returned as a double in ST0. Eases value/denominator:
+// modes 1..3 ease-in (t^2..t^4), 4..6 ease-out (1-(1-t)^2..^4), 9..11
+// ease-in-out quad/cubic/quart, 12..14 the mirrored in-out formulations,
+// 15 returns 0.0, 16 returns 1.0, every other mode (0, 7, 8, > 16)
+// returns t unchanged. NaN takes the "out" branch of the in/out pairs.
+double EasingCurveSelectorEaxStackAbi(i32 mode, float value,
+                                      float denominator);
+
 // TH10 0x004050d0. Native EAX = interpolator base; re-arms the timer.
 void ResetVec3InterpolatorTimer(void *block);
 

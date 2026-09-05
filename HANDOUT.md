@@ -1,4 +1,4 @@
-# TH11 RE Handoff
+# TH10 RE Handoff
 
 ## Objective And Rules
 
@@ -211,7 +211,7 @@ After each reconstruction, update all of:
 - `config/function-status.csv`
 - Ghidra function name/comment where supported
 
-Then run the three baseline commands above. `th11-re` is the checkout name,
+Then run the three baseline commands above. `th10-re` is the checkout name,
 but the binary and several existing namespaces/file labels say `th10`; do not
 treat either version label as independently verified without checking project
 configuration and binary provenance.
@@ -578,3 +578,241 @@ and `0x4000000` are the same bit 26, so `EntityHelpers::ReleaseEntityById`
 and the `TimelineRenderObjects` release path both match the live `0x4492a0`;
 `0x449630` is the slot-release wrapper. See
 `docs/evidence/owner-list-registration-audit.md`.
+
+## 2026-09-05 Session: Coverage Gap Sweep
+
+Coverage inventory added: `docs/coverage-gap.csv` (all uncovered IDB
+functions) and `docs/coverage-gap-shortlist.md`. The IDB has 2046
+functions; `config/function-status.csv` tracks 318 — roughly 837
+non-trivial functions remain. Verified gap classification against the
+CSV by hand (an earlier subagent pass mislabeled several covered
+functions).
+
+Implemented this session (all baselines green: `compile-main-chain-cpp.sh`,
+g++ -m32 -std=c++98 syntax check, `git diff --check`):
+
+- `src/JoystickConfigPoll.cpp/.hpp` — `0x0044a190`
+  `PollJoystickConfigBitmaskEcxStackAbi`: winmm `joyGetPosEx` path over
+  the 0x6a-stride config bank at 0x474e30 (button words +0x58/+0x5a/
+  +0x5c/+0x5e/+0x68, caps at 0x4918b8 stride 0x194, quarter-range axis
+  deadzones) and the DirectInput path (0x491ff4 bit 0x400; Poll +0x64,
+  Acquire +0x1c with the 0x190-retry NOTACQUIRED loop that never re-reads
+  state, GetDeviceState 0x110 with buttons at +0x30, signed deadzone
+  words 0x491d5e/60). Failure exits are native `mov ax, si` over the
+  failing API result — modeled exactly.
+- `src/EclScriptLibrary.cpp/.hpp` — `0x0040cfb0`
+  `CreateEclScriptObjectEaxStackAbi`: builds the 0x2518-byte
+  vtable-0x46d0c0 ECL script object (descriptor copies, difficulty
+  bitmask `1 << [0x474c74]` at +0x1024, name copy, score-anim block
+  +0x2458.., kind remap via flag bit 0x8000, owner list append at
+  +0x116c with the `last->next` fix-up quirk). Callees 0x40d830/0x40dc80
+  are named boundaries. Discovered via the `../../data/*.ecl` enumerator
+  at 0x40a450.
+- `src/TextureDilateFilter.cpp/.hpp` — `0x004465b0`
+  `DilateTextureTransparentPixelsEaxAbi`: fills transparent pixels with
+  the channel average of adjacent opaque neighbors over A8R8G8B8 /
+  A1R5G5B5 / A4R4G4B4 (27-case format switch, only four bodies), COM
+  vtable offsets preserved (GetSurfaceLevel +0x48, GetDesc +0x30,
+  LockRect +0x34, UnlockRect +0x38, Release +0x08), count-gated
+  averaging.
+- `src/ResultScreenDigits.cpp/.hpp` — `0x0042f8b0`
+  `UpdateResultScreenStatDigitsEaxAbi`: refreshes twenty result-screen
+  glyph VMs (child kinds 67..86 of the +0x2cc parent) from the five u16
+  stat fields at +0x59cc..+0x59d4 via `InitializeAsciiAnimationVmEntry`
+  with entry `digit + 51` and resource `child+0x308`; native slot-clear
+  and null-parent walk quirks preserved.
+- Subagent: `0x0044c350` = `EasingCurveSelectorEaxStackAbi`
+  (src/VmLeafHelpers.cpp) — the shared easing-curve selector; also
+  corrected `TickVec3Interpolator`'s inline easing (modes 9-14 were
+  missing; 0xf/0x10 were swapped).
+- Subagent: `0x00417c80` = `TeardownTitleScreenStackAbi`
+  (src/TitleGameManagerLifecycle.cpp) — full title-screen teardown:
+  scoreth10.dat save, mode-flag restore, shared-status dispatch (10/11/
+  4/15/13 continuation geometry), manager-reuse vs destructor sweep, and
+  the scheduler-record/BGM/gate/clear-color epilogue.
+- Subagent: `0x00429b60` = `CommitReplaySaveEcxDxStackAbi`
+  (src/ReplaySave.cpp) — replay file writer: name padding, `replay/`
+  mkdir, header/stage-record/frame serialization, LZSS + two scramble
+  passes, locked file write, and the two 'USER' text chunks; short-write
+  and unsigned-length quirks preserved.
+- Direct: `0x00402440` = `DestroyTitleScreenStateBufferInPlace`
+  (src/TitleGameManagerLifecycle.cpp) — the 0x2a78-byte title-screen
+  state destructor: three locked scheduler-record removals, three CRT
+  buffer frees (double-clear of +0x2a44 preserved), render-owner large
+  slot release gated on mode flag bit 0, primary/secondary global
+  clears, and the two eh vector destructor iterator arrays (3 and 8
+  records of 0x3ac at +0x1f08/+0x180 via the 0x401ff0 scalar dtor).
+
+In-flight: `0x00415e90` (result-screen text presenter, 4306 bytes) is
+being reconstructed by a subagent.
+
+Recommended next wave: `0x42f540`/`0x430250` (result-screen update
+paths calling the digits presenter), `0x0042b1e0` score save (EBX ABI),
+`0x40a450` ECL enumerator, `0x446b70/0x446c70/0x446d70/0x446eb0` dilate
+adapter variants, and then the winmm/DirectInput key-config screens
+`0x44a5f0`/`0x44a9d0`/`0x44ad30`.
+
+## 2026-09-05 Session Addendum
+
+- `src/ResultScreenScript.cpp/.hpp` (subagent) — `0x00415e90`
+  `RunResultScreenScriptStreamStackAbi`: the result/spell-practice screen
+  script stream executor (24 opcodes: two-line decrypted text, per-char
+  glyph setup, effect spawns, BGM/text waits, spell-capture bookkeeping
+  with difficulty-scaled score adds and state transitions). Locally
+  reconstructed 0x449670/0x4496a0 glyph helpers; boundaries 0x409d90,
+  0x423370, 0x4175e0.
+- `src/TitleGameManagerLifecycle.cpp` — `0x004145f0`
+  `DestroyAsciiHudOwnerInPlace` (direct): the DAT_0047770c HUD owner
+  destructor — sub-block cleanup, two locked scheduler-record removals,
+  soft entity releases over 8 ids with child-chain 0x4000000 propagation,
+  the 0x4493e0 timeline-slot boundary, CRT buffer free, and the six
+  0x3ac-record eh vector dtor arrays matching the 0x415800 HUD batch
+  pools.
+- `src/EclSelectMenu.cpp/.hpp` (direct) — `0x0040a450`
+  `UpdateEclSelectMenuStackAbi`: the spell-practice/ECL-select menu state
+  machine (0 enumerate ../../data/*.ecl, 1 cursors with the spell-select
+  exit feeding CreateEclScriptObjectEaxStackAbi and the first-cursor exit
+  starting the 0x40a340 continuation worker, 2 pending transition 3,
+  4 input snapshot + scheduler-record disable). All ESI/EAX/EDI manager
+  ABIs encoded as explicit-argument boundaries (0x40a010, 0x424d90,
+  0x409e20, 0x405ed0, 0x40d510, 0x413bc0, 0x4148e0, 0x425090, 0x406140,
+  0x405730, 0x41afb0, 0x42b6d0, 0x40d730, 0x409eb0, 0x40ac20).
+- Subagent: `0x0042b1e0` = `SaveScoreRecordFileEbx` (src/ScoreSave.cpp) —
+  scoreth10.dat writer (checksum/stage-index rewrite, 0x200000 image,
+  LZSS + 0x44b220 scramble, header + packed body through 0x44b620);
+  TeardownTitleScreenStackAbi now calls the semantic body.
+
+Function-status CSV: 314 implemented rows. All baselines green.
+Next wave: 0x42f540/0x430250 result-screen paths, key-config screens
+0x44a5f0/0x44a9d0/0x44ad30, the ESI-boundary cluster named above
+(0x424d90, 0x405ed0, 0x40a010, 0x4148e0, ...), 0x4493e0, 0x449670/0x4496a0.
+
+## 2026-09-05 Session Addendum 2
+
+- `src/ManagerReleaseWrappers.cpp/.hpp` (direct) — the nine-member
+  "release wrapper" family: 0x004148e0/0x00425090/0x00406140/0x00405730/
+  0x0041afb0/0x0042b6d0/0x0040d730 (ESI null-check + destructor + shared
+  delete), 0x0040d510 (twin of 0x409e20 record re-enable), and
+  0x00409eb0 (ECL menu filename-array free with the double-clear quirk).
+  Their EclSelectMenu boundaries now call the semantic bodies.
+- Direct leaves feeding that menu: 0x0040a010
+  `EnableOptionRecordsAndRebuildEaxAbi` (re-enable records +
+  RebuildPlayerOptionRecords tail call), 0x00409e20
+  `EnableManagerSchedulerRecordsEaxAbi`, 0x0040ac20
+  `AdvanceInputBankTriggersEcxAbi` (16 u16 repeat counters, threshold 26,
+  subtract-8 wrap, pressed/released words), and 0x004493e0
+  `ReleaseEntitiesUsingResourceEaxEdxAbi` in src/EntityHelpers.cpp
+  (resource-keyed 0x4000000 release walk; its 0x405ed0 wrapper passes
+  caller-garbage ECX and stays a boundary, documented).
+- Subagent: 0x0042f540 `UpdateResultScreenStateMachineEbxAbi` and
+  0x00430250 `SetResultScreenStatFieldEaxEdxEcxAbi`
+  (src/ResultScreenUpdate.cpp) — the result-screen state machine and the
+  per-field stat setter driving 0x42f8b0.
+- Subagent: 0x00415e90 second pass completed with raw-disassembly
+  corrections (opcode 7/8 position publication, 0x14 flag ordering,
+  power gauge word view).
+
+CSV now tracks 339 implemented functions. All baselines green.
+In flight: key-config screens 0x44a5f0/0x44a9d0/0x44ad30 (subagent).
+
+## 2026-09-05 Session Addendum 3
+
+- `src/JoystickConfigPoll.cpp` — 0x0044a4e0 `PollJoystickButtonBytesEcxEsiAbi`
+  (direct): refreshes the 0x497bb0 224-byte button array (DirectInput
+  poll/state-copy or winmm button-bit path) for the key-config screens.
+- `src/TitleScoreAnimTriggers.cpp/.hpp` (direct) — 0x00404530
+  `TriggerTitleScoreAnim30EsiAbi` and 0x004045b0
+  `TriggerTitleScoreAnim60EaxAbi`: kind-2 overlay context creation and the
+  30/60-frame score-anim arms over the title-screen state block
+  (a1[2694..2699] = +0x2a18..+0x2a2c).
+- Subagent: key-config screens (src/KeyConfigScreens.cpp) — 0x0044a5f0
+  `UpdateKeyConfigInputRecordEcxAbi`, 0x0044a9d0 (byte-twin, joystick
+  poll hardcoded to slot 0), 0x0044ad30 (mask-only menu variant): full
+  keyboard/joystick sampling into the 0x6a-stride records with the 16
+  repeat counters and pressed/released edges.
+- Subagent: 0x0042f540/0x00430250 (src/ResultScreenUpdate.cpp) — result
+  screen state machine and stat setter.
+
+CSV now tracks 339 implemented functions. All baselines green.
+In flight: 0x00413bc0 ASCII HUD overlay update (subagent).
+Next wave: 0x00418190 game-manager state body, 0x0042a450, 0x00417870,
+0x00409d90/0x00423370/0x004175e0 boundaries, 0x0044bea0 callers.
+
+## 2026-09-05 Session Addendum 4
+
+- Direct: 0x00409d90 `AddScoreBlockValueEcxStackAbi` (value/10 add with
+  the 999999999 post-store clamp) and 0x004175e0 `UpdateScoreBlockEaxAbi`
+  (+0x3c slot advance capped at 7, pointer publish to DAT_00477848) —
+  both in src/ResultScreenScript.cpp, eliminating two executor
+  boundaries.
+- Direct: 0x00423370 `RecordSpellPracticeCaptureEdiAbi`
+  (src/ResultScreenScript.cpp) — the spell-practice capture entry, fully
+  corrected against raw disassembly (VM ids to +0x1d8, HUD +0x9ec8 to
+  +0x2c4, native ECX input never read).
+- Subagent: 0x00413bc0 `ResetAsciiHudOverlayEdiAbi`
+  (src/AsciiHudOverlayUpdate.cpp) — the HUD overlay re-arm: scheduler
+  record disable, two permanent background VM respawns, the full glyph
+  pool script-id rebinding map, life-slot refresh from DAT_00474c70, and
+  the mode-gated overlay VM spawns.
+- Subagent: key-config screens landed earlier (src/KeyConfigScreens.cpp).
+
+CSV now tracks 339 implemented functions. All baselines green.
+In flight: 0x00418190 game-manager state body (subagent).
+
+## 2026-09-05 Session Addendum 5
+
+- Direct: 0x00401ff0 `DestroyTitleScreenVmRecordInPlace`
+  (src/ManagerReleaseWrappers.cpp) — the scalar VM-record dtor used by
+  the eh vector destructor iterators.
+- Direct: 0x00447810 `ReleaseLargeRenderOwnerSlotEdiAbi`
+  (src/ManagerReleaseWrappers.cpp) — the large render-owner slot release
+  (resource-matched entity sweep, 16-byte-stride COM entry array, five
+  CRT-freed buffers).
+- Subagent: 0x00418190 `RunTitleScreenCalcBodyStackAbi`
+  (src/TitleScreenCalcBody.cpp) — the title-screen calculation-record
+  body (state 0 idle/reset paths, state 30 gated reset, common epilogue).
+- Subagent batch in flight: the title calc boundary cluster
+  0x424d90/0x42a450/0x417040/0x404450/0x417770/0x418a00/0x409f90.
+
+## 2026-09-05 Session Addendum 6
+
+- Subagent: title calc boundary cluster landed — src/TitleCalcCluster.cpp
+  implements 0x00424d90 `ResetOptionPositionRecordsEsiAbi`, 0x0042a450
+  `ApplyOptionPositionStateEbxAbi` (now correctly fed DAT_00477838),
+  0x00417040 `UpdateInGameScoreDisplayEsiAbi` (with the documented dead
+  0x448d00 spawn), 0x00404450 `InitializeTitleSecondaryStateStackAbi`,
+  0x00417770 `ReleaseOwnerRecordChainEaxAbi`, 0x00418a00
+  `TickTitleFrameStateEaxAbi`, 0x00409f90
+  `ReleaseAsciiHudConditionalState`, plus file-local 0x004188a0
+  `AwardExtendedLifeEaxEcxAbi`.
+- Direct: 0x00401ff0 `DestroyTitleScreenVmRecordInPlace` and 0x00447810
+  `ReleaseLargeRenderOwnerSlotEdiAbi` (src/ManagerReleaseWrappers.cpp).
+- Direct: 0x00449670/0x004496a0 glyph wrappers recorded (implemented in
+  src/ResultScreenScript.cpp, now named in IDA and the CSV).
+
+CSV now tracks 352 implemented functions. All baselines green.
+In flight: ECL object ctor pair 0x0040d830/0x0040cc70/0x0040dc80
+(subagent), manager destructor family 0x424ed0/0x405f70/0x405620/
+0x41adf0/0x42b570/0x40d530 (subagent).
+
+## 2026-09-05 Session Addendum 7
+
+- Direct: game-mode record helpers in src/TitleCalcCluster.cpp —
+  0x00428e10 `PublishSelectedRunStatsEaxEcxAbi` (EAX = 0x477834 manager,
+  ECX = slot+0x24), 0x0042ab20 `FreeGameModeChainEntriesEaxEcxAbi`
+  (EAX = bucket index from DAT_00474c7c, ECX = game-mode object), and
+  0x0042aa50 `AllocateGameModeChainEntryEsiStackAbi` (ESI = index, stack
+  = object). The old Call42AB20/Call42AA50/Call428E10 boundaries in
+  ApplyOptionPositionStateEbxAbi are gone; call sites now pass the
+  native register values (slot index from DAT_00474c7c).
+
+## 2026-09-05 Session Addendum 8
+
+- Direct: src/ManagerCreation.cpp/.hpp — 0x00406060
+  `CreateEffectManagerRoot` (0x3e0b54 object, eh-vector-construct then
+  full-wipe order quirk, loader 0x405e20, failure destroy) and 0x00414830
+  `CreateAsciiHudOwner` (0x9ed0 object, ctor 0x413810, loader 0x413980).
+
+- Direct: 0x00425020 `CreatePlayerStateBlock` (src/ManagerCreation.cpp) —
+  0x4478 player state block with ctor 0x4246c0 and the semantic
+  InitializePlayerObject init.
