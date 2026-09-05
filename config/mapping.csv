@@ -1,0 +1,17 @@
+name,address,size,calling_convention,varargs,return_type,parameter_types
+AsciiManager::AsciiManager,0x00401000,0xfb,unknown,,AsciiManager*,
+AsciiManager::Initialize,0x00401110,0x14a,unknown,,i32,AsciiManager*
+AsciiManager::~AsciiManager,0x00401260,0x1d3,unknown,,void,AsciiManager*
+CreateAsciiManager,0x00401440,0x45,__cdecl,,AsciiManager*,
+AsciiManager::OnDrawStrings,0x00401520,0xa,unknown,,void,AsciiManager*
+AsciiManager::AddString,0x00401530,0x84,custom-register,,void,"AsciiManager*,Float3*,char*"
+AsciiManager::AddFormatText,0x00401630,0x55,__cdecl,varargs,void,"AsciiManager*,Float3*,char*"
+AsciiManager::AddFormatTextSelected,0x00401690,0x64,__cdecl,varargs,void,"AsciiManager*,Float3*,char*"
+ZunMath::SetVectorFromAngle,0x0041f800,0x1c,__thiscall,,void,"Float2*,f32,f32"
+ZunMath::IsOutsidePlayfieldBounds,0x0041f7a0,0x5b,__thiscall,,i32,"Float2*,f32,f32"
+MainChainUpdate,0x0041ff80,0x71,__fastcall,,i32,"MainChainContext*"
+MainChainDrawInitialize,0x00420000,0xb1,__fastcall,,i32,"MainChainContext*"
+MainChainDrawContinue,0x004200c0,0x6,__fastcall,,i32,"MainChainContext*"
+MainChainDrawFinalize,0x004200d0,0x27,__fastcall,,i32,"MainChainContext*"
+RegisterMainChainCallbacks,0x00420470,0xcc,__cdecl,,i32,
+MainChainAdvanceState,0x004218d0,0x23a,custom-eax,,i32,"MainChainContext*"

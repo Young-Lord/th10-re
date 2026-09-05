@@ -1,0 +1,13 @@
+[original]
+filename = "th10.exe"
+sha256 = "2f14760b6fbbf57549541583283badb9a19a4222b90f0a146d5aa17f01dc9040"
+size = 487936
+image_base = 0x00400000
+entry_point = 0x004537dc
+version = "1.00a"
+encoding = "shift_jis"
+
+[toolchain]
+compiler = "Visual C++ Toolkit 2003 13.10"
+linker = "7.10.3077"
+directx_sdk = "October 2006"

@@ -1,0 +1,16 @@
+# Original binaries and extracted game data are local verification inputs.
+/resources/*
+!/resources/.gitkeep
+
+# Generated build and comparison output.
+/build/
+/reports/
+*.obj
+*.exe
+*.pdb
+*.map
+
+# Ghidra project databases are local analysis state.
+*.gpr
+*.rep/
+.ghidra/

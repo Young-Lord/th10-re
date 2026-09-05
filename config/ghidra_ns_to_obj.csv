@@ -1,0 +1,14 @@
+object,namespaces
+AsciiManagerStrings,@0x00401530,@0x00401630,@0x00401690
+ZunMath,@0x0041f800
+ZunMathBounds,@0x0041f7a0
+GlobalBufferRelease,@0x0041f930
+GlobalManagerFrameCallback,@0x0041fef0
+GlobalManagerDisableChainsCallback,@0x0041feb0
+GlobalManagerMicroHelpers,@0x0041ff30-0x0041ff37,@0x0041ff40-0x0041ff4d
+GlobalManagerChainElementRelease,@0x0041ff60
+GlobalManagerStateUpdate,@0x0041ff80
+MainChainDrawCallbacks,@0x004200c0-0x004200c6,@0x004200d0-0x004200f7
+MainChainDrawInitialize,@0x00420000-0x004200b1
+MainChainRegistration,@0x00420470
+MainChainAdvanceState,@0x004218d0

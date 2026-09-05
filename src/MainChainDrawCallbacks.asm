@@ -1,0 +1,25 @@
+; FUNCTIONS: TH10 0x004200c0, 0x004200d0
+BITS 32
+
+SECTION .text ALIGN=4
+GLOBAL FUN_004200c0
+GLOBAL FUN_004200d0
+
+EXTERN DAT_00491c10
+EXTERN DAT_00491e64
+EXTERN DAT_00491e68
+EXTERN FUN_00442f50
+
+FUN_004200c0:
+    mov eax, 1
+    ret
+
+FUN_004200d0:
+    push esi
+    mov esi, [DAT_00491c10]
+    call FUN_00442f50
+    mov dword [DAT_00491e64], 0
+    mov dword [DAT_00491e68], 0
+    mov eax, 1
+    pop esi
+    ret
