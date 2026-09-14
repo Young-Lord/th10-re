@@ -64,8 +64,8 @@ the exporter accepts both names/namespaces and exact function addresses.
 
 On 2026-08-28, `ExportTh10Delinker.java` exported
 `build/objdiff/orig/AsciiManagerStrings.obj` from an independently imported
-copy of the locked TH10 executable. `scripts/compare-ascii-manager.sh` compiles
-the semantic C++ implementation with MSVC 7.1 and writes the objdiff report to
+copy of the locked TH10 executable. The semantic C++ implementation was
+compiled with MSVC 7.1 into the objdiff report
 `build/objdiff/ascii-manager-strings.json`.
 
 The initial semantic C++ object match was `0.0%`: its ordinary member-function
