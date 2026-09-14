@@ -120,3 +120,37 @@ blocks, clones `+0x23c..+0x27b` to `+0x27c..+0x2bb`, and derives normalized
 extents from entry fields without validating denominators. In particular, the
 second AsciiManager call uses index 98: this is metadata selection, not an
 animation-bytecode execution interface.
+
+## Secondary Queue Draw Body (`0x00401a50`)
+
+The native `0x00401520` ("OnDrawStrings" callback body) is only a 0xa-byte
+thunk: `push ebx; mov ebx, ecx; call 0x00401a50; pop ebx; retn`. The actual
+secondary-queue draw body is `0x00401a50` (0x23a bytes), reached with the
+manager in `EBX` and no stack arguments; it always returns 1. The semantic
+body is `DrawAsciiManagerSecondaryStrings` in `src/AsciiManagerLifecycle.cpp`
+(recorded in `config/function-status.csv` under `0x00401a50`).
+
+Verified control flow:
+
+- The mode word at `+0x370` is first computed as
+  `(word & 0xffd7fffe) | 0x140001` (IDA's decompiler collapses the paired
+  `and`/`or` into a misleading `0xffc3fffe` mask; the disassembly at
+  `0x401a59` shows `and eax, 0FFD7FFFFh`).
+- Iterates `count` at `+0x8970` over the 0x68-byte entries at `+0x6f6c`.
+  Each entry copies its position (`+0x40..+0x4b`) to the working position
+  `+0x348..+0x350`, its scales (`+0x50/+0x54`) to the manager scales, and
+  sets `+0x370` bit 3.
+- The glyph X advance is computed once per entry as
+  `(float)(i32)manager->+0x898c * entry.scale_x` (native multiplies through
+  a double; modeled as a float product).
+- A change of the entry's GUI mode (`+0x5c`) against the running value
+  (seeded to 1) flushes pending vertices (`0x442f50`) and switches the
+  camera view (`0x4215a0` + SetViewport vtable slot 47), publishing the new
+  mode to `DAT_00491fb0`.
+- Per byte: `\n` adds `14 * scale_y` to the working Y and resets X to the
+  entry origin; ` ` only advances X; any other byte stores the glyph pointer
+  `ascii.anm + 0x118 + (byte - 0x20) * 0x44` at `+0x3a8`, the entry color at
+  `+0x310`, and draws via `0x443080` when the stored scale is exactly `1.0f`
+  (NaN falls to the scaled path `0x443290`).
+- After the loop, a nonzero running GUI mode restores the default view and
+  `DAT_00491fb0 = 1`; an empty queue takes the same restore path directly.

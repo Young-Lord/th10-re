@@ -9,7 +9,9 @@ namespace th10 {
 namespace {
 
 extern void FreeMainChainObject(void *object); // TH10 0x004524a1
-extern void DestroyEffectManagerRootInPlace(void *object); // TH10 0x00405f70
+// DestroyEffectManagerRootInPlace (TH10 0x00405f70) comes from
+// ManagerReleaseWrappers.hpp; keep the local declaration for the HUD
+// destructor which has no shared header yet.
 extern void DestroyAsciiHudOwnerInPlace(void *object); // TH10 0x004145f0
 
 // TH10 0x0045252d: `eh vector constructor iterator'

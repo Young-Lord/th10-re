@@ -103,3 +103,40 @@ See `docs/evidence/dispatch-setup-opcode-mapping.md` for the dispatch
 formula, the confirmed entry list, and the remaining body-level caveat
 (four distinct spawn creators `0x448d00`/`0x448f60`/`0x448e30`/`0x449090`
 are currently routed through one `CreateTimelineObject` model).
+
+## Color track (2026-09-14)
+
+- `0x004049a0 TickColorTrack` (in `src/VmLeafHelpers.cpp/.hpp`): the
+  four-record color-track sibling of `TickVec3Interpolator`. Native EBX =
+  block, stack = 7-dword scratch out (`ret 4`, scratch pointer returned).
+  Block: four `0x1c`-byte color records at `+0x00/+0x1c/+0x38/+0x54`, then
+  the timer `{prev@0x70, cur@0x74, accum@0x78, rate ptr@0x7c, flags@0x80}`,
+  duration `+0x84`, mode `+0x88`.
+  - Rate window and poison match the vec3 interpolator (`0.99 < rate <
+    1.01` steps the integer counter, otherwise `accum += rate; cur =
+    ftol(accum)`); the completion latches flag bit 0 and resets the rate
+    pointer to `DAT_00476f78`.
+  - Completion differs from the vec3 timer: the duration is NOT stopped,
+    and every later tick re-snaps `cur = duration`, `prev = duration - 1`,
+    `accum = (float)duration` before outputting record 0 (mode 7) or
+    record 1 (everything else).
+  - Duration `<= 0` skips the timer entirely; mode 8 computes
+    `t = accum / (float)duration`, so a zero duration produces inf/NaN
+    weights (preserved).
+  - Modes: 7 accumulates record 1 into record 0; 0x11 integrates record 3
+    as velocity (`rec0 += vel; vel = rec1 + vel`, both against the old
+    velocity); 8 rides a cubic Hermite — and the native reuses the
+    handle-1 weight `(1-t)^2*t` for record 3 too (computed as
+    `(t-1)^2*t`, the same value); every other mode eases record 0 toward
+    record 1 through the `0x0044c350` curve selector.
+- `0x00404d40 / 0x00404da0 / 0x00404e10`: the 28-byte record helpers
+  (`to - from`, `factor * record`, `a + b`), each re-deriving the four
+  bytes at `+0x18..+0x1b` from floats 2..5 through `0x463b2c` (round half
+  away from zero, one x87 pop per call). Quirk preserved: `0x404d40`'s
+  single stack argument (the eased factor pushed by `0x4049a0`) is never
+  read — it stays on the stack and chains into `0x404da0`'s factor
+  parameter (`ret` vs `ret 4`).
+- Caller wiring: `RunTitleBackgroundScriptStackAbi`
+  (`src/TitleBackgroundScript.cpp`) now calls `TickColorTrack` for the
+  block at `st+0xe8` (gate = duration at `st+0x16c`) and copies the seven
+  result dwords to `st+0x2b48`; the `TickColorTrackAbi` extern is gone.

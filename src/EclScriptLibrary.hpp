@@ -21,9 +21,17 @@ void *CreateEclScriptObjectEaxStackAbi(const u32 *descriptor,
 // ctor argument; installs the 0x46d0c0 vtable and initializes the record.
 void *ConstructEclScriptObjectEsiStackAbi(void *record, i32 ctor_arg);
 
-// TH10 0x0040dc80 (boundary). Native stack-arg ret 4: early-outs when
-// [arg+0x1444] bit 0x400 is already set, otherwise sets it and runs the
-// ECL script setup over the +0x1044 sub-record.
+// TH10 0x0040dc80 (implemented in this module). Native ABI: one stack
+// argument (ret 4) = the +0x1044 sub-record of an ECL script object; all
+// field offsets are relative to that sub-record. Runs the per-frame ECL
+// enemy update: re-arms the run gate (flag bit 0x400 at +0x1444), refreshes
+// the working block from the +0x2c base block, ticks the four vec2 angle/
+// radius animation blocks, integrates the three motion blocks, clamps the
+// base position, runs the item-collision damage pass, the script-bind path,
+// the direction state machine, entity position publication, the flicker
+// state, and the frame counter advance. Returns 0 normally, -1 on the abort
+// paths (off-screen without the 0x4 stay flag, failed entity-list scan) and
+// 1 after the enemy-death sequence.
 i32 RunEclScriptSetupStackAbi(void *sub_record);
 
 } // namespace th10

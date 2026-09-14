@@ -281,3 +281,17 @@ ordinary C++ semantic function.
   `0x00470ba8-0x00470c68`.
 - Scheduler behavior in `docs/evidence/callback-scheduler.md`, specifically
   `0x00449b70`, `0x00449d40`, and `0x00449f60`.
+
+## 2026-09-14 correction and real body
+
+The timing helper 0x004134b0 is now implemented as
+`UpdateRegistrationDrawTiming` (src/RegistrationDrawOwner.cpp); see
+docs/evidence/registration-draw-timing.md. Re-reading the raw listing
+shows two parity-test misreads in the sections above:
+
+- the baseline replacement runs only on the ordered "less" outcome (an
+  unordered comparison keeps the old baseline), and
+- the callback color comparison at 0x4135f5 routes only *unordered*
+  results to the second comparison, so 0xff5050ff covers every ordered
+  value, the 0xffa0a0ff band is unreachable, and NaN resolves to
+  0xffffffff.

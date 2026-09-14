@@ -217,6 +217,21 @@ AsciiManager *CreateAsciiManager()
     return manager;
 }
 
+// FUNCTION: TH10 0x00401a50 (secondary queue body; native 0x00401520 is a
+// 0xa-byte thunk that moves ECX into EBX and calls this body).
+// EBX = AsciiManager; iterates the secondary 0x68-byte string queue at
+// +0x6f6c (count at +0x8970). The +0x370 mode word is first masked with
+// 0xffd7fffe and ORed with 0x140001. Each entry refreshes the working
+// position (+0x348..+0x350) and scales (+0x50/+0x54), sets the +0x370 bit 3,
+// and advances the glyph X cursor by (i32)+0x898c * entry scale_x. A change
+// of the entry's GUI mode (+0x5c) flushes pending vertices and switches the
+// default/alternate camera views through the device SetViewport slot.
+// Newlines advance Y by 14 * scale_y and reset X to the entry origin; spaces
+// advance only; any other byte selects the glyph at ascii.anm + 0x118 +
+// (byte - 0x20) * 0x44 (stored at +0x3a8), stores the entry color at +0x310,
+// and draws through the unscaled path when scale_x is exactly 1.0 else the
+// scaled path. When the loop ends on a nonzero GUI mode (or the queue was
+// empty), the default view is restored. Always returns 1.
 i32 DrawAsciiManagerSecondaryStrings(AsciiManager *manager)
 {
     u8 *const bytes = ManagerBytes(manager);
@@ -266,6 +281,8 @@ i32 DrawAsciiManagerSecondaryStrings(AsciiManager *manager)
     return 1;
 }
 
+// FUNCTION: TH10 0x00401760 (primary queue body; the priority-48 callback at
+// 0x00401510 forwards here).
 i32 DrawAsciiManagerPrimaryStrings(AsciiManager *manager)
 {
     u8 *const bytes = ManagerBytes(manager);

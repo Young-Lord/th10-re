@@ -130,3 +130,13 @@ separating its ABI thunk from the list/ownership semantics above.
 - `resources/th10.exe`: jump tables `0x00449d14` and `0x00449e34`.
 - `resources/th10.exe`: removal routine `0x00449f60-0x00449fd1`.
 - `docs/evidence/callback-scheduler.md` for shared record and sentinel layout.
+
+## Reconstruction status (2026-09-14)
+
+Both dispatchers are implemented in src/CallbackScheduler.cpp as
+`CallbackSchedulerApi::DispatchCalculation` (0x00449c00) and
+`CallbackSchedulerApi::DispatchDraw` (0x00449d40), and 0x00449f60 as the
+shared `RemoveLocked` helper. The C++ bodies were re-verified against
+the jump tables at 0x449d14 (calculation, 8 entries: 0 = remove,
+1 = continue, 2 = retest loop, 3/4/5 = return 1/0/-1, 6 = restart from
+scheduler+0x18, 7 = follow-up) and 0x449e34 (draw, 6 entries).

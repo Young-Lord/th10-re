@@ -86,6 +86,25 @@ float PrngUnitFloat(u16 *state)
     return value * (1.0f / 4294967296.0f);
 }
 
+// TH10 0x0044bb90: centered draw in [-1,1): combined (+2^32 when
+// negative) * 2^-31 - 1 (flt_470BEC / flt_470AFC). Distinct from the
+// [0,1) draw 0x0044bb20 above.
+float PrngCenteredFloat(u16 *state)
+{
+    u32 x = (static_cast<u16>(*state ^ 0x9630u) - 0x6553u);
+    i32 hi = static_cast<i32>((x >> 14 & 3u) + x * 4u);
+    u16 lo = static_cast<u16>((static_cast<u16>(hi) ^ 0x9630u) + 0x9aadu);
+    *state = static_cast<u16>(hi);
+    lo = static_cast<u16>((lo >> 14) + lo * 4u);
+    *reinterpret_cast<i32 *>(state + 2) += 2;
+    *state = lo;
+    u32 combined = static_cast<u32>(hi) * 65536u + lo;
+    float value = static_cast<float>(combined);
+    if (static_cast<i32>(combined) < 0)
+        value += 4294967296.0f;
+    return value * (1.0f / 2147483648.0f) - 1.0f;
+}
+
 float ReadVmFloatRegister(u8 *vm, float reg_operand, float fallback)
 {
     switch (ConvertFloatToI32TowardZeroX87(reg_operand)) {
@@ -110,13 +129,14 @@ float ReadVmFloatRegister(u8 *vm, float reg_operand, float fallback)
     case 10009:
         return static_cast<float>(*reinterpret_cast<i32 *>(vm + 0x330));
     case 10010:
-        return PrngUnitFloat(&SelectPrngState(vm)) * kEaseHalf;
+        // Native: 0x0044bb90 centered draw * flt_470B18 (3.25).
+        return PrngCenteredFloat(&SelectPrngState(vm)) * 3.25f;
     case 10011:
-        return static_cast<float>(std::sin(static_cast<double>(
-            PrngUnitFloat(&SelectPrngState(vm)) * kTwoPi)));
+        // Native: 0x0044bb20 unit draw, returned raw.
+        return PrngUnitFloat(&SelectPrngState(vm));
     case 10012:
-        return static_cast<float>(std::cos(static_cast<double>(
-            PrngUnitFloat(&SelectPrngState(vm)) * kTwoPi)));
+        // Native: 0x0044bb90 centered draw, returned raw.
+        return PrngCenteredFloat(&SelectPrngState(vm));
     case 10013:
         return *reinterpret_cast<float *>(vm + 0x334);
     case 10014:

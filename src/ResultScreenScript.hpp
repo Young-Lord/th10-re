@@ -39,6 +39,15 @@ struct ResultScreenScriptState {
 i32 TH10_STDCALL RunResultScreenScriptStreamStackAbi(
     ResultScreenScriptState *state);
 
+// TH10 0x00415b00. Native stack args = {state, stream}; returns the state.
+// Clears the whole 0x90-byte record, stops the three timers (prev = -1,
+// rate reset to DAT_00476f78), spawns the two script-0/1 text VMs into the
+// handle_d/handle_e slots, seeds position slots 0/3 and the two per-select
+// text colors, re-activates every on-stage enemy, and runs the manager
+// chains. The caller then writes state->selector and DAT_00474c84.
+ResultScreenScriptState *InitializeResultScreenScriptState(
+    ResultScreenScriptState *state, u8 *stream);
+
 // TH10 0x00449670 (reconstructed locally; native EAX = &handle, stack =
 // entry, ret 4). Resolves the handle's entity and initializes animation VM
 // entry `entry_index` with the entity's own resource at +0x308.

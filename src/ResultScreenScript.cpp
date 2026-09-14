@@ -7,11 +7,14 @@
 #include "GameManagerState.hpp"
 #include "MainChainContext.hpp"
 #include "PlayerFrameworkHelpers.hpp"
+#include "PlayerStageHelpers.hpp"
 #include "PlayerTimerHelpers.hpp"
 #include "TimelineAudioActions.hpp"
 #include "TimelineRenderObjects.hpp"
 #include "StageEffectHelpers.hpp"
 #include "TimelineTextSubmission.hpp"
+
+#include <string.h>
 
 namespace th10 {
 namespace {
@@ -783,6 +786,130 @@ i32 RecordSpellPracticeCaptureEdiAbi(void *spell_state)
     StoreU32To(state + 0x2c0U, old_scale);
     StoreU32To(reinterpret_cast<void *>(0x476f78U), 0x3f800000U); // 1.0f
     return 1;
+}
+
+namespace {
+
+// TH10 0x0040e6a0. Native stack arg = the 0x00477704 conditional state;
+// walks the +0x58 record chain, gating on each record's +0x2480 flags and
+// +0x2448 counter, and re-arms the sprite batch at record+0x1068 through
+// 0x448db0. Still a boundary.
+void AdvanceAsciiHudConditionalChainEaxStackAbi(void *state);
+
+// The 0x1c-stride bullet-list record chain head lives at root+0x18; each
+// node {vptr@0, next@8, flag@0xc} receives vtable slot +0x14 (node, 0)
+// unless its flag is 1.
+typedef void (*BulletListNodeCallback)(void *, i32);
+
+// TH10 0x00415b00 spawn step: allocate a 0x3ac pool VM on the render owner,
+// stamp render mode 15 (+0x20) and the 0x40000000 flag (+0x35c), bind the
+// script, and link it into the active list. The native also pushes the ANM
+// manager-work (DAT_004776e0+0x899c) as the 0x449950 stack argument, which
+// that helper never reads.
+u32 SpawnResultScreenTextVm(i32 script_id)
+{
+    void *const vm = AllocatePoolVmEsiAbi(g_MainChainRenderOwner);
+    StoreU32To(static_cast<u8 *>(vm) + 0x20U, 15U);
+    StoreU32To(static_cast<u8 *>(vm) + 0x35cU,
+               LoadU32From(static_cast<const u8 *>(vm) + 0x35cU) |
+                   0x40000000U);
+    AssignPoolVmScriptEcxEaxAbi(vm, script_id);
+    u32 id = 0;
+    LinkEntityAndAssignIdEaxEsiAbi(&id, vm);
+    return id;
+}
+
+// One stopped interpolator timer {prev@0, cur@4, accum@8, rate ptr@0xc,
+// flags@0x10}: the guarded lazy-init writes are then erased by the
+// unconditional stopped reset (prev = -1, cur = 0, accum = 0).
+void StopResultScreenStateTimer(u8 *timer)
+{
+    if ((LoadU32From(timer + 0x10U) & 1U) == 0U) {
+        StoreU32To(timer + 0x4U, 0U);
+        StoreU32To(timer + 0x0U, 0xfff0bdc1U);
+        StoreU32To(timer + 0x8U, 0U);
+        StoreU32To(timer + 0xcU, 0x476f78U);
+        StoreU32To(timer + 0x10U, LoadU32From(timer + 0x10U) | 1U);
+    }
+    StoreU32To(timer + 0x4U, 0U);
+    StoreU32To(timer + 0x8U, 0U);
+    StoreU32To(timer + 0x0U, static_cast<u32>(-1));
+}
+
+} // namespace
+
+// TH10 0x00415b00. Native stack args = {state, stream}, ret 8; returns the
+// state pointer. See the header for the full contract.
+ResultScreenScriptState *InitializeResultScreenScriptState(
+    ResultScreenScriptState *state, u8 *stream)
+{
+    u8 *const bytes = reinterpret_cast<u8 *>(state);
+    memset(bytes, 0, 0x90);
+
+    StopResultScreenStateTimer(bytes + 0x4U);
+    StopResultScreenStateTimer(bytes + 0x18U);
+    StopResultScreenStateTimer(bytes + 0x2cU);
+
+    state->reserved_58 = 0;
+    state->stream = stream;
+
+    state->handle_d = SpawnResultScreenTextVm(0);
+    state->handle_e = SpawnResultScreenTextVm(1);
+
+    // Stamp byte 0x10 on both text VMs' +0x3a0/+0x3a1 fields. Each id is
+    // resolved twice, and the native performs the byte store even when the
+    // resolve returned null (after clearing the slot), so the store is
+    // deliberately unconditional here as well.
+    u32 *const handle_slots[2] = {&state->handle_d, &state->handle_e};
+    for (u32 slot = 0; slot != 2U; ++slot) {
+        for (u32 which = 0; which != 2U; ++which) {
+            u8 *entity = FindEntityEdxStackAbi(g_MainChainRenderOwner,
+                                               *handle_slots[slot]);
+            if (entity == 0)
+                *handle_slots[slot] = 0;
+            entity[0x3a0 + which] = 0x10;
+        }
+    }
+
+    // Position slots 0 and 3 (the select-0 / select-1 pair the executor
+    // reads) and the two per-select text colors.
+    state->positions[0][0] = 8.0f;
+    state->positions[0][1] = 0.0f;
+    state->positions[0][2] = 0.0f;
+    state->positions[3][0] = 24.0f;
+    state->positions[3][1] = 0.0f;
+    state->positions[3][2] = 0.0f;
+    state->text_owners[0] = 0xf8f08fU;
+    state->text_owners[1] = 0x8088ffU;
+
+    // Re-activate every on-stage enemy whose +0x446 state word is neither
+    // 0 nor 3: 2000 records of stride 0x7f0 at effect_root+0x60.
+    u8 *enemy = static_cast<u8 *>(
+                    *reinterpret_cast<void *const *>(0x4776f0U)) + 0x60U;
+    for (u32 i = 0; i != 2000U; ++i) {
+        const u16 state_word =
+            static_cast<u16>(enemy[0x446U]) |
+            static_cast<u16>(static_cast<u32>(enemy[0x447U]) << 8);
+        if (state_word != 0U && state_word != 3U)
+            (void)ActivateStageEnemyEsiAbi(enemy);
+        enemy += 0x7f0U;
+    }
+
+    // Run the bullet-list root's record chain (vtable slot +0x14, arg 0,
+    // skipped while the node flag at +0xc is 1).
+    u8 *node = *reinterpret_cast<u8 **>(
+        *reinterpret_cast<u8 *const *>(0x47781cU) + 0x18U);
+    while (node != 0) {
+        u8 *const next = *reinterpret_cast<u8 **>(node + 8U);
+        if (*reinterpret_cast<const i32 *>(node + 0xcU) != 1) {
+            void **const vtable = *reinterpret_cast<void ***>(node);
+            reinterpret_cast<BulletListNodeCallback>(vtable[5])(node, 0);
+        }
+        node = next;
+    }
+
+    AdvanceAsciiHudConditionalChainEaxStackAbi(g_AsciiHudConditionalState);
+    return state;
 }
 
 } // namespace th10

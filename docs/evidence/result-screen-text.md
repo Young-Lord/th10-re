@@ -189,3 +189,41 @@ slot, stack = resource then entry) resolve the entity via
 `FindEntityEdxStackAbi` and re-run `InitializeAsciiAnimationVmEntry` on
 it — the first with the entity's own +0x308 resource, the second with
 the stack resource. Both are implemented in src/ResultScreenScript.cpp.
+
+## State initializer (2026-09-14)
+
+- `0x00415b00 InitializeResultScreenScriptState`
+  (`src/ResultScreenScript.cpp/.hpp`): native stack args `{state, stream}`
+  (`ret 8`, state pointer returned); the single caller is the SEH-framed
+  creator at `0x00415db0`, which allocates the 0x90-byte record with
+  `0x452493`, passes the stream pointer resolved from the HUD text mirror
+  (`owner+0x9ebc + selector*8 + 4`), publishes the record to
+  `owner+0x9eb8`, writes `selector` into `state+0x00`, and updates
+  `DAT_00474c84` to `selector + 1` (clearing `DAT_00474c8c` when it
+  changed).
+- Body: whole 0x90-byte clear; the three timers at `+0x04/+0x18/+0x2c`
+  (`{prev, cur, accum, rate ptr, flags}` each) get the guarded lazy-init
+  (poison `0xfff0bdc1`, rate pointer reset to `DAT_00476f78`, flag bit 0)
+  followed by the unconditional stopped reset (`prev = -1, cur = 0,
+  accum = 0`) — the guarded writes are always erased because the clear
+  zeroed the flag words; `+0x58 = 0`; `+0x5c = stream`.
+- Two text VMs are spawned through the `0x449950`/`0x449870`/`0x4489d0`
+  sequence (pool VM on the `DAT_00491c10` render owner, render mode 15 at
+  `+0x20`, flag `0x40000000` at `+0x35c`, scripts 0 and 1) into the
+  `handle_d`/`handle_e` slots; each id is then resolved twice and bytes
+  `+0x3a0/+0x3a1` are stamped `0x10` (the native performs the byte store
+  even after a null resolve clears the slot — preserved). The native also
+  pushes `DAT_004776e0+0x899c` (the ANM manager-work) as the `0x449950`
+  stack argument, which that helper never reads.
+- Position slots 0 and 3 (the two selectors the executor reads) are seeded
+  to `{8, 0, 0}` and `{24, 0, 0}`; the two per-select text colors at
+  `+0x88/+0x8c` are `0xf8f08f` and `0x8088ff` (the struct field named
+  `text_owners` holds these color values, which `SubmitDecryptedLine`
+  consumes as colors).
+- Tail: sweeps the 2000 `0x7f0`-stride records at `DAT_004776f0+0x60`,
+  calling `0x00408030 ActivateStageEnemyEsiAbi` for every record whose
+  `+0x446` word is neither 0 nor 3; walks the `DAT_0047781c` root's record
+  chain at `+0x18` (`next@8`, `flag@0xc`) calling vtable slot `+0x14`
+  with argument 0 unless the flag is 1; and finishes with
+  `0x0040e6a0(DAT_00477704)` (still a boundary:
+  `AdvanceAsciiHudConditionalChainEaxStackAbi`).

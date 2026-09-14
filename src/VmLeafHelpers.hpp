@@ -8,6 +8,12 @@ namespace th10 {
 // Ticks the vec3 animation block (modes 7/8/0x11/default easing).
 void TickVec3Interpolator(void *block, float out_vec3[3]);
 
+// TH10 0x004049a0. Native EBX = color-track block, stack = 7-dword scratch
+// out (native returns the scratch pointer, ret 4). Ticks the four-record
+// color track: mode 7 accumulates, 0x11 integrates velocity, 8 rides a
+// cubic Hermite, other modes ease through the 0x44c350 curve selector.
+u32 *TickColorTrack(void *block, u32 out_colors[7]);
+
 // TH10 0x0044C350. Native EAX = curve mode, stack = {value, denominator}
 // (retn 8), result returned as a double in ST0. Eases value/denominator:
 // modes 1..3 ease-in (t^2..t^4), 4..6 ease-out (1-(1-t)^2..^4), 9..11

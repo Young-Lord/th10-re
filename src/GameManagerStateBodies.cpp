@@ -77,7 +77,12 @@ extern void *ParseDemoRecord(char *source); // TH10 0x004296f0
 extern void DestroyDemoParseObject(void *parsed); // TH10 0x004294a0
 extern void StartBgmQueue(u32 channel, const char *name); // TH10 0x00420a90
 extern void ResetBgmQueue(u32 channel, u32 value); // TH10 0x00420b10
-extern i32 QueryNameInputInitialCursor(void); // TH10 0x00421fa0
+// TH10 0x00421fa0 (native EDI ABI, implemented in ScoreFileFormats.cpp):
+// inserts the finished run into one score-save slot's high-score table and
+// returns the insertion rank, or -1 when the run did not place. The native
+// callers derive EDI from the score-save state pointer variable and the
+// stage/difficulty slot globals.
+extern i32 InsertScoreRecordEdi(void *score_table);
 extern void ResetNameInputPresentation(u32 value); // TH10 0x00405410
 extern void SaveReplayNameInput(void); // TH10 0x004297b0
 
@@ -752,6 +757,85 @@ i32 RunManagerStateBody7(void *game_manager)
     return 1;
 }
 
+// ---- Extra-unlock code listener (native 0x432396..0x00432ce tail) ------
+
+// Keyboard-state bank: previous/current 0x100-byte key tables (GetKeyboardState
+// or the DirectInput buffer) and the interleaved four-lane pressed-edge
+// buffer computed each frame (cur & (cur ^ prev) per lane byte).
+extern u8 g_KeyboardStatePrevious[0x100]; // TH10 DAT_00497d90
+extern u8 g_KeyboardStateCurrent[0x100]; // TH10 DAT_00497e90
+extern u8 g_KeyboardPressedEdge[0x400]; // TH10 DAT_004979a8
+
+// Sequence progress (TH10 DAT_004979a4, 0..22) and idle timeout
+// (TH10 DAT_004979a0, resets the sequence after 300 frames).
+extern u32 g_ExtraCodeSequenceIndex; // TH10 DAT_004979a4
+extern u32 g_ExtraCodeIdleTimer; // TH10 DAT_004979a0
+
+// The 22-entry expected-key table (TH10 DAT_0046ef10); entries index the
+// pressed-edge buffer and a key is "pressed" when its byte is negative.
+extern const u32 g_ExtraUnlockCodeSequence[22]; // TH10 DAT_0046ef10
+
+// One frame of the 22-key unlock sequence listener. Runs only while the
+// menu sits on difficulty row 4 / shot-type row 2; on completion it unlocks
+// all spell cards and reserves boundary channel 0x2c.
+void RunExtraUnlockCodeListener()
+{
+    if ((g_ManagerSubGateFlags & 0x160bU) != 0U) {
+        g_ExtraCodeSequenceIndex = 0U;
+        g_ExtraCodeIdleTimer = 0U;
+    }
+
+    // Shift current -> previous, then sample the keyboard.
+    for (u32 i = 0; i < 0x100U; ++i)
+        g_KeyboardStatePrevious[i] = g_KeyboardStateCurrent[i];
+
+    if (Call44B010() != 0) {
+        // Pressed-edge recomputation over the four interleaved lanes.
+        for (u32 j = 0; j < 0x100U; j += 4U) {
+            for (u32 lane = 0; lane < 4U; ++lane) {
+                const u8 current = g_KeyboardStateCurrent[j + lane];
+                const u8 previous = g_KeyboardStatePrevious[j + lane];
+                g_KeyboardPressedEdge[j + lane] =
+                    static_cast<u8>(current & (current ^ previous));
+            }
+        }
+
+        if (g_ExtraCodeSequenceIndex >= 22U) {
+            // Full sequence entered: unlock all spell cards.
+            ResetStateBCompletionFlags();
+            ReserveContextChannel(reinterpret_cast<void *>(0x00492590),
+                                  0x2c, 0);
+            g_ExtraCodeSequenceIndex = 0U;
+        } else if (static_cast<signed char>(
+                       g_KeyboardPressedEdge
+                           [g_ExtraUnlockCodeSequence
+                                [g_ExtraCodeSequenceIndex]]) < 0) {
+            ++g_ExtraCodeSequenceIndex;
+            g_ExtraCodeIdleTimer = 0U;
+        } else {
+            // Any press among every third triple of edge bytes (indices
+            // 0..56 step 3, each ORing bytes k, k+1, k+2 — the native
+            // address arithmetic at 0x4979a6/eax resolves to the same
+            // three lanes) restarts the sequence.
+            u8 any_pressed = 0;
+            for (u32 k = 0; k < 57U; k += 3U) {
+                any_pressed = static_cast<u8>(
+                    any_pressed
+                    | g_KeyboardPressedEdge[k]
+                    | g_KeyboardPressedEdge[k + 1]
+                    | g_KeyboardPressedEdge[k + 2]);
+            }
+            if (static_cast<signed char>(any_pressed) < 0)
+                g_ExtraCodeSequenceIndex = 0U;
+        }
+    }
+
+    if (++g_ExtraCodeIdleTimer > 300U) {
+        g_ExtraCodeSequenceIndex = 0U;
+        g_ExtraCodeIdleTimer = 0U;
+    }
+}
+
 // TH10 0x00431ee0. Game-manager state-B calculation body: extra-mode
 // difficulty/shot-type selection. The native routine uses two cursor records
 // in the manager (+0x24 and +0xfc), with ten dynamically loaded option
@@ -797,7 +881,8 @@ i32 RunManagerStateBodyB(void *game_manager)
             SpawnManagerEntityFromScript(game_manager, script_id);
         for (u32 script_id = 165; script_id <= 167; ++script_id)
             SpawnManagerEntityFromScript(game_manager, script_id);
-        break;
+        // Native case 0 falls through into the case 1 timer check.
+        // fallthrough
     }
     case 1:
         if (static_cast<i32>(words[0x2b4 / 4]) > 6)
@@ -809,36 +894,54 @@ i32 RunManagerStateBodyB(void *game_manager)
         secondary_cursor[1] = old_secondary;
         words[0x1d8 / 4] = words[0x1d4 / 4];
         if ((g_ManagerSubGateFlags & 0x10U) != 0 ||
-            (g_MenuInputFlagsByte & 0x10U) != 0)
+            (g_MenuInputFlagsByte & 0x10U) != 0) {
             ShiftManagerSelector(secondary_cursor, -1);
+            SetEntityStopWordByIdAndRun(words[0x56c / 4], 2);
+        }
         if ((g_ManagerSubGateFlags & 0x20U) != 0 ||
-            (g_MenuInputFlagsByte & 0x20U) != 0)
+            (g_MenuInputFlagsByte & 0x20U) != 0) {
             ShiftManagerSelector(secondary_cursor, 1);
+            SetEntityStopWordByIdAndRun(words[0x570 / 4], 2);
+        }
         if (old_secondary != secondary_cursor[0]) {
             ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0xc, 0);
-            ReleaseManagerSlotEntity(game_manager, secondary_cursor[0] + 160);
-            SpawnManagerEntityFromScript(game_manager, old_secondary + 160);
-            words[0x1d4 / 4] = (words[0x1dc / 4] > 1)
-                ? words[0x1dc / 4] - 1 : 0;
-            RefreshStateBSelection(game_manager);
+            ReleaseManagerSlotEntity(game_manager, old_secondary + 160);
+            SpawnManagerEntityFromScript(game_manager,
+                                         secondary_cursor[0] + 160);
+            // Reload the page cursor toward one (native sign-split on the
+            // +0x1dc page count: zero or > 1 -> 1, == 1 -> 0).
+            if (words[0x1d4 / 4] > 0) {
+                const u32 page_count = words[0x1dc / 4];
+                words[0x1d4 / 4] =
+                    (page_count == 0 || page_count > 1)
+                        ? 1U : page_count - 1U;
+                RefreshStateBSelection(game_manager);
+            }
             words[0x1dc / 4] = static_cast<u32>(
                 (GetManagerDifficultyValue(g_MainChainRenderOwner,
                                             static_cast<i32>(secondary_cursor[0])) + 9) / 10 + 1);
         }
         if ((g_ManagerSubGateFlags & 0x40U) != 0 ||
-            (g_MenuInputFlagsByte & 0x40U) != 0)
+            (g_MenuInputFlagsByte & 0x40U) != 0) {
             ShiftManagerSelector(primary_cursor, -1);
+            SetEntityStopWordByIdAndRun(words[0x564 / 4], 2);
+        }
         if ((g_ManagerSubGateFlags & 0x80U) != 0 ||
-            (g_MenuInputFlagsByte & 0x80U) != 0)
+            (g_MenuInputFlagsByte & 0x80U) != 0) {
             ShiftManagerSelector(primary_cursor, 1);
+            SetEntityStopWordByIdAndRun(words[0x568 / 4], 2);
+        }
         if (old_primary != primary_cursor[0]) {
             ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0xc, 0);
             if (old_primary / 3 != primary_cursor[0] / 3) {
-                ReleaseManagerSlotEntity(game_manager, primary_cursor[0] / 3 + 152);
-                SpawnManagerEntityFromScript(game_manager, old_primary / 3 + 152);
+                ReleaseManagerSlotEntity(game_manager,
+                                         old_primary / 3 + 152);
+                SpawnManagerEntityFromScript(game_manager,
+                                             primary_cursor[0] / 3 + 152);
             }
-            ReleaseManagerSlotEntity(game_manager, primary_cursor[0] + 154);
-            SpawnManagerEntityFromScript(game_manager, old_primary + 154);
+            ReleaseManagerSlotEntity(game_manager, old_primary + 154);
+            SpawnManagerEntityFromScript(game_manager,
+                                         primary_cursor[0] + 154);
             if (words[0x1d4 / 4] > 0)
                 RefreshStateBSelection(game_manager);
         }
@@ -851,9 +954,23 @@ i32 RunManagerStateBodyB(void *game_manager)
                             option_index + 23, 15);
             }
             ShiftManagerSelector(words + 117, 1);
-            RefreshStateBSelection(game_manager);
+            // On a page above zero the list render is refreshed; on the
+            // first page the ten just-loaded option handles expire instead
+            // (native 0x00409e50 loop over +0x5d4).
+            if (words[0x1d4 / 4] != 0) {
+                RefreshStateBSelection(game_manager);
+            } else {
+                for (u32 option_index = 0; option_index < 10; ++option_index)
+                    ReleaseHandleTargetByPointer(
+                        bytes + 0x5d4 + 4 * option_index);
+            }
             ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0xa, 0);
         }
+        // Extra-unlock code listener: active only while the difficulty
+        // cursor sits on row 4 and the shot-type cursor on row 2 (native
+        // 0x43237f..0x4324ce).
+        if (secondary_cursor[0] == 4 && primary_cursor[0] == 2)
+            RunExtraUnlockCodeListener();
         if ((g_ManagerSubGateFlags & 0xaU) != 0) {
             SetGameManagerSubState(game_manager, 3);
             ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0xb, 0);
@@ -1005,7 +1122,17 @@ i32 RunManagerStateBodyF(void *game_manager)
             g_StageTextSprites[0] + g_StageTextSprites[1] +
             2 * g_StageTextSprites[0] + 154);
         SpawnManagerEntityFromScript(game_manager, g_StageScoreSelector[0] + 160);
-        const i32 initial_cursor = QueryNameInputInitialCursor();
+        // Native 0x00432db9: EDI = (value of DAT_0047783c) + 8 +
+        // 0x437c * (DAT_00474C6C + 3 * DAT_00474C68) — the stage slot whose
+        // ten 24-byte records form the character's high-score table.
+        const u32 score_slot =
+            *reinterpret_cast<const u32 *>(0x474C6CU) +
+            3U * *reinterpret_cast<const u32 *>(0x474C68U);
+        void *const score_table =
+            reinterpret_cast<u8 *>(
+                *reinterpret_cast<const u32 *>(0x47783CU)) +
+            8U + 0x437CU * score_slot;
+        const i32 initial_cursor = InsertScoreRecordEdi(score_table);
         if (initial_cursor < 0) {
             Call40AD20(0, primary_cursor);
             words[0x58ec / 4] = 1;

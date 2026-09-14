@@ -15,14 +15,32 @@ extern i32 g_MainChainSharedStatus; // TH10 DAT_00491fb8
 extern AsciiManagerAdapterSlice *g_AsciiManager; // TH10 DAT_004776e0
 extern u8 g_RegistrationFrameIncrement; // TH10 DAT_00491d66
 
-extern double GetRegistrationDrawTick(); // TH10 0x00439540
-extern bool IsTitleTimingAdvanceAllowed();
-extern void ClearRegistrationTimingGlobalsAtPhaseFour();
-extern void StoreRegistrationTimingSample(double tick);
+extern double GetMainChainFrameTime(); // TH10 0x00439540
+extern double g_MainChainFrameCalculationTick; // TH10 DAT_00492528
+extern double g_MainChainFrameDrawTick;        // TH10 DAT_00492530
+extern double g_MainChainFramePreviousTick;    // TH10 DAT_00492538
+extern double g_MainChainFrameClockEpoch;      // TH10 DAT_00492540
+extern u32 g_MainChainPerformanceFrequencyLo;  // TH10 DAT_00492508
+extern u32 g_MainChainPerformanceFrequencyHi;  // TH10 DAT_0049250c
+extern void *g_TitleScreen;                    // TH10 DAT_00477810
 extern Win32CriticalSection g_CallbackSchedulerLock; // TH10 DAT_00492274
 
 extern "C" void TH10_STDCALL EnterCriticalSection(void *critical_section);
 extern "C" void TH10_STDCALL LeaveCriticalSection(void *critical_section);
+
+// The frame-time constants used by 0x004134b0.
+const double k_frame_sample_threshold = 0.5;      // 0x470bc0
+const double k_two_pow_32 = 4294967296.0;         // 0x470b30
+const double k_window_seconds = 60.0;             // 0x470bb0
+const float k_zero_fps = 0.0f;                    // 0x470bb8
+const float k_full_speed_fps = 57.0f;             // 0x470ba8
+
+// fcomp is unordered exactly when a NaN is involved: neither a < b nor
+// a >= b holds.
+bool IsFloatUnordered(float left, float right)
+{
+    return !(left < right) && !(left >= right);
+}
 
 } // namespace
 
@@ -61,35 +79,79 @@ void DestroyRegistrationDrawOwner(RegistrationDrawOwner *owner)
     FreeRegistrationDrawOwner(owner);
 }
 
+// TH10 0x004134b0 real body. Native input is the owner in ESI (plain ret,
+// EAX = 1 on every path); the FPU stack is used without x87 state
+// preservation. Preserved quirks:
+//   - the baseline at +0x14 is only advanced by the elapsed delta after a
+//     sample is taken (a sub-0.5s frame leaves the baseline untouched, so
+//     the next delta accumulates);
+//   - the frame accumulator is divided as an *unsigned* 32-bit value (the
+//     fild + 2^32 idiom);
+//   - phase 4 zeroes the QueryPerformanceFrequency pair *before* reading
+//     the tick, which silently switches 0x00439540 onto its timeGetTime
+//     fallback for that one call;
+//   - there is no zero-guard before the division.
 void UpdateRegistrationDrawTiming(RegistrationDrawOwner *owner)
 {
-    const double current_tick = GetRegistrationDrawTick();
+    const double current_tick = GetMainChainFrameTime();
+
+    // Replace the baseline only on an ordered "less" comparison; NaN or
+    // greater/equal keeps the old baseline.
     if (current_tick < owner->last_tick)
         owner->last_tick = current_tick;
 
     const double elapsed = current_tick - owner->last_tick;
-    if (elapsed < 0.5)
-        return;
+    if (!(elapsed >= k_frame_sample_threshold))
+        return; // unordered counts as too small (native jne on C0|C3)
 
-    owner->sampled_fps = static_cast<float>(
-        static_cast<double>(owner->frame_accumulator) / elapsed);
-    if (owner->sampled_fps <= 0.0f) {
+    owner->last_tick = owner->last_tick + elapsed;
+
+    const u32 raw_accumulator = owner->frame_accumulator;
+    const double unsigned_accumulator = raw_accumulator >= 0x80000000U
+        ? static_cast<double>(static_cast<i32>(raw_accumulator))
+          + k_two_pow_32
+        : static_cast<double>(raw_accumulator);
+    const float sampled_fps =
+        static_cast<float>(unsigned_accumulator / elapsed);
+    owner->sampled_fps = sampled_fps;
+
+    if (!(sampled_fps > k_zero_fps) || IsFloatUnordered(sampled_fps,
+                                                          k_zero_fps)) {
+        // fps <= 0 or unordered: clear the phase counter and skip the
+        // sampling actions (but still run the title-timing tail).
         owner->phase_count = 0;
     } else {
-        owner->phase_count++;
+        owner->phase_count += 1;
         if (owner->phase_count == 2) {
-            StoreRegistrationTimingSample(GetRegistrationDrawTick());
+            const double tick = GetMainChainFrameTime();
+            g_MainChainFrameClockEpoch = tick;
+            g_MainChainFramePreviousTick = tick;
+            g_MainChainFrameCalculationTick = tick;
+            g_MainChainFrameDrawTick = tick;
         } else if (owner->phase_count == 4) {
-            ClearRegistrationTimingGlobalsAtPhaseFour();
-            StoreRegistrationTimingSample(GetRegistrationDrawTick());
+            // Native zeroes the performance frequency (both dwords)
+            // before reading the tick.
+            g_MainChainPerformanceFrequencyLo = 0;
+            g_MainChainPerformanceFrequencyHi = 0;
+            const double tick = GetMainChainFrameTime();
+            g_MainChainFrameClockEpoch = tick;
+            g_MainChainFramePreviousTick = tick;
+            g_MainChainFrameCalculationTick = tick;
+            g_MainChainFrameDrawTick = tick;
         }
     }
 
-    if (IsTitleTimingAdvanceAllowed()) {
-        owner->elapsed_window += 60.0;
-        owner->displayed_fps += owner->sampled_fps > 57.0f
-            ? 60.0
-            : static_cast<double>(owner->sampled_fps);
+    if (g_TitleScreen != 0) {
+        u32 *const state_flags =
+            static_cast<u32 *>(g_TitleScreen) + 0x58U / sizeof(u32);
+        if ((*state_flags & 0x14U) == 0) {
+            owner->elapsed_window += k_window_seconds;
+            if (sampled_fps > k_full_speed_fps)
+                owner->displayed_fps += k_window_seconds;
+            else
+                owner->displayed_fps += static_cast<double>(sampled_fps);
+        }
+        *state_flags &= 0xffffff7fU; // clear the 0x80 frame-request bit
     }
 
     owner->frame_accumulator = 0;
@@ -102,10 +164,18 @@ i32 TH10_FASTCALL RegistrationDrawCallback(RegistrationDrawOwner *owner)
     UpdateRegistrationDrawTiming(owner);
 
     if (g_MainChainSharedStatus != 14 && g_AsciiManager != 0) {
-        const u32 color = owner->sampled_fps >= 30.0f
-            ? 0xff5050ff
-            : (owner->sampled_fps >= 40.0f ? 0xffa0a0ff : 0xffffffff);
-        QueuePrimaryFpsTextSelected(g_AsciiManager, color, owner->sampled_fps);
+        // Literal native control flow (0x004135f5): the first comparison
+        // selects 0xff5050ff for every ordered value — the jp only routes
+        // *unordered* results to the second comparison, so the
+        // 0xffa0a0ff band is unreachable dead code and a NaN fps resolves
+        // through the second unordered check to 0xffffffff.
+        const u32 color = IsFloatUnordered(owner->sampled_fps, 30.0f)
+            ? (IsFloatUnordered(owner->sampled_fps, 40.0f)
+                   ? 0xffffffffU
+                   : 0xffa0a0ffU)
+            : 0xff5050ffU;
+        QueuePrimaryFpsTextSelected(g_AsciiManager, color,
+                                    owner->sampled_fps);
     }
 
     owner->frame_accumulator += 1 + g_RegistrationFrameIncrement;

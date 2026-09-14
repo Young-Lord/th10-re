@@ -1,5 +1,6 @@
 #include "VmLeafHelpers.hpp"
 
+#include "EclEasedTransforms.hpp"
 #include "PlayerMotionHelpers.hpp"
 #include "PlayerTimerHelpers.hpp"
 
@@ -353,8 +354,10 @@ namespace {
 extern u16 g_TimelinePrngStateB[4]; // TH10 DAT_004918b0 (LCG state)
 u32 g_TimelinePrngCounterB; // TH10 DAT_004918b4 (+2 per draw)
 
-// TH10 0x0044bb90: unit float in [0,1) from the 16-bit LCG pair.
-float PrngUnitFloat()
+// TH10 0x0044bb90: centered float in [-1,1) from the 16-bit LCG pair.
+// Native: fild(combined), +2^32 when negative, *2^-31, -1.0
+// (flt_470BEC / flt_470AFC). Distinct from the [0,1) draw 0x0044bb20.
+float PrngCenteredFloat()
 {
     u32 x = (static_cast<u16>(*g_TimelinePrngStateB ^ 0x9630U) - 0x6553U);
     const i32 hi = static_cast<i32>((x >> 14 & 3U) + x * 4U);
@@ -368,13 +371,13 @@ float PrngUnitFloat()
     float value = static_cast<float>(combined);
     if (static_cast<i32>(combined) < 0)
         value += 4294967296.0f;
-    return value * (1.0f / 4294967296.0f);
+    return value * (1.0f / 2147483648.0f) - 1.0f;
 }
 
-// TH10 0x445620 / 0x00445880: the per-frame update and render callbacks
-// installed into the record (boundaries; they run from the entity ticker).
-void RibbonFrameUpdateCallback();
-void RibbonRenderCallback();
+// TH10 0x00445880: the per-frame render callback installed into the
+// record (boundary; it runs from the entity ticker). The frame-update
+// callback 0x00445620 is implemented in EclEasedTransforms.cpp and bound
+// through EclEasedTransforms.hpp, which declares both callbacks.
 
 // TH10 0x452493 / 0x452422: operator new / delete.
 u8 *AllocateHeapBlock(u32 bytes);
@@ -402,8 +405,8 @@ i32 RebuildRibbonRingBuffer(void *entity_memory)
         reinterpret_cast<void *>(&RibbonFrameUpdateCallback);
     *reinterpret_cast<void **>(entity + 0x39c) =
         reinterpret_cast<void *>(&RibbonRenderCallback);
-    WriteFloat(buffer, 0x4a4, PrngUnitFloat() / 120.0f);
-    WriteFloat(buffer, 0x4a8, PrngUnitFloat() / 120.0f);
+    WriteFloat(buffer, 0x4a4, PrngCenteredFloat() / 120.0f);
+    WriteFloat(buffer, 0x4a8, PrngCenteredFloat() / 120.0f);
 
     float center[3];
     for (u32 component = 0; component != 3; ++component)
@@ -418,7 +421,12 @@ i32 RebuildRibbonRingBuffer(void *entity_memory)
     WriteFloat(buffer, 0x18, 0.5f);
 
     float angle = -3.1415927f;
-    float previous_dr = 0.0f;
+    // The radial walk starts at centered * 1/15 and steps centered * 1/30,
+    // clamped into [-1/15, +1/15] (unordered draws keep the walk value -
+    // native quirk). Vertex radius is the absolute theta slot; the walk
+    // value is only the per-frame delta the frame callback (0x00445620)
+    // accumulates into it.
+    float walk = PrngCenteredFloat() * (1.0f / 15.0f);
     for (u32 index = 0; index != 31; ++index) {
         u8 *const vertex = buffer + (index + 1) * 0x1c;
         float direction[2];
@@ -427,24 +435,194 @@ i32 RebuildRibbonRingBuffer(void *entity_memory)
         WriteFloat(vertex, 0x18, direction[1] + 0.5f);
         WriteFloat(vertex, 8, 0.0f);
         WriteFloat(vertex, 0xc, 1.0f);
-        const float theta = (PrngUnitFloat() - 0.5f) * 8.0f + 80.0f;
+        // Per-frame delta slot first (pre-update walk value), then the
+        // absolute theta slot: centered * 8 + 80
+        // (flt_470BD0 / flt_470C28).
+        WriteFloat(buffer, 0x424 + index * 4, walk);
+        const float theta = PrngCenteredFloat() * 8.0f + 80.0f;
         WriteFloat(buffer, 0x3a0 + index * 4, theta);
-        float dr = (PrngUnitFloat() - 0.5f) / 30.0f + previous_dr;
-        if (dr > 1.0f / 15.0f)
-            dr = 1.0f / 15.0f;
-        else if (dr < -1.0f / 15.0f)
-            dr = -1.0f / 15.0f;
-        previous_dr = dr;
+        walk += PrngCenteredFloat() * (1.0f / 30.0f);
+        if (walk <= -1.0f / 15.0f) {
+            walk = -1.0f / 15.0f;
+        } else if (walk > 1.0f / 15.0f) {
+            walk = 1.0f / 15.0f;
+        }
         float offset[2];
-        PolarToCartesianEdiAbi(offset, angle, dr);
+        PolarToCartesianEdiAbi(offset, angle, theta);
         WriteFloat(vertex, 0, center[0] + offset[0]);
         WriteFloat(vertex, 4, center[1] + offset[1]);
         WriteFloat(vertex, 8, center[2] + offset[2]);
         angle += 6.2831855f / 31.0f;
-        if (angle >= 3.1415927f)
+        if (angle >= 3.25f)
             angle -= 6.2831855f;
     }
     return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Color track (TH10 0x004049a0) and its 0x1c-byte record helpers
+// 0x404d40 / 0x404da0 / 0x404e10.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// The 28-byte color record consumed by the track: six floats followed by
+// four bytes that always mirror floats 2..5 through the 0x463b2c rounding
+// conversion (the four back-to-back calls each pop one x87 value).
+struct ColorTrackRecord {
+    float fields[6];
+    u8 bytes[4];
+};
+
+// TH10 0x404d40. Writes `to - from` into out. The native receives one stack
+// argument (the eased factor pushed by 0x4049a0) and never reads it; the
+// argument stays on the stack and chains into 0x404da0's factor parameter.
+void ColorTrackRecordDifference(const ColorTrackRecord &from,
+                                const ColorTrackRecord &to,
+                                ColorTrackRecord &out)
+{
+    for (u32 i = 0; i != 6U; ++i)
+        out.fields[i] = to.fields[i] - from.fields[i];
+    for (u32 i = 0; i != 4U; ++i)
+        out.bytes[i] = static_cast<u8>(FloatToI32(out.fields[i + 2]));
+}
+
+// TH10 0x404da0 (ret 4): out = factor * record.
+void ColorTrackRecordScaled(const ColorTrackRecord &record, float factor,
+                            ColorTrackRecord &out)
+{
+    for (u32 i = 0; i != 6U; ++i)
+        out.fields[i] = factor * record.fields[i];
+    for (u32 i = 0; i != 4U; ++i)
+        out.bytes[i] = static_cast<u8>(FloatToI32(out.fields[i + 2]));
+}
+
+// TH10 0x404e10: out = a + b.
+void ColorTrackRecordSum(const ColorTrackRecord &a, const ColorTrackRecord &b,
+                         ColorTrackRecord &out)
+{
+    for (u32 i = 0; i != 6U; ++i)
+        out.fields[i] = a.fields[i] + b.fields[i];
+    for (u32 i = 0; i != 4U; ++i)
+        out.bytes[i] = static_cast<u8>(FloatToI32(out.fields[i + 2]));
+}
+
+inline i32 ColorTrackLoadI32(const u8 *block, u32 offset)
+{
+    return *reinterpret_cast<const i32 *>(block + offset);
+}
+
+inline void ColorTrackCopyOut(const ColorTrackRecord &record,
+                              u32 out_colors[7])
+{
+    out_colors[0] = *reinterpret_cast<const u32 *>(record.fields);
+    out_colors[1] = *reinterpret_cast<const u32 *>(record.fields + 1);
+    out_colors[2] = *reinterpret_cast<const u32 *>(record.fields + 2);
+    out_colors[3] = *reinterpret_cast<const u32 *>(record.fields + 3);
+    out_colors[4] = *reinterpret_cast<const u32 *>(record.fields + 4);
+    out_colors[5] = *reinterpret_cast<const u32 *>(record.fields + 5);
+    out_colors[6] = *reinterpret_cast<const u32 *>(record.bytes);
+}
+
+} // namespace
+
+// TH10 0x004049a0. Native EBX = track block, stack = 7-dword scratch out
+// (the native returns the scratch pointer and cleans one argument). Block:
+// four 0x1c color records at +0x00/+0x1c/+0x38/+0x54, then the timer
+// {prev@0x70, cur@0x74, accum@0x78, rate ptr@0x7c, flags@0x80}, duration
+// @0x84 and mode@0x88. The rate window and the 0xfff0bdc1 poison match the
+// vec3 interpolator, but the completion does NOT stop the track (the
+// duration stays armed and every later tick re-snaps cur/prev/accum to the
+// end). Mode 7 accumulates record 1 into record 0, 0x11 integrates record
+// 3 as velocity against the record-1 delta, 8 rides a cubic Hermite (the
+// native reuses the handle-1 weight (1-t)^2*t for record 3 as well), and
+// everything else eases record 0 toward record 1 through the 0x44c350
+// curve selector. Duration <= 0 skips the timer entirely and interpolates
+// with t = accum / duration, so a zero duration produces inf/NaN weights.
+u32 *TickColorTrack(void *block_memory, u32 out_colors[7])
+{
+    u8 *const block = static_cast<u8 *>(block_memory);
+    ColorTrackRecord *const records =
+        reinterpret_cast<ColorTrackRecord *>(block);
+
+    i32 duration = ColorTrackLoadI32(block, 0x84);
+    if (duration > 0) {
+        *reinterpret_cast<i32 *>(block + 0x70) =
+            *reinterpret_cast<const i32 *>(block + 0x74);
+        const float rate = **reinterpret_cast<float *const *>(block + 0x7c);
+        if (rate > kRateUnityLow && rate < kRateUnityHigh) {
+            WriteFloat(block, 0x78, ReadFloat(block, 0x78) + 1.0f);
+            *reinterpret_cast<i32 *>(block + 0x74) =
+                *reinterpret_cast<const i32 *>(block + 0x74) + 1;
+        } else {
+            const float accum = ReadFloat(block, 0x78) + rate;
+            WriteFloat(block, 0x78, accum);
+            *reinterpret_cast<i32 *>(block + 0x74) = FloatToI32(accum);
+        }
+        duration = ColorTrackLoadI32(block, 0x84);
+        if (*reinterpret_cast<const i32 *>(block + 0x74) >= duration) {
+            if ((ColorTrackLoadI32(block, 0x80) & 1) == 0) {
+                *reinterpret_cast<i32 *>(block + 0x74) = 0;
+                *reinterpret_cast<i32 *>(block + 0x70) =
+                    static_cast<i32>(0xfff0bdc1U);
+                WriteFloat(block, 0x78, 0.0f);
+                *reinterpret_cast<float **>(block + 0x7c) = &g_FrameTimeScale;
+                *reinterpret_cast<u32 *>(block + 0x80) |= 1U;
+            }
+            // Re-snap to the end every tick past the duration.
+            *reinterpret_cast<i32 *>(block + 0x74) = duration;
+            *reinterpret_cast<i32 *>(block + 0x70) = duration - 1;
+            WriteFloat(block, 0x78, static_cast<float>(duration));
+            ColorTrackCopyOut(ColorTrackLoadI32(block, 0x88) == 7
+                                  ? records[0] : records[1],
+                              out_colors);
+            return out_colors;
+        }
+    }
+
+    const i32 mode = ColorTrackLoadI32(block, 0x88);
+    ColorTrackRecord out_record;
+    if (mode == 7) {
+        ColorTrackRecord sum;
+        ColorTrackRecordSum(records[0], records[1], sum);
+        records[0] = sum;
+        out_record = records[0];
+    } else if (mode == 0x11) {
+        const ColorTrackRecord old_velocity = records[3];
+        ColorTrackRecord sum;
+        ColorTrackRecordSum(old_velocity, records[0], sum);
+        records[0] = sum;
+        ColorTrackRecordSum(records[1], old_velocity, sum);
+        records[3] = sum;
+        out_record = records[0];
+    } else if (mode == 8) {
+        const float t = ReadFloat(block, 0x78) /
+                        static_cast<float>(duration);
+        const float w_start = (1.0f + 2.0f * t) * (t - 1.0f) * (t - 1.0f);
+        const float w_end = (3.0f - 2.0f * t) * t * t;
+        const float w_handle1 = (1.0f - t) * (1.0f - t) * t;
+        const float w_handle2 = (t - 1.0f) * (t - 1.0f) * t;
+        ColorTrackRecord scaled_start, scaled_end, scaled_handle1;
+        ColorTrackRecord scaled_handle2, sum;
+        ColorTrackRecordScaled(records[0], w_start, scaled_start);
+        ColorTrackRecordScaled(records[1], w_end, scaled_end);
+        ColorTrackRecordScaled(records[2], w_handle1, scaled_handle1);
+        ColorTrackRecordScaled(records[3], w_handle2, scaled_handle2);
+        ColorTrackRecordSum(scaled_start, scaled_end, sum);
+        ColorTrackRecordSum(sum, scaled_handle1, sum);
+        ColorTrackRecordSum(sum, scaled_handle2, sum);
+        out_record = sum;
+    } else {
+        const float factor = static_cast<float>(EasingCurveSelectorEaxStackAbi(
+            mode, ReadFloat(block, 0x78), static_cast<float>(duration)));
+        ColorTrackRecord difference, scaled, total;
+        ColorTrackRecordDifference(records[0], records[1], difference);
+        ColorTrackRecordScaled(difference, factor, scaled);
+        ColorTrackRecordSum(records[0], scaled, total);
+        out_record = total;
+    }
+    ColorTrackCopyOut(out_record, out_colors);
+    return out_colors;
 }
 
 } // namespace th10

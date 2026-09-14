@@ -816,3 +816,31 @@ In flight: ECL object ctor pair 0x0040d830/0x0040cc70/0x0040dc80
 - Direct: 0x00425020 `CreatePlayerStateBlock` (src/ManagerCreation.cpp) —
   0x4478 player state block with ctor 0x4246c0 and the semantic
   InitializePlayerObject init.
+
+## Exact-Match Baseline (objdiff)
+
+The semantic layer is complete (every enumerated game function >= 0x100
+bytes in 0x401000-0x452000 is reconstructed; `docs/coverage-gap-shortlist.md`
+is marked COMPLETE). The next phase is object-level matching:
+
+- `scripts/objdiff-baseline.sh` builds the whole baseline end to end:
+  1. compiles all modules to `build/cpp/<Name>.obj` (MSVC, per
+     `scripts/compile-main-chain-cpp.sh`),
+  2. dumps per-object disassembly and COFF symbol tables to
+     `build/ours/<Name>.asm/.sym` (the COFF symbols carry the MSVC-mangled
+     semantic names, e.g. `?AddString@AsciiManager@th10@@...`),
+  3. extracts per-function reference disassembly/bytes of
+     `resources/th10.exe` into `build/reference/<address>_<name>.asm/.bin`
+     via `scripts/extract_reference_functions.py` (function boundaries are
+     derived from the int3 padding runs of the MSVC layout; implemented
+     addresses without padding become intra-group splits, so every
+     registered address gets its own artifact — 572 unique addresses as of
+     this writing),
+  4. regenerates `objdiff.yml` (one unit per reconstruction module, source
+     -> object).
+- Per-function diffing compares `build/ours/<Module>.asm` (locate the
+  semantic body through the `.sym` symbol table) against
+  `build/reference/<address>_<name>.asm`.
+- The IDA MCP server was unavailable for the final reconstruction passes;
+  those modules were built from objdump disassembly and the reference
+  extraction doubles as the cross-check surface when IDA returns.
