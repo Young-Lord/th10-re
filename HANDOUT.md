@@ -1,5 +1,11 @@
 # TH10 RE Handoff
 
+> **Historical record (2026-08-28 .. 2026-09-05).** This file is the original
+> handoff plus an append-only session log. It is a trace of what was done and
+> why, not a status source. For current status use `config/function-status.csv`
+> and `TH10_PROGRESS_METRIC.md`; for the repo map and authority order see
+> `FILE_INDEX.md`.
+
 ## Objective And Rules
 
 Continue semantic C++ reconstruction until complete, genuinely blocked, or a
