@@ -30,8 +30,11 @@ extern float *g_KindFloat4741E0;      // TH10 flt_4741e0
 
 // Constant pool -----------------------------------------------------------
 
-const float kFrameRate = 96.0f;       // flt_476fa8 (velocity integrator)
+// Velocity integrator rate: flt_476F78, the shared frame-time scale
+// (default 1.0f; defined alongside the other PRNG/frame globals).
+extern float g_FrameTimeScale; // TH10 DAT_00476f78
 const float kPi = 3.14159265f;        // flt_470b18
+const float kTwoPi = 6.2831855f;      // flt_470b14
 const float kHalf = 0.5f;             // flt_470b0c
 const float kMinusOne = -1.0f;        // flt_470b60
 const float kAnchorScale = 4.0f;      // flt_470c40
@@ -158,13 +161,13 @@ i32 UpdateSceneTriggerObjectStackAbi(void *object)
         // fall into the active-state body below.
         StoreFloat(obj, 0x3b4U,
                    LoadFloat(obj, 0x3b4U)
-                       + kFrameRate * LoadFloat(obj, 0x3c0U) * 192.0f);
+                       + g_FrameTimeScale * LoadFloat(obj, 0x3c0U) * 0.5f);
         StoreFloat(obj, 0x3b8U,
                    LoadFloat(obj, 0x3b8U)
-                       + kFrameRate * LoadFloat(obj, 0x3c4U) * 192.0f);
+                       + g_FrameTimeScale * LoadFloat(obj, 0x3c4U) * 0.5f);
         StoreFloat(obj, 0x3bcU,
                    LoadFloat(obj, 0x3bcU)
-                       + kFrameRate * LoadFloat(obj, 0x3c8U) * 192.0f);
+                       + g_FrameTimeScale * LoadFloat(obj, 0x3c8U) * 0.5f);
         if (LoadU32(obj, 0x314U) == 0U)
             goto tail;
         StoreU16(obj, 0x446U, 1U);
@@ -172,13 +175,13 @@ i32 UpdateSceneTriggerObjectStackAbi(void *object)
         // Exiting: same integration, then straight to the tail.
         StoreFloat(obj, 0x3b4U,
                    LoadFloat(obj, 0x3b4U)
-                       + kFrameRate * LoadFloat(obj, 0x3c0U) * 192.0f);
+                       + g_FrameTimeScale * LoadFloat(obj, 0x3c0U) * 0.5f);
         StoreFloat(obj, 0x3b8U,
                    LoadFloat(obj, 0x3b8U)
-                       + kFrameRate * LoadFloat(obj, 0x3c4U) * 192.0f);
+                       + g_FrameTimeScale * LoadFloat(obj, 0x3c4U) * 0.5f);
         StoreFloat(obj, 0x3bcU,
                    LoadFloat(obj, 0x3bcU)
-                       + kFrameRate * LoadFloat(obj, 0x3c8U) * 192.0f);
+                       + g_FrameTimeScale * LoadFloat(obj, 0x3c8U) * 0.5f);
         goto tail;
     }
 
@@ -218,13 +221,13 @@ i32 UpdateSceneTriggerObjectStackAbi(void *object)
     // World-space drift (no screen scaling) after the queue run.
     StoreFloat(obj, 0x3b4U,
                LoadFloat(obj, 0x3b4U)
-                   + kFrameRate * LoadFloat(obj, 0x3c0U));
+                   + g_FrameTimeScale * LoadFloat(obj, 0x3c0U));
     StoreFloat(obj, 0x3b8U,
                LoadFloat(obj, 0x3b8U)
-                   + kFrameRate * LoadFloat(obj, 0x3c4U));
+                   + g_FrameTimeScale * LoadFloat(obj, 0x3c4U));
     StoreFloat(obj, 0x3bcU,
                LoadFloat(obj, 0x3bcU)
-                   + kFrameRate * LoadFloat(obj, 0x3c8U));
+                   + g_FrameTimeScale * LoadFloat(obj, 0x3c8U));
 
     if ((LoadU32(obj, 0) & 2U) != 0U) {
         // Timeout-region check against the screen target block.
@@ -375,7 +378,9 @@ i32 SpawnSceneTriggerFromDescriptorEbxStackAbi(void *manager,
             float uninitialized_slot; // native quirk, never pre-set
             stale_x = uninitialized_slot;
         }
-        pos_x = static_cast<float>(column) * kPi
+        // Native 0x406974 (jump table case 3): column * flt_470b14
+        // (2*pi) / para_count — NOT pi (flt_470b18).
+        pos_x = static_cast<float>(column) * kTwoPi
                     / static_cast<float>(para_count)
             + stale_x + static_cast<float>(row) * speed + x0;
         break;
@@ -389,8 +394,11 @@ i32 SpawnSceneTriggerFromDescriptorEbxStackAbi(void *manager,
             float uninitialized_slot; // native quirk, never pre-set
             stale_x = uninitialized_slot;
         }
+        // Native 0x4069ae (jump table case 5): the leading term is
+        // flt_470b18 (pi) / para_count, but the column term uses
+        // flt_470b14 (2*pi) / para_count.
         pos_x = kPi / static_cast<float>(para_count) + stale_x
-                + static_cast<float>(column) * kPi
+                + static_cast<float>(column) * kTwoPi
                       / static_cast<float>(para_count)
                 + static_cast<float>(row) * speed + x0;
         break;
@@ -399,7 +407,8 @@ i32 SpawnSceneTriggerFromDescriptorEbxStackAbi(void *manager,
         break;
     case 7U:
         pos_y = y1 + (y0 - y1) * RandomUnitFloatAbi();
-        pos_x = static_cast<float>(column) * kPi
+        // Native 0x406a09 (jump table case 7): column * flt_470b14 (2*pi).
+        pos_x = static_cast<float>(column) * kTwoPi
                     / static_cast<float>(para_count)
             + static_cast<float>(row) * speed + x0;
         break;

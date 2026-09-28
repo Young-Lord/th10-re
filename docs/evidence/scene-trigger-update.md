@@ -10,10 +10,15 @@ Per-frame update of the 0x7f0-stride stage trigger object:
 - Record flag bit 3 (`+0 & 8`) or a failed tail step releases the object
   through 0x405be0 and returns -1.
 - State word at +0x446: state 2 (entering) integrates the velocity at
-  +0x3c0..+0x3c8 scaled by flt_476FA8 and 192 into the position at
-  +0x3b4..+0x3bc; when the +0x314 gate opens it falls into state 1.
-  State 3 (exiting) does the same integration and jumps to the tail.
-  State 1 skips straight to the body.
+  +0x3c0..+0x3c8 scaled by flt_476F78 and 0.5 (raw `fmul ds:0x470b0c`)
+  into the position at +0x3b4..+0x3bc; when the +0x314 gate opens it
+  falls into state 1. State 3 (exiting) does the same integration and
+  jumps to the tail. State 1 skips straight to the body.
+  (Correction 2026-09-28: decompile text served by the pre-breakdown MCP
+  session displayed this as "flt_476FA8 * 192"; the canonical target's
+  raw bytes — fld ds:0x476f78, fmul ds:0x470b0c = 0.5 — are authoritative.
+  The same session's get_bytes returned correct bytes, so the root cause
+  was MCP response corruption, not a different binary.)
 - Active body: runs the instruction queue (0x406d90, ECX), then the
   feature dispatch on the +0x43c flags: bits 1/0x10/0x20/0x40/0x100/
   0x80/0x8000C00/0x4000000 call the corresponding 0x407xxx feature
@@ -47,6 +52,11 @@ Per-frame update of the 0x7f0-stride stage trigger object:
   the native fallthroughs (a direct 3/5 entry reads an uninitialized
   stack float — preserved as the `stale_x` slot); 6/8 randomize from
   0x44bb20; 7 randomizes y instead. Defaults only latch the state words.
+  (Constant note: the cases-3/5/7 column term rides `fmul
+  ds:flt_470B14` = 2π while case 5's leading term is genuine π
+  (flt_470B18); jump table @0x406d58 confirms case 3 has no leading
+  term. See docs/evidence/float-constant-audit.md for the full
+  poisoned-IDB constant corrections.)
 - Record initialization: flag |= 1, state 1; two pointer-rate timers at
   +0x3f8/+0x40c lazily initialized then force-armed to -1; y into +0x3d8;
   +0x3e4 angle from 0x44bc10; base position from descriptor +4/+8/+c

@@ -57,9 +57,9 @@ i32 FloatToI32RoundHalfAway(float value)
 const float k_playfield_x_offset = 224.0f; // 0x470b4c
 const float k_playfield_y_offset = 16.0f;  // 0x470b48
 const float k_bottom_fade_y = 8.0f;        // 0x470bd0
-const float k_bottom_fade_span = 3.0f;     // 0x470bcc
+const float k_bottom_fade_span = 32.0f;    // 0x470bcc
 const float k_fade_scale_a = 0.03125f;     // 0x470d20
-const float k_fade_scale_b = 128.0f;       // 0x470bf8
+const float k_fade_scale_b = 255.0f;       // 0x470bf8
 
 const u32 k_slot_count = 0x896U;
 const u32 k_slot_stride = 0x3f0U;

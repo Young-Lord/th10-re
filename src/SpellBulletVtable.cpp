@@ -84,9 +84,9 @@ const float kHalf = FloatFromBits(1056964608U);        // flt_470b0c = 0.5f
 const float kRateLow = FloatFromBits(1065185444U);     // flt_470b68 = 0.99f
 const float kRateHigh = FloatFromBits(1065437102U);    // flt_470b64 = 1.01f
 const float kOne = FloatFromBits(1065353216U);         // flt_470afc = 1.0f
-const float kPhaseALine = FloatFromBits(1119629312U);  // flt_470c80 = 96.0f
+const float kPhaseALine = FloatFromBits(1119879168U);  // flt_470c80 = 96.0f
 const float kPhaseBLine = FloatFromBits(1124073472U);  // flt_470bf4 = 128.0f
-const float kFollowScale = FloatFromBits(1025447567U); // flt_470c84 = 0.05f
+const float kFollowScale = FloatFromBits(1028443341U); // flt_470c84 = 0.05f
 
 // ---- field access helpers ------------------------------------------------
 

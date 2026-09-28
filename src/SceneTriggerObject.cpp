@@ -30,8 +30,9 @@ extern u8 g_SceneSingletons;          // TH10 DAT_00477710 (dword at +44)
 
 const float kSpawnOffsetX = 224.0f;   // flt_470b4c
 const float kSpawnOffsetY = 16.0f;    // flt_470b48
-const float kClampLow = -999.0f;      // flt_470b50 / flt_470cc8
-const float kClampHigh = 999.0f;      // flt_470ccc
+const float kClampLow = -990.0f;      // flt_470b50 (angle resolve)
+const float kClampHigh = 990.0f;      // flt_470ccc (angle resolve)
+const float kFallbackYLow = -999.0f;  // flt_470cc8 (opcode 64/128 y gate)
 const i32 kQueueCapacity = 18;        // +0x45c compares against 0x12
 
 // Boundary leaf (native register ABI noted at the site).
@@ -117,9 +118,9 @@ void LazyInitTimerBlock(u8 *object, u32 offset)
 }
 
 // Native branch chain for the opcode-16/64/128 angle fields (fcomp against
-// flt_470b50/flt_470ccc): values <= -999.0f take the stored +0x3e4
-// fallback, NaN and values in (-999, 999) keep the argument, and values
-// >= 999.0f resolve to the live angle-to-target.
+// flt_470b50/flt_470ccc): values <= -990.0f take the stored +0x3e4
+// fallback, NaN and values in (-990, 990) keep the argument, and values
+// >= 990.0f resolve to the live angle-to-target.
 float ResolveAngleArg(float arg, const u8 *object)
 {
     if (arg > kClampLow || arg != arg) {
@@ -140,8 +141,11 @@ float AngleToScreenTargetEaxEcxAbi(const float position[2], void *target)
     const u8 *t = static_cast<const u8 *>(target);
     const float dx = LoadFloat(t, 0x3c0U) - position[0];
     const float dy = LoadFloat(t, 0x3c4U) - position[1];
-    if (dy == 30.0f && dx == 30.0f)
-        return 1.75f;
+    // Native (0x426671): both components are compared against
+    // flt_470b04 (0.0f) and the degenerate case returns flt_470b94
+    // (pi/2, 1.5707964f).
+    if (dy == 0.0f && dx == 0.0f)
+        return 1.5707964f;
     return static_cast<float>(atan2(static_cast<double>(dy),
                                     static_cast<double>(dx)));
 }
@@ -236,11 +240,11 @@ void RunSceneTriggerInstructionQueueEcxAbi(void *object)
                 *reinterpret_cast<const float *>(&a0), obj));
             // y falls back to +0x3d8 for anything not strictly above
             // -999.0f (NaN included — the fcomp parity chain sends it to
-            // the fallback).
+            // the fallback). Gate constant: flt_470cc8 = -999.0f.
             const float y = *reinterpret_cast<const float *>(&a1);
             StoreFloat(obj, 0x6c4U,
-                       (y > kClampLow) ? y
-                                       : LoadFloat(obj, kOffFallbackY));
+                       (y > kFallbackYLow) ? y
+                                           : LoadFloat(obj, kOffFallbackY));
             LazyInitTimerBlock(obj, 0x6b0U);
             StoreU32(obj, 0x6b4U, 0U);
             StoreU32(obj, 0x6b8U, 0U);

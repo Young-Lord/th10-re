@@ -32,7 +32,7 @@ extern u32 g_ScoreValue;              // TH10 dword_474c4c
 const float kTimerLow = 0.99f;        // flt_470b68
 const float kTimerHigh = 1.01f;       // flt_470b64
 const float kTimerStep = 1.0f;        // flt_470afc
-const float kEnterY = 432.0f;         // flt_470bdc
+const float kEnterY = 416.0f;         // flt_470bdc
 const double kEnterX = -128.0;        // dbl_470d10
 const float kLeaveY = 400.0f;         // flt_470d08
 const double kLeaveX = -112.0;        // dbl_470d00
@@ -43,7 +43,7 @@ const float kBenchXLow = -64.0f;      // flt_470b5c
 const float kHpFillStep = 0.025f;     // flt_470cf8
 const float kBossBaseX = 224.0f;      // flt_470b4c
 const double kBossNearX = 64.0;       // dbl_470cf0
-const float kBossAlphaScale = 0.75f;  // flt_470ce8
+const float kBossAlphaScale = -2.984375f; // flt_470ce8 (-191/64 ramp)
 const float kBossOffLow = -192.0f;    // flt_470b40
 const float kBossOffHigh = 192.0f;    // flt_470b3c
 
@@ -525,7 +525,9 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
             const float diff = LoadFloat(battle, 0x1068U) - boss_x;
             const float abs_diff = diff < 0.0f ? -diff : diff;
             if (abs_diff < kBossNearX) {
-                // byte +0x9d47 = 0x40 - (int)(|dx| * 0.75), byte-wrapped.
+                // byte +0x9d47 = 0x40 - (i32)(|dx| * -2.984375) low byte
+                // (native fmul ds:0x470ce8 at 0x415722; the product is
+                // negative, so the ramp runs 64 -> 254 over |dx| < 64).
                 const i32 scaled = static_cast<i32>(
                     abs_diff * kBossAlphaScale);
                 StoreU8(hud, 0x9d47U,

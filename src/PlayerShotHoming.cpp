@@ -48,8 +48,8 @@ const float k_speed_ramp_fast = 0.2f;  // 0x470c38
 const float k_speed_cap = 16.0f;       // 0x470b48
 const float k_slow_speed = 4.0f;       // 0x470c40
 const float k_turn_rate = 0.2f;        // 0x470c38 again
-const float k_straight_angle = 0.2653f;  // 0x470c3c (raw bits 0x3E860A92)
-const float k_quarter_turn = 1.5707964f; // 0x470c48 (pi/2)
+const float k_straight_angle = 0.2617994f; // 0x470c3c (pi/12, bits 0x3E860A92)
+const float k_quarter_turn = 0.7853982f;  // 0x470c48 (pi/4)
 const u32 k_homing_age_gate = 0x78U;   // 120 frames
 
 const u32 k_target_flags_offset = 0x2480U;
@@ -139,8 +139,8 @@ i32 TickHomingShotMovementEdxAbi(void *shot_record)
 
     const float magnitude = delta < 0.0f ? -delta : delta;
     if (!(magnitude >= k_quarter_turn)) {
-        // magnitude < pi/2 (a NaN delta takes the same branch via the
-        // unordered C0 flag). The 0.2653f comparison cannot change the
+        // magnitude < pi/4 (a NaN delta takes the same branch via the
+        // unordered C0 flag). The 0.2617994f (pi/12) comparison cannot change the
         // outcome for ordered values — both sides run the identical
         // capped ramp — so only the unordered case skips it.
         if (!IsFloatUnordered(magnitude, k_straight_angle)) {

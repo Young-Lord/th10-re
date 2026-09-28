@@ -91,7 +91,8 @@ double LcgDrawAsDouble()
 //   scale  = draw * 2^-33 + 0.5            (in [0.5, 1.0))
 //   pos    = position + {cos(angle) * rx, sin(angle) * ry} * scale
 //   spawn  = kind row+1, color 0xffffffff, angle -pi/2, speed 2.2
-// The initial angle is PrngUnitFloat-style draw * 3.25 (flt_470b18).
+// The initial angle is a 0x44bb90 centered draw * pi (flt_470b18 =
+// 3.14159274f).
 // ---------------------------------------------------------------------------
 i32 SpawnEnemyDeathScatterEsiStackAbi(const float position[3],
                                       void *scatter_table)
@@ -101,10 +102,11 @@ i32 SpawnEnemyDeathScatterEsiStackAbi(const float position[3],
     const float radius_x = *reinterpret_cast<const float *>(table + 0x34U);
     const float radius_y = *reinterpret_cast<const float *>(table + 0x38U);
 
-    // Initial angle: 0x44bb90 draw (raw combined * 2^-31 - 1) * 3.25.
+    // Initial angle: 0x44bb90 draw (raw combined * 2^-31 - 1) * pi
+// (fmul ds:0x470b18 at 0x40c9e4).
     float angle = static_cast<float>(LcgDrawAsDouble() * 0.0000000004656612873077392578125 -
                                      1.0) *
-                  3.25f;
+                  3.14159274f;
 
     for (u32 row = 0; row < 11U; ++row) {
         const i32 count = static_cast<i32>(counts[row]);

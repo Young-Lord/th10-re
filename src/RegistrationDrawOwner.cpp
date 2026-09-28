@@ -32,7 +32,7 @@ extern "C" void TH10_STDCALL LeaveCriticalSection(void *critical_section);
 const double k_frame_sample_threshold = 0.5;      // 0x470bc0
 const double k_two_pow_32 = 4294967296.0;         // 0x470b30
 const double k_window_seconds = 60.0;             // 0x470bb0
-const float k_zero_fps = 0.0f;                    // 0x470bb8
+const float k_fps_gate = 65.0f;                   // 0x470bb8
 const float k_full_speed_fps = 57.0f;             // 0x470ba8
 
 // fcomp is unordered exactly when a NaN is involved: neither a < b nor
@@ -115,9 +115,9 @@ void UpdateRegistrationDrawTiming(RegistrationDrawOwner *owner)
         static_cast<float>(unsigned_accumulator / elapsed);
     owner->sampled_fps = sampled_fps;
 
-    if (!(sampled_fps > k_zero_fps) || IsFloatUnordered(sampled_fps,
-                                                          k_zero_fps)) {
-        // fps <= 0 or unordered: clear the phase counter and skip the
+    if (!(sampled_fps > k_fps_gate) || IsFloatUnordered(sampled_fps,
+                                                        k_fps_gate)) {
+        // fps <= 65 or unordered: clear the phase counter and skip the
         // sampling actions (but still run the title-timing tail).
         owner->phase_count = 0;
     } else {

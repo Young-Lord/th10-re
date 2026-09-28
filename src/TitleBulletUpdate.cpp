@@ -55,17 +55,17 @@ inline float FloatFromBits(u32 bits)
     return converter.f;
 }
 
-const float kLandingLineY = FloatFromBits(1124073472U); // flt_470bf4 = 134.0f
+const float kLandingLineY = FloatFromBits(1124073472U); // flt_470bf4 = 128.0f
 const float kGravityStep = FloatFromBits(1022739087U);  // flt_470cdc = 0.03f
 const float kZero = FloatFromBits(0U);                  // flt_470b04 = 0.0f
 const float kTwo = FloatFromBits(1073741824U);          // flt_470b08 = 2.0f
-const float kTerminalX = FloatFromBits(1139539968U);    // flt_470be0 = 500.0f
+const float kTerminalX = FloatFromBits(1139539968U);    // flt_470be0 = 472.0f
 const float kAccelGate = FloatFromBits(1094713344U);    // flt_470cd8 = 12.0f
 const float kAccelStep = FloatFromBits(1045220557U);    // flt_470c38 = 0.2f
-const float kBonusLineY = FloatFromBits(1125122048U);   // flt_470cd4 = 150.0f
+const float kBonusLineY = FloatFromBits(1125122048U);   // flt_470cd4 = 144.0f
 const float kBonusScale = FloatFromBits(995595318U);    // flt_470cd0
 const float kHalf = FloatFromBits(1056964608U);         // flt_470b0c = 0.5f
-const float kBonusBias = FloatFromBits(1167867904U);    // flt_470ce0 = 5120.0f
+const float kBonusBias = FloatFromBits(1167867904U);    // flt_470ce0 = 5000.0f
 const float kRetargetScale = FloatFromBits(1051372203U); // flt_470cc4 = 0.35f
 const float kIntAdvanceLow = FloatFromBits(1065185444U); // flt_470b68
 const float kIntAdvanceHigh = FloatFromBits(1065437102U); // flt_470b64

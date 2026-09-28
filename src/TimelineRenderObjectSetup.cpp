@@ -129,8 +129,8 @@ float ReadVmFloatRegister(u8 *vm, float reg_operand, float fallback)
     case 10009:
         return static_cast<float>(*reinterpret_cast<i32 *>(vm + 0x330));
     case 10010:
-        // Native: 0x0044bb90 centered draw * flt_470B18 (3.25).
-        return PrngCenteredFloat(&SelectPrngState(vm)) * 3.25f;
+        // Native: 0x0044bb90 centered draw * flt_470B18 (pi, 3.14159274f).
+        return PrngCenteredFloat(&SelectPrngState(vm)) * 3.14159274f;
     case 10011:
         // Native: 0x0044bb20 unit draw, returned raw.
         return PrngUnitFloat(&SelectPrngState(vm));

@@ -453,7 +453,9 @@ i32 RebuildRibbonRingBuffer(void *entity_memory)
         WriteFloat(vertex, 4, center[1] + offset[1]);
         WriteFloat(vertex, 8, center[2] + offset[2]);
         angle += 6.2831855f / 31.0f;
-        if (angle >= 3.25f)
+        // Wrap threshold is flt_470b18 (pi, 3.14159274f) — native fcomp
+        // ds:0x470b18 at 0x4453f4 (not the poisoned 3.25).
+        if (angle >= 3.1415927f)
             angle -= 6.2831855f;
     }
     return 0;
