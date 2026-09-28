@@ -77,8 +77,8 @@ i32 InitializeStageObjectManagerEbxAbi(void *manager)
         return -1;
     }
 
-    void *calc_node = AllocSchedulerCallbackNode(
-        reinterpret_cast<void *>(&StageObjectManagerCalcCallback));
+    u8 *calc_node = static_cast<u8 *>(AllocSchedulerCallbackNode(
+        reinterpret_cast<void *>(&StageObjectManagerCalcCallback)));
     *reinterpret_cast<u32 *>(calc_node + 0x4) &= ~2U;
     *reinterpret_cast<u32 *>(calc_node + 0x20) =
         reinterpret_cast<u32>(bytes);
@@ -86,8 +86,8 @@ i32 InitializeStageObjectManagerEbxAbi(void *manager)
     *reinterpret_cast<u32 *>(bytes + 8) =
         reinterpret_cast<u32>(calc_node);
 
-    void *draw_node = AllocSchedulerCallbackNode(
-        reinterpret_cast<void *>(&StageObjectManagerDrawCallback));
+    u8 *draw_node = static_cast<u8 *>(AllocSchedulerCallbackNode(
+        reinterpret_cast<void *>(&StageObjectManagerDrawCallback)));
     *reinterpret_cast<u32 *>(draw_node + 0x4) &= ~2U;
     *reinterpret_cast<u32 *>(draw_node + 0x20) =
         reinterpret_cast<u32>(bytes);
@@ -334,6 +334,17 @@ void SetStageEntityFocusFlagEaxAbi(void *entity)
     u32 state = *reinterpret_cast<u32 *>(bytes + 0x35c);
     state = (state & ~0x20U) | 0x10U;
     *reinterpret_cast<u32 *>(bytes + 0x35c) = state;
+}
+
+// TH10 0x0042ba70. Native EAX = stage entity, stack = value (retn 4).
+// Stores the value at +0x4c and raises flag bit 3 (0x8) of the +0x35c
+// state word. The binary holds no direct references to this entry; the
+// body is reconstructed from the isolated reference disassembly.
+void SetStageEntityField4cRaiseFlag3EaxStackAbi(void *entity, u32 value)
+{
+    u8 *bytes = static_cast<u8 *>(entity);
+    *reinterpret_cast<u32 *>(bytes + 0x4c) = value;
+    *reinterpret_cast<u32 *>(bytes + 0x35c) |= 8U;
 }
 
 void *InitializeStageEntityRecordEsiAbi(void *record)

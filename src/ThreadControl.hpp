@@ -29,4 +29,10 @@ typedef char AssertThreadControlEntryOffset[
 // intervals, sleeping 1 ms between timeouts; it never forcibly terminates.
 void StopThreadControl(ThreadControl *control);
 
+// TH10 0x0044c0e0. Native EAX = control. Publishes the ThreadControl
+// vtable (off_4703e4) and zeroes the handle, id, stop flag and the +0x10
+// field. The vtable's plain/deleting destructors (0x44c130/0x44c100)
+// route through StopThreadControl.
+void InitializeThreadControlInPlaceEaxAbi(ThreadControl *control);
+
 } // namespace th10

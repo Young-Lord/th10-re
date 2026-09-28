@@ -82,10 +82,14 @@ void ReleaseRenderOwnerSlotWord(u32 *slot_word)
     *slot_word = 0U;
 }
 
+} // namespace
+
 // Scalar destructor 0x0042ac60 passed to the eh vector destructor iterator
 // by 0x004294a0 (__thiscall ECX = the 0x24-byte record): unlinks the record
 // from the doubly-linked chain through its +0x1c/+0x20 links and clears
 // them. The chain neighbours are not fixed up beyond the direct links.
+// Exported (out of the anonymous namespace) so the replay demo record pool
+// in ReplayContextHelpers.cpp can bind the same 0x0042ac60 destructor.
 void UnlinkGameModeChainRecordInPlace(void *record)
 {
     u32 *const words = static_cast<u32 *>(record);
@@ -100,8 +104,6 @@ void UnlinkGameModeChainRecordInPlace(void *record)
     words[7] = 0U;
     words[8] = 0U;
 }
-
-} // namespace
 
 // TH10 0x004294a0. In-place destructor of the DAT_00477838 game-mode object.
 void DestroyGameModeObjectInPlace(void *object)

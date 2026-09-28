@@ -57,4 +57,11 @@ void InitializeTextEffectOwnerEdxAbi(void *owner);
 // Returns 0.
 i32 RegisterTextEffectOwnerSchedulerRecordsEaxAbi(void *owner);
 
+// TH10 0x0042b660. Allocates the 0xb884-byte owner, initializes it in
+// place (0x0042b430) and registers its scheduler records (0x0042b4d0);
+// on registration failure the owner is destroyed (0x0042b570) and freed.
+// Returns the owner or 0. Called from the game-mode entry chain
+// (0x0040a350 / 0x00417870).
+void *CreateTextEffectOwner();
+
 } // namespace th10

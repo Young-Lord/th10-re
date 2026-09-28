@@ -56,6 +56,8 @@ i32 CreateMemoryBgmStreamAdapter(TransitionSoundAdapterLayout **out_adapter,
                                  void *event_handle); // TH10 0x0044cbf0
 i32 RebindBgmStreamSourceDescriptor(BgmStreamSourceLayout *source,
                                     void *descriptor); // TH10 0x0044dca0
+void ClearBgmStreamSourceStateEaxAbi(
+    BgmStreamSourceLayout *source); // TH10 0x0044dbb0
 i32 RecreateBgmStreamBuffers(TransitionSoundAdapterLayout *adapter); // 0x44cf20
 i32 RewindBgmStreamAdapter(TransitionSoundAdapterLayout *adapter); // 0x44dad0
 i32 StopBgmStreamAdapter(TransitionSoundAdapterLayout *adapter); // 0x44d5b0

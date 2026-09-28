@@ -207,3 +207,25 @@ behavior.
 * `IDirectSoundBuffer` vtable ordering, cross-checked against the constructor,
   transition tick, and destructor uses documented in the adjacent transition
   sound evidence notes.
+
+## 0x0044d300 EnsureTransitionBufferRestoredEsiEbxAbi (added)
+
+Native ESI = DirectSound buffer, EBX = optional u32 out flag. Shared
+"restore if lost" gate called from StartTransitionSoundAdapter
+(0x44d476), RefillBgmStreamNotification (0x44d8b0) and
+RewindBgmStreamAdapter (0x44dafe). Body (reconstructed in
+src/TransitionSoundAdapter.cpp):
+
+1. Null buffer returns CO_E_NOTINITIALIZED (0x800401f0); the out flag is
+   pre-cleared when present.
+2. GetStatus (vtable +0x24); a negative HRESULT propagates unchanged.
+3. Without DSBSTATUS_BUFFERLOST (status & 2) the entry returns 1 — the
+   native's "nothing was lost" signal, distinct from the 0 of a
+   successful restore.
+4. Otherwise the retry loop Restore / Sleep(10) only after
+   DSERR_BUFFERLOST (0x88780096) / Restore again repeats until Restore
+   succeeds, then raises the out flag and returns 0.
+
+Note the distinction from the plain helper `RestoreTransitionBufferIfLost`
+above: the native entry keeps the 1-vs-0 return split and the
+Sleep-after-bufferlost ordering of the two Restore calls.

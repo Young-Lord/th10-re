@@ -27,6 +27,18 @@ from `hud+0x9ec8`. The lives stock is stored ×20 with 5% granularity
 (`(v%20)*100/20`). This function never touches the icon slots at +0x4cdc
 (those belong to `0x413790`).
 
+## 0x004086b0 CheckStageEffectPositionInFieldEcxEcxStackAbi
+
+Native ECX = the float2 position (x at +0, y at +4), stack = (margin_x,
+margin_y; ret 8). Returns 1 when the position with its margins falls
+outside the fixed playfield rect x = (-192, 192), y = (0, 448) — the four
+constants 0x470b40 (-192.0), 0x470b3c (192.0), 0x470b04 (0.0) and
+0x470b38 (448.0) — and 0 when inside. Each axis test is an independent
+early return in the native order (fcomp + `test ah,0x41` / `test ah,0x1`
+sign/zero decode). The previously inlined copies of this test in
+`ActivateStageEnemyEsiAbi` (8px margins) and `ScanIntroActivations`
+(2px margins) now call the shared semantic body.
+
 ## 0x00408030 ActivateStageEnemyEsiAbi
 
 State machine only: requires word +0x446 ∈ {1, 2}; sets word +0xc3 = 1

@@ -30,4 +30,15 @@ void StopThreadControl(ThreadControl *control)
     control->thread_entry = 0;
 }
 
+void InitializeThreadControlInPlaceEaxAbi(ThreadControl *control)
+{
+    extern void *GetThreadControlTypeVtable(); // TH10 off_4703e4
+
+    control->marker = GetThreadControlTypeVtable();
+    control->thread_handle = 0;
+    control->thread_id = 0;
+    control->stop_requested = 0;
+    control->field_0010 = 0;
+}
+
 } // namespace th10

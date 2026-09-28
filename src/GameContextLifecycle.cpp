@@ -4,7 +4,9 @@
 // (0x405850).
 
 #include "Th10Types.hpp"
+#include "Th10Platform.hpp"
 #include "CallbackScheduler.hpp"
+#include "ManagerReleaseWrappers.hpp"
 
 namespace th10 {
 

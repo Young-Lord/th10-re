@@ -300,4 +300,42 @@ i32 StartTransitionSoundAdapter(TransitionSoundAdapterLayout *control,
                                  control->play_flags);
 }
 
+
+// TH10 0x0044d300. Native ESI = DirectSound buffer, EBX = u32 out flag
+// (optional). Shared "restore if lost" gate used by
+// StartTransitionSoundAdapter, RefillBgmStreamNotification and
+// RewindBgmStreamAdapter. Returns CO_E_NOTINITIALIZED for a null buffer,
+// the GetStatus HRESULT on failure, 1 when the buffer is not lost, and 0
+// after a successful Restore (raising the out flag).
+i32 EnsureTransitionBufferRestoredEsiEbxAbi(void *buffer, u32 *was_restored)
+{
+    if (buffer == 0)
+        return kCoENotInitialized;
+
+    if (was_restored != 0)
+        *was_restored = 0;
+
+    u32 status = 0;
+    const i32 status_result = DirectSoundBufferGetStatus(buffer, &status);
+    if (status_result < 0)
+        return status_result;
+
+    if ((status & kDsStatusBufferLost) == 0U)
+        return 1;
+
+    // Native retry loop: Restore, Sleep(10) only after a
+    // DSERR_BUFFERLOST result, Restore again, repeat while non-zero.
+    while (true) {
+        i32 restore_result = DirectSoundBufferRestore(buffer);
+        if (restore_result == kDsErrBufferLost)
+            SleepMilliseconds(10);
+        restore_result = DirectSoundBufferRestore(buffer);
+        if (restore_result == 0) {
+            if (was_restored != 0)
+                *was_restored = 1;
+            return 0;
+        }
+    }
+}
+
 } // namespace th10

@@ -176,6 +176,56 @@ th10_cl /nologo /c /TP /I src src/MainChainSoundLoading.cpp /Fobuild\\cpp\\MainC
 th10_cl /nologo /c /TP /I src src/PackedArchive.cpp /Fobuild\\cpp\\PackedArchive.obj
 th10_cl /nologo /c /TP /I src src/ResultScreenScript.cpp /Fobuild\\cpp\\ResultScreenScript.obj
 th10_cl /nologo /c /TP /I src src/ResultScreenUpdate.cpp /Fobuild\\cpp\\ResultScreenUpdate.obj
+th10_cl /nologo /c /TP /I src src/ArchiveFileReaders.cpp /Fobuild\\cpp\\ArchiveFileReaders.obj
+th10_cl /nologo /c /TP /I src src/AsciiHudGameplayUpdate.cpp /Fobuild\\cpp\\AsciiHudGameplayUpdate.obj
+th10_cl /nologo /c /TP /I src src/AsciiManager.cpp /Fobuild\\cpp\\AsciiManager.obj
+th10_cl /nologo /c /TP /I src src/AsciiSecondaryStrings.cpp /Fobuild\\cpp\\AsciiSecondaryStrings.obj
+th10_cl /nologo /c /TP /I src src/BgmSupportMisc.cpp /Fobuild\\cpp\\BgmSupportMisc.obj
+th10_cl /nologo /c /TP /I src src/ColorAndVecHelpers.cpp /Fobuild\\cpp\\ColorAndVecHelpers.obj
+th10_cl /nologo /c /TP /I src src/EclInstructionHelpers.cpp /Fobuild\\cpp\\EclInstructionHelpers.obj
+th10_cl /nologo /c /TP /I src src/EclObjectLifecycle.cpp /Fobuild\\cpp\\EclObjectLifecycle.obj
+th10_cl /nologo /c /TP /I src src/EclVmChunkWriter.cpp /Fobuild\\cpp\\EclVmChunkWriter.obj
+th10_cl /nologo /c /TP /I src src/EffectPoolLifecycle.cpp /Fobuild\\cpp\\EffectPoolLifecycle.obj
+th10_cl /nologo /c /TP /I src src/EffectScheduler.cpp /Fobuild\\cpp\\EffectScheduler.obj
+th10_cl /nologo /c /TP /I src src/EndingMidiEdge.cpp /Fobuild\\cpp\\EndingMidiEdge.obj
+th10_cl /nologo /c /TP /I src src/EnemyScriptVars.cpp /Fobuild\\cpp\\EnemyScriptVars.obj
+th10_cl /nologo /c /TP /I src src/EntityFieldSetters.cpp /Fobuild\\cpp\\EntityFieldSetters.obj
+th10_cl /nologo /c /TP /I src src/EntitySlotAccessors.cpp /Fobuild\\cpp\\EntitySlotAccessors.obj
+th10_cl /nologo /c /TP /I src src/GameContextLifecycle.cpp /Fobuild\\cpp\\GameContextLifecycle.obj
+th10_cl /nologo /c /TP /I src src/GateVmSlots.cpp /Fobuild\\cpp\\GateVmSlots.obj
+th10_cl /nologo /c /TP /I src src/GdiTextSupport.cpp /Fobuild\\cpp\\GdiTextSupport.obj
+th10_cl /nologo /c /TP /I src src/GlobalLifecycleHelpers.cpp /Fobuild\\cpp\\GlobalLifecycleHelpers.obj
+th10_cl /nologo /c /TP /I src src/JoystickKeyLatch.cpp /Fobuild\\cpp\\JoystickKeyLatch.obj
+th10_cl /nologo /c /TP /I src src/MainChainErrorLog.cpp /Fobuild\\cpp\\MainChainErrorLog.obj
+th10_cl /nologo /c /TP /I src src/MainChainObject6fcAndGate.cpp /Fobuild\\cpp\\MainChainObject6fcAndGate.obj
+th10_cl /nologo /c /TP /I src src/MainChainStateHelpers.cpp /Fobuild\\cpp\\MainChainStateHelpers.obj
+th10_cl /nologo /c /TP /I src src/ManagerWorkPipeline.cpp /Fobuild\\cpp\\ManagerWorkPipeline.obj
+th10_cl /nologo /c /TP /I src src/MenuRecordHelpers.cpp /Fobuild\\cpp\\MenuRecordHelpers.obj
+th10_cl /nologo /c /TP /I src src/MenuStateHelpers.cpp /Fobuild\\cpp\\MenuStateHelpers.obj
+th10_cl /nologo /c /TP /I src src/PlayerRecordHelpers.cpp /Fobuild\\cpp\\PlayerRecordHelpers.obj
+th10_cl /nologo /c /TP /I src src/RegistrationStageOpen.cpp /Fobuild\\cpp\\RegistrationStageOpen.obj
+th10_cl /nologo /c /TP /I src src/RenderOwnerClearColor.cpp /Fobuild\\cpp\\RenderOwnerClearColor.obj
+th10_cl /nologo /c /TP /I src src/RenderOwnerDrawHelpers.cpp /Fobuild\\cpp\\RenderOwnerDrawHelpers.obj
+th10_cl /nologo /c /TP /I src src/ReplayContextHelpers.cpp /Fobuild\\cpp\\ReplayContextHelpers.obj
+th10_cl /nologo /c /TP /I src src/ReplayFileReader.cpp /Fobuild\\cpp\\ReplayFileReader.obj
+th10_cl /nologo /c /TP /I src src/ResultScreenStateAccessors.cpp /Fobuild\\cpp\\ResultScreenStateAccessors.obj
+th10_cl /nologo /c /TP /I src src/SceneTriggerManager.cpp /Fobuild\\cpp\\SceneTriggerManager.obj
+th10_cl /nologo /c /TP /I src src/SceneTriggerPopup.cpp /Fobuild\\cpp\\SceneTriggerPopup.obj
+th10_cl /nologo /c /TP /I src src/ScriptMapLoader.cpp /Fobuild\\cpp\\ScriptMapLoader.obj
+th10_cl /nologo /c /TP /I src src/SpellBulletManagerLifecycle.cpp /Fobuild\\cpp\\SpellBulletManagerLifecycle.obj
+th10_cl /nologo /c /TP /I src src/StageConditionalState.cpp /Fobuild\\cpp\\StageConditionalState.obj
+th10_cl /nologo /c /TP /I src src/StageEffectHost.cpp /Fobuild\\cpp\\StageEffectHost.obj
+th10_cl /nologo /c /TP /I src src/StageObjectManager.cpp /Fobuild\\cpp\\StageObjectManager.obj
+th10_cl /nologo /c /TP /I src src/StdStringCrt.cpp /Fobuild\\cpp\\StdStringCrt.obj
+th10_cl /nologo /c /TP /I src src/SystemUiSupport.cpp /Fobuild\\cpp\\SystemUiSupport.obj
+th10_cl /nologo /c /TP /I src src/TextScanHelpers.cpp /Fobuild\\cpp\\TextScanHelpers.obj
+th10_cl /nologo /c /TP /I src src/TextureStageLoading.cpp /Fobuild\\cpp\\TextureStageLoading.obj
+th10_cl /nologo /c /TP /I src src/TimelinePrngDraw.cpp /Fobuild\\cpp\\TimelinePrngDraw.obj
+th10_cl /nologo /c /TP /I src src/TimelineSpawnControl.cpp /Fobuild\\cpp\\TimelineSpawnControl.obj
+th10_cl /nologo /c /TP /I src src/TitleScreenVmSlots.cpp /Fobuild\\cpp\\TitleScreenVmSlots.obj
+th10_cl /nologo /c /TP /I src src/TitleStateAccessors.cpp /Fobuild\\cpp\\TitleStateAccessors.obj
+th10_cl /nologo /c /TP /I src src/ZunMath.cpp /Fobuild\\cpp\\ZunMath.obj
+
 printf 'Wrote %s\n' "$repo_root/build/cpp/MainChainContext.obj"
 printf 'Wrote %s\n' "$repo_root/build/cpp/AsciiManagerLifecycle.obj"
 printf 'Wrote %s\n' "$repo_root/build/cpp/AsciiAnimationVm.obj"

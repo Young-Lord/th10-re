@@ -2,12 +2,16 @@
 # hand; re-run the script after adding modules.
 min_versions: 2
 units:
+  - path: src/ArchiveFileReaders.cpp
+    target: build/cpp/ArchiveFileReaders.obj
   - path: src/AsciiAnimationVm.cpp
     target: build/cpp/AsciiAnimationVm.obj
   - path: src/AsciiGlyphRenderer.cpp
     target: build/cpp/AsciiGlyphRenderer.obj
   - path: src/AsciiGlyphSubmission.cpp
     target: build/cpp/AsciiGlyphSubmission.obj
+  - path: src/AsciiHudGameplayUpdate.cpp
+    target: build/cpp/AsciiHudGameplayUpdate.obj
   - path: src/AsciiHudOverlayUpdate.cpp
     target: build/cpp/AsciiHudOverlayUpdate.obj
   - path: src/AsciiHudOwnerLifecycle.cpp
@@ -38,16 +42,26 @@ units:
     target: build/cpp/AsciiRenderModeDispatcher.obj
   - path: src/AsciiSceneObjectRenderer.cpp
     target: build/cpp/AsciiSceneObjectRenderer.obj
+  - path: src/AsciiSecondaryStrings.cpp
+    target: build/cpp/AsciiSecondaryStrings.obj
   - path: src/BgmRuntime.cpp
     target: build/cpp/BgmRuntime.obj
+  - path: src/BgmSupportMisc.cpp
+    target: build/cpp/BgmSupportMisc.obj
   - path: src/BgmUpdateLoop.cpp
     target: build/cpp/BgmUpdateLoop.obj
   - path: src/CallbackScheduler.cpp
     target: build/cpp/CallbackScheduler.obj
+  - path: src/ColorAndVecHelpers.cpp
+    target: build/cpp/ColorAndVecHelpers.obj
   - path: src/ConditionalStateSubrecords.cpp
     target: build/cpp/ConditionalStateSubrecords.obj
   - path: src/EclEasedTransforms.cpp
     target: build/cpp/EclEasedTransforms.obj
+  - path: src/EclInstructionHelpers.cpp
+    target: build/cpp/EclInstructionHelpers.obj
+  - path: src/EclObjectLifecycle.cpp
+    target: build/cpp/EclObjectLifecycle.obj
   - path: src/EclScriptLibrary.cpp
     target: build/cpp/EclScriptLibrary.obj
   - path: src/EclScriptNameTable.cpp
@@ -58,10 +72,18 @@ units:
     target: build/cpp/EclScriptVm.obj
   - path: src/EclSelectMenu.cpp
     target: build/cpp/EclSelectMenu.obj
+  - path: src/EclVmChunkWriter.cpp
+    target: build/cpp/EclVmChunkWriter.obj
   - path: src/EffectPoolEntityUpdate.cpp
     target: build/cpp/EffectPoolEntityUpdate.obj
+  - path: src/EffectPoolLifecycle.cpp
+    target: build/cpp/EffectPoolLifecycle.obj
+  - path: src/EffectScheduler.cpp
+    target: build/cpp/EffectScheduler.obj
   - path: src/EndingMidiBlockLoader.cpp
     target: build/cpp/EndingMidiBlockLoader.obj
+  - path: src/EndingMidiEdge.cpp
+    target: build/cpp/EndingMidiEdge.obj
   - path: src/EndingMidiPlayer.cpp
     target: build/cpp/EndingMidiPlayer.obj
   - path: src/EndingMidiSequencer.cpp
@@ -70,10 +92,18 @@ units:
     target: build/cpp/EndingOverlayQuad.obj
   - path: src/EnemyDeathEffects.cpp
     target: build/cpp/EnemyDeathEffects.obj
+  - path: src/EnemyScriptVars.cpp
+    target: build/cpp/EnemyScriptVars.obj
+  - path: src/EntityFieldSetters.cpp
+    target: build/cpp/EntityFieldSetters.obj
   - path: src/EntityHelpers.cpp
     target: build/cpp/EntityHelpers.obj
   - path: src/EntityRenderStateApply.cpp
     target: build/cpp/EntityRenderStateApply.obj
+  - path: src/EntitySlotAccessors.cpp
+    target: build/cpp/EntitySlotAccessors.obj
+  - path: src/GameContextLifecycle.cpp
+    target: build/cpp/GameContextLifecycle.obj
   - path: src/GameManagerGateVms.cpp
     target: build/cpp/GameManagerGateVms.obj
   - path: src/GameManagerState.cpp
@@ -82,8 +112,12 @@ units:
     target: build/cpp/GameManagerStateBodies.obj
   - path: src/GameModeTeardown.cpp
     target: build/cpp/GameModeTeardown.obj
+  - path: src/GateVmSlots.cpp
+    target: build/cpp/GateVmSlots.obj
   - path: src/GdiOutlinedText.cpp
     target: build/cpp/GdiOutlinedText.obj
+  - path: src/GdiTextSupport.cpp
+    target: build/cpp/GdiTextSupport.obj
   - path: src/GeneratedFontTable.cpp
     target: build/cpp/GeneratedFontTable.obj
   - path: src/GeneratedSurface.cpp
@@ -92,6 +126,8 @@ units:
     target: build/cpp/GeneratedSurfaceBlit.obj
   - path: src/GeneratedSurfaceText.cpp
     target: build/cpp/GeneratedSurfaceText.obj
+  - path: src/GlobalLifecycleHelpers.cpp
+    target: build/cpp/GlobalLifecycleHelpers.obj
   - path: src/GlobalLifecycleManager.cpp
     target: build/cpp/GlobalLifecycleManager.obj
   - path: src/GlobalLifecycleStartup.cpp
@@ -102,6 +138,8 @@ units:
     target: build/cpp/HintTextLoader.obj
   - path: src/JoystickConfigPoll.cpp
     target: build/cpp/JoystickConfigPoll.obj
+  - path: src/JoystickKeyLatch.cpp
+    target: build/cpp/JoystickKeyLatch.obj
   - path: src/KeyConfigScreens.cpp
     target: build/cpp/KeyConfigScreens.obj
   - path: src/LargeRenderOwner.cpp
@@ -132,6 +170,8 @@ units:
     target: build/cpp/MainChainDrawFinalize.obj
   - path: src/MainChainDrawInitialize.cpp
     target: build/cpp/MainChainDrawInitialize.obj
+  - path: src/MainChainErrorLog.cpp
+    target: build/cpp/MainChainErrorLog.obj
   - path: src/MainChainExecutableChecksum.cpp
     target: build/cpp/MainChainExecutableChecksum.obj
   - path: src/MainChainFileProbe.cpp
@@ -144,6 +184,8 @@ units:
     target: build/cpp/MainChainHostEnvironment.obj
   - path: src/MainChainInput.cpp
     target: build/cpp/MainChainInput.obj
+  - path: src/MainChainObject6fcAndGate.cpp
+    target: build/cpp/MainChainObject6fcAndGate.obj
   - path: src/MainChainPlatformCleanup.cpp
     target: build/cpp/MainChainPlatformCleanup.obj
   - path: src/MainChainRegistration.cpp
@@ -166,6 +208,8 @@ units:
     target: build/cpp/MainChainStartupGlobals.obj
   - path: src/MainChainStartupInputState.cpp
     target: build/cpp/MainChainStartupInputState.obj
+  - path: src/MainChainStateHelpers.cpp
+    target: build/cpp/MainChainStateHelpers.obj
   - path: src/MainChainSystemSettings.cpp
     target: build/cpp/MainChainSystemSettings.obj
   - path: src/MainChainThreadCreation.cpp
@@ -180,10 +224,16 @@ units:
     target: build/cpp/ManagerReleaseWrappers.obj
   - path: src/ManagerWork.cpp
     target: build/cpp/ManagerWork.obj
+  - path: src/ManagerWorkPipeline.cpp
+    target: build/cpp/ManagerWorkPipeline.obj
   - path: src/ManagerWorkStageAdapters.cpp
     target: build/cpp/ManagerWorkStageAdapters.obj
   - path: src/MenuItemObject.cpp
     target: build/cpp/MenuItemObject.obj
+  - path: src/MenuRecordHelpers.cpp
+    target: build/cpp/MenuRecordHelpers.obj
+  - path: src/MenuStateHelpers.cpp
+    target: build/cpp/MenuStateHelpers.obj
   - path: src/MidiTimer.cpp
     target: build/cpp/MidiTimer.obj
   - path: src/OptionTrailUpdate.cpp
@@ -218,6 +268,8 @@ units:
     target: build/cpp/PlayerProjectileManager.obj
   - path: src/PlayerProximityFade.cpp
     target: build/cpp/PlayerProximityFade.obj
+  - path: src/PlayerRecordHelpers.cpp
+    target: build/cpp/PlayerRecordHelpers.obj
   - path: src/PlayerShotData.cpp
     target: build/cpp/PlayerShotData.obj
   - path: src/PlayerShotHoming.cpp
@@ -232,10 +284,20 @@ units:
     target: build/cpp/PostRunReplaySaveMenu.obj
   - path: src/RegistrationDrawOwner.cpp
     target: build/cpp/RegistrationDrawOwner.obj
+  - path: src/RegistrationStageOpen.cpp
+    target: build/cpp/RegistrationStageOpen.obj
+  - path: src/RenderOwnerClearColor.cpp
+    target: build/cpp/RenderOwnerClearColor.obj
+  - path: src/RenderOwnerDrawHelpers.cpp
+    target: build/cpp/RenderOwnerDrawHelpers.obj
   - path: src/RenderOwnerSurfaceLoading.cpp
     target: build/cpp/RenderOwnerSurfaceLoading.obj
+  - path: src/ReplayContextHelpers.cpp
+    target: build/cpp/ReplayContextHelpers.obj
   - path: src/ReplayContextTimerTick.cpp
     target: build/cpp/ReplayContextTimerTick.obj
+  - path: src/ReplayFileReader.cpp
+    target: build/cpp/ReplayFileReader.obj
   - path: src/ReplayPackedCodec.cpp
     target: build/cpp/ReplayPackedCodec.obj
   - path: src/ReplayRecordScreens.cpp
@@ -252,14 +314,20 @@ units:
     target: build/cpp/ResultScreenScript.obj
   - path: src/ResultScreenState.cpp
     target: build/cpp/ResultScreenState.obj
+  - path: src/ResultScreenStateAccessors.cpp
+    target: build/cpp/ResultScreenStateAccessors.obj
   - path: src/ResultScreenUpdate.cpp
     target: build/cpp/ResultScreenUpdate.obj
   - path: src/SaveRunHighScoreEntry.cpp
     target: build/cpp/SaveRunHighScoreEntry.obj
   - path: src/SceneTriggerFeatures.cpp
     target: build/cpp/SceneTriggerFeatures.obj
+  - path: src/SceneTriggerManager.cpp
+    target: build/cpp/SceneTriggerManager.obj
   - path: src/SceneTriggerObject.cpp
     target: build/cpp/SceneTriggerObject.obj
+  - path: src/SceneTriggerPopup.cpp
+    target: build/cpp/SceneTriggerPopup.obj
   - path: src/SceneTriggerUpdate.cpp
     target: build/cpp/SceneTriggerUpdate.obj
   - path: src/ScoreFileFormats.cpp
@@ -274,16 +342,26 @@ units:
     target: build/cpp/ScoreScreenUpdate.obj
   - path: src/ScreenshotWriter.cpp
     target: build/cpp/ScreenshotWriter.obj
+  - path: src/ScriptMapLoader.cpp
+    target: build/cpp/ScriptMapLoader.obj
   - path: src/ScriptTestMenu.cpp
     target: build/cpp/ScriptTestMenu.obj
+  - path: src/SpellBulletManagerLifecycle.cpp
+    target: build/cpp/SpellBulletManagerLifecycle.obj
   - path: src/SpellBulletVtable.cpp
     target: build/cpp/SpellBulletVtable.obj
   - path: src/SpriteViewDebugText.cpp
     target: build/cpp/SpriteViewDebugText.obj
+  - path: src/StageConditionalState.cpp
+    target: build/cpp/StageConditionalState.obj
   - path: src/StageEffectHelpers.cpp
     target: build/cpp/StageEffectHelpers.obj
+  - path: src/StageEffectHost.cpp
+    target: build/cpp/StageEffectHost.obj
   - path: src/StageHostTeardown.cpp
     target: build/cpp/StageHostTeardown.obj
+  - path: src/StageObjectManager.cpp
+    target: build/cpp/StageObjectManager.obj
   - path: src/StageObjectVtable.cpp
     target: build/cpp/StageObjectVtable.obj
   - path: src/StagePracticeReplayContext.cpp
@@ -292,8 +370,16 @@ units:
     target: build/cpp/StageScriptOpen.obj
   - path: src/StageTextEffects.cpp
     target: build/cpp/StageTextEffects.obj
+  - path: src/StdStringCrt.cpp
+    target: build/cpp/StdStringCrt.obj
+  - path: src/SystemUiSupport.cpp
+    target: build/cpp/SystemUiSupport.obj
+  - path: src/TextScanHelpers.cpp
+    target: build/cpp/TextScanHelpers.obj
   - path: src/TextureDilateFilter.cpp
     target: build/cpp/TextureDilateFilter.obj
+  - path: src/TextureStageLoading.cpp
+    target: build/cpp/TextureStageLoading.obj
   - path: src/ThreadControl.cpp
     target: build/cpp/ThreadControl.obj
   - path: src/TimelineAudioActions.cpp
@@ -304,12 +390,16 @@ units:
     target: build/cpp/TimelineGateLifecycle.obj
   - path: src/TimelineGateState.cpp
     target: build/cpp/TimelineGateState.obj
+  - path: src/TimelinePrngDraw.cpp
+    target: build/cpp/TimelinePrngDraw.obj
   - path: src/TimelineRecordInterpreter.cpp
     target: build/cpp/TimelineRecordInterpreter.obj
   - path: src/TimelineRenderObjectSetup.cpp
     target: build/cpp/TimelineRenderObjectSetup.obj
   - path: src/TimelineRenderObjects.cpp
     target: build/cpp/TimelineRenderObjects.obj
+  - path: src/TimelineSpawnControl.cpp
+    target: build/cpp/TimelineSpawnControl.obj
   - path: src/TimelineStreamLoader.cpp
     target: build/cpp/TimelineStreamLoader.obj
   - path: src/TimelineTextSubmission.cpp
@@ -332,6 +422,10 @@ units:
     target: build/cpp/TitleScreenDrawPasses.obj
   - path: src/TitleScreenStateCtor.cpp
     target: build/cpp/TitleScreenStateCtor.obj
+  - path: src/TitleScreenVmSlots.cpp
+    target: build/cpp/TitleScreenVmSlots.obj
+  - path: src/TitleStateAccessors.cpp
+    target: build/cpp/TitleStateAccessors.obj
   - path: src/TransitionSoundAdapter.cpp
     target: build/cpp/TransitionSoundAdapter.obj
   - path: src/TransitionTick.cpp
@@ -342,3 +436,5 @@ units:
     target: build/cpp/VersionData.obj
   - path: src/VmLeafHelpers.cpp
     target: build/cpp/VmLeafHelpers.obj
+  - path: src/ZunMath.cpp
+    target: build/cpp/ZunMath.obj

@@ -141,8 +141,8 @@ i32 OpenStageScriptSequenceEbxAbi(void *manager)
     if (OpenSceneScriptResource(manager) != 0)
         return -1;
 
-    void *calc_node = AllocSchedulerCallbackNode(
-        reinterpret_cast<void *>(&StageOpenCalcCallback));
+    u8 *calc_node = static_cast<u8 *>(AllocSchedulerCallbackNode(
+        reinterpret_cast<void *>(&StageOpenCalcCallback)));
     *reinterpret_cast<u32 *>(calc_node + 0x4) &= ~2U;
     *reinterpret_cast<u32 *>(calc_node + 0x20) =
         reinterpret_cast<u32>(manager);
@@ -150,8 +150,8 @@ i32 OpenStageScriptSequenceEbxAbi(void *manager)
     *reinterpret_cast<u32 *>(static_cast<u8 *>(manager) + 0x8) =
         reinterpret_cast<u32>(calc_node);
 
-    void *draw_node = AllocSchedulerCallbackNode(
-        reinterpret_cast<void *>(&StageOpenDrawCallback));
+    u8 *draw_node = static_cast<u8 *>(AllocSchedulerCallbackNode(
+        reinterpret_cast<void *>(&StageOpenDrawCallback)));
     *reinterpret_cast<u32 *>(draw_node + 0x4) &= ~2U;
     *reinterpret_cast<u32 *>(draw_node + 0x20) =
         reinterpret_cast<u32>(manager);

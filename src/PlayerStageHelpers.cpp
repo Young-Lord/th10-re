@@ -147,6 +147,26 @@ void RefreshHudLivesDisplayEdxStackAbi(i32 lives, i32 percent)
                                     hud + 0x7590);
 }
 
+// TH10 0x004086b0. Native ECX = the float2 position (x at +0, y at +4),
+// stack = (margin_x, margin_y; ret 8). Returns 1 when the position with
+// its margins falls outside the fixed playfield rect x = (-192, 192),
+// y = (0, 448) and 0 when inside; each axis test is an independent early
+// return in the native order.
+i32 CheckStageEffectPositionInFieldEcxEcxStackAbi(const float *position,
+                                                  float margin_x,
+                                                  float margin_y)
+{
+    if (position[0] + margin_x <= -192.0f)
+        return 1;
+    if (position[0] - margin_x >= 192.0f)
+        return 1;
+    if (position[1] + margin_y <= 0.0f)
+        return 1;
+    if (position[1] - margin_y >= 448.0f)
+        return 1;
+    return 0;
+}
+
 // TH10 0x00408030. State-machine transition plus the on-screen effect and
 // timer-node reset; off-screen slots only set the deferred flag.
 i32 ActivateStageEnemyEsiAbi(void *enemy_slot_memory)
@@ -158,11 +178,11 @@ i32 ActivateStageEnemyEsiAbi(void *enemy_slot_memory)
         return 0;
     // The 0x4086b0 on-screen bounds test (8px margins against the fixed
     // playfield rect) selects between the full and deferred paths.
+    const float position[2] = {ReadFloat(enemy, 0x3b4),
+                               ReadFloat(enemy, 0x3b8)};
     const bool on_screen =
-        !(ReadFloat(enemy, 0x3b4) + 8.0f <= -192.0f ||
-          ReadFloat(enemy, 0x3b4) - 8.0f >= 192.0f ||
-          ReadFloat(enemy, 0x3b8) + 8.0f <= 0.0f ||
-          ReadFloat(enemy, 0x3b8) - 8.0f >= 448.0f);
+        CheckStageEffectPositionInFieldEcxEcxStackAbi(position, 8.0f,
+                                                      8.0f) == 0;
     *reinterpret_cast<short *>(enemy + 0xc3) = 1;
     *reinterpret_cast<short *>(enemy + 0x446) = 3;
     if (!on_screen) {
@@ -201,11 +221,11 @@ void ScanIntroActivations(void *enemy_manager_memory,
         if (!(reach * reach > dx * dx + dy * dy + dz * dz))
             continue;
         (void)ActivateStageEnemyEsiAbi(enemy);
+        const float position[2] = {ReadFloat(enemy, 0x3b4),
+                                   ReadFloat(enemy, 0x3b8)};
         const bool on_screen =
-            !(ReadFloat(enemy, 0x3b4) + 2.0f <= -192.0f ||
-              ReadFloat(enemy, 0x3b4) - 2.0f >= 192.0f ||
-              ReadFloat(enemy, 0x3b8) + 2.0f <= 0.0f ||
-              ReadFloat(enemy, 0x3b8) - 2.0f >= 448.0f);
+            CheckStageEffectPositionInFieldEcxEcxStackAbi(position, 2.0f,
+                                                          2.0f) == 0;
         if (on_screen && spawn_fx != 0) {
             extern void SpawnExplosionParticleEaxEcxEfxAbi(
                 void *manager, void *position, i32 kind, u32 color,

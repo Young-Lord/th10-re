@@ -1,18 +1,24 @@
-// Stage text effects (TH10 0x0042b430 / 0x0042b4d0 / 0x0042b6f0 /
-// 0x0042b780 / 0x0042b9c0). The owner at DAT_00477840 renders the in-game
-// floating digit counters (item-value popups): a ring of 0x2d0 0x40-byte
-// records behind the owner's ASCII animation VM record, drawn through
-// DrawAsciiAnimationVmUnscaledToOwner with a camera-distance glyph scale.
+// Stage text effects (TH10 0x0042b430 / 0x0042b4d0 / 0x0042b660 /
+// 0x0042b6f0 / 0x0042b780 / 0x0042b9c0). The owner at DAT_00477840 renders
+// the in-game floating digit counters (item-value popups): a ring of 0x2d0
+// 0x40-byte records behind the owner's ASCII animation VM record, drawn
+// through DrawAsciiAnimationVmUnscaledToOwner with a camera-distance glyph
+// scale.
 #include "StageTextEffects.hpp"
 
 #include "AsciiAnimationVm.hpp"
 #include "AsciiGlyphRenderer.hpp"
 #include "CallbackScheduler.hpp"
 #include "MainChainRuntime.hpp"
+#include "ManagerReleaseWrappers.hpp"
 
 namespace th10 {
 
 namespace {
+
+// TH10 0x452493 / 0x4524a1: operator new / operator delete.
+u8 *AllocateHeapBlock(u32 bytes);
+void FreeHeapBlock(void *pointer);
 
 // Shared globals (addresses resolved against the binary).
 extern void *g_MainChainRenderOwner;   // TH10 DAT_00491c10
@@ -332,6 +338,26 @@ void AddTextEffectNumberEcxEaxEdiStackAbi(void *owner, i32 value, u32 param,
     StoreU32To(record + 0x14U, LoadU32From(pos + 8U));
 
     StoreU32To(bytes + 0x14U, slot + 1U);
+}
+
+// TH10 0x0042b660. Allocates the 0xb884-byte text-effect owner, runs the
+// in-place initializer (0x0042b430, EBX = owner, returning the owner) and
+// the scheduler registration (0x0042b4d0) over it. Registration never
+// fails in practice (0x0042b4d0 is a constant-0 return), but the native
+// teardown path (in-place destructor 0x0042b570 + operator delete) is
+// preserved for the nonzero branch. Returns the owner or 0.
+void *CreateTextEffectOwner()
+{
+    u8 *owner = AllocateHeapBlock(0xb884U);
+    if (owner != 0) {
+        InitializeTextEffectOwnerEdxAbi(owner);
+        if (RegisterTextEffectOwnerSchedulerRecordsEaxAbi(owner) != 0) {
+            DestroyMainChainObject840InPlace(owner);
+            FreeHeapBlock(owner);
+            return 0;
+        }
+    }
+    return owner;
 }
 
 } // namespace th10

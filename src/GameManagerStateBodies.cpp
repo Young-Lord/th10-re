@@ -1599,4 +1599,23 @@ i32 RunManagerStateBody9(void *game_manager)
     return 1;
 }
 
+// TH10 0x004088c0. Native __fastcall EDX = the difficulty selector; the
+// ECX owner argument is ignored by the body. Counts how many of the five
+// per-scene difficulty bytes in each of the 22 rows of the table at
+// 0x4743c0 (110 bytes walked in steps of 5) equal the selector and
+// returns the total.
+i32 GetManagerDifficultyValue(void *owner, i32 selector) {
+    (void)owner;
+    const u8 *table = reinterpret_cast<const u8 *>(0x4743C0U);
+    i32 count = 0;
+    for (u32 offset = 0; offset < 110; offset += 5) {
+        for (u32 column = 0; column < 5; ++column) {
+            if (static_cast<i32>(table[offset + column]) == selector) {
+                ++count;
+            }
+        }
+    }
+    return count;
+}
+
 } // namespace th10

@@ -1249,4 +1249,18 @@ i32 LoadBgmDataFile(TransitionRootPartial *root, const char *path)
     return result < 0 ? -1 : 0;
 }
 
+
+// TH10 0x0044dbb0. Native EAX = stream source. Partial state clear used
+// when tearing the source back down: the descriptor slot (+0x90), the
+// record head (+0x00), the +0x2c counter and the memory-backed flag
+// (+0x7c) are zeroed in the native write order; every other field
+// (handles, memory pointers, ownership mode) is left stale.
+void ClearBgmStreamSourceStateEaxAbi(BgmStreamSourceLayout *source)
+{
+    source->descriptor = 0;
+    *reinterpret_cast<u32 *>(&source->unknown_0000[0]) = 0;
+    source->initial_byte_count = 0;
+    source->memory_backed = 0;
+}
+
 } // namespace th10

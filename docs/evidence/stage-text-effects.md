@@ -115,3 +115,46 @@ Native: ECX = owner, EAX = value, EDI = Float3 position, stack = param
   modeled on the shared globals (`g_MainChainD3D9Device`,
   `g_MainChainRenderOwner`, `g_AsciiFogEnableCache`,
   `g_MainChainRuntimeOptions`).
+
+## Batch B addition: Owner Creation (0x42b660)
+
+- `0x0042b660` `CreateTextEffectOwner` — allocates the 0xb884-byte owner
+  (operator new 0x00452493), runs the in-place initializer 0x0042b430
+  (native EBX = owner, returning the owner in EAX) and the scheduler
+  registration 0x0042b4d0 (a constant-0 return, so the failure branch is
+  dead in practice but preserved: in-place destructor 0x0042b570 plus
+  operator delete 0x004524a1, returning 0). Returns the owner or 0.
+
+```asm
+42b660: push esi
+42b661: push 0xb884
+42b666: call 0x452493          ; operator new
+42b66b: add  esp,0x4
+42b66e: test eax,eax
+42b670: je   0x42b67f
+42b672: push ebx
+42b673: mov  ebx,eax
+42b675: call 0x42b430          ; in-place initializer (EBX = owner)
+42b67a: mov  esi,eax
+42b67c: pop  ebx
+42b67d: jmp  0x42b681
+42b67f: xor  esi,esi
+42b681: mov  eax,esi
+42b683: call 0x42b4d0          ; scheduler registration
+42b688: test eax,eax
+42b68a: je   0x42b6a3          ; success: return owner
+42b68c: test esi,esi
+42b68e: je   0x42b69f
+42b690: push esi
+42b691: call 0x42b570          ; in-place destructor
+42b696: push esi
+42b697: call 0x4524a1          ; operator delete
+42b69f: xor  eax,eax
+42b6a2: ret
+```
+
+Callers: `0x0040a350` (`EnterGameModeSetupEsiAbi`, declared there as the
+`CreateMainChainObject840Boundary` boundary) and `0x00417870`
+(`SetupGameSceneFromTitle`, declared as `RunModeWorkerFinish`). The body
+lives in `src/StageTextEffects.cpp` and is declared in
+`src/StageTextEffects.hpp`.

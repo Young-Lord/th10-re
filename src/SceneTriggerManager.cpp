@@ -28,6 +28,10 @@ extern void AppendMainChainErrorText(const char *text); // TH10 0x44b810
 extern i32 FloatToIntBoundary(float value);             // TH10 0x463b2c
 extern void CrtFreeBoundary(void *memory);              // TH10 0x452422
 
+// Scheduler callback adapters (defined at the bottom of this file).
+i32 TH10_FASTCALL EffectTriggerGroupCalcCallbackThunk(void *root);
+i32 TH10_FASTCALL EffectTriggerGroupDrawCallbackThunk(void *root);
+
 namespace {
 const u32 kGroupCount = 6;
 const u32 kBindSlotCount = 0x7d0;      // bind pass slot budget

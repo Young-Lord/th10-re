@@ -86,6 +86,12 @@ i32 StageObjectRotatedBoxHitB_Thiscall(void *object, const float point[2],
 // unfocus transition pair).
 void SetStageEntityFocusFlagEaxAbi(void *entity);
 
+// TH10 0x0042ba70. EAX = stage entity, stack = value (retn 4). Stores
+// the value at +0x4c and raises flag bit 3 (0x8) of the +0x35c state
+// word. Unreferenced in the binary (no direct xrefs); kept as an
+// isolated semantic body.
+void SetStageEntityField4cRaiseFlag3EaxStackAbi(void *entity, u32 value);
+
 // TH10 0x0041f850. ESI = 0x3f0 stage entity record. Installs the
 // stage-entity vtable (0x004703e4), clears the kind flags, zeroes the
 // 0x3ac script region, writes 0xffff into the +0x378 word, then zeroes

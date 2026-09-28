@@ -126,8 +126,8 @@ i32 InstallHintTextCallbacksEbxAbi(void *manager)
 {
     u8 *bytes = static_cast<u8 *>(manager);
 
-    void *calc_node = AllocSchedulerCallbackNode(
-        reinterpret_cast<void *>(&HintTextCalcCallback));
+    u8 *calc_node = static_cast<u8 *>(AllocSchedulerCallbackNode(
+        reinterpret_cast<void *>(&HintTextCalcCallback)));
     *reinterpret_cast<u32 *>(calc_node + 0x4) &= ~2U;
     *reinterpret_cast<u32 *>(calc_node + 0x20) =
         reinterpret_cast<u32>(bytes);
@@ -135,8 +135,8 @@ i32 InstallHintTextCallbacksEbxAbi(void *manager)
     *reinterpret_cast<u32 *>(bytes + 8) =
         reinterpret_cast<u32>(calc_node);
 
-    void *draw_node = AllocSchedulerCallbackNode(
-        reinterpret_cast<void *>(&HintTextDrawCallback));
+    u8 *draw_node = static_cast<u8 *>(AllocSchedulerCallbackNode(
+        reinterpret_cast<void *>(&HintTextDrawCallback)));
     *reinterpret_cast<u32 *>(draw_node + 0x4) &= ~2U;
     *reinterpret_cast<u32 *>(draw_node + 0x20) =
         reinterpret_cast<u32>(bytes);

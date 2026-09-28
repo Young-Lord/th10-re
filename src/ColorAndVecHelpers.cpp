@@ -7,7 +7,7 @@
 // and 0x405040 (set). The Float3 copies write a source triple into a
 // fixed destination offset of a caller-selected record.
 
-#include "Th10Types.hpp"
+#include "Th10Platform.hpp"
 
 namespace th10 {
 

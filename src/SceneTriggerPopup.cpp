@@ -11,6 +11,7 @@
 #include "PlayerStageHelpers.hpp"
 #include "BgmRuntime.hpp"
 #include "SceneTriggerUpdate.hpp"
+#include "TimelineRenderObjects.hpp"
 
 namespace th10 {
 
@@ -32,6 +33,9 @@ const float kPiHalf = 1.5707964f;     // TH10 0x3fc90fdb
 // TH10 0x408710 boundary: native fpatan (angle = atan2 with the FPU
 // operand order dy, dx).
 extern float Atan2Boundary(float dy, float dx);
+
+// TH10 0x00405ac0 (defined below in this file).
+i32 SubmitSceneTriggerPopupEntranceEsiAbi(void *popup);
 
 // TH10 0x00405750. Native EDI = popup object. State machine:
 //  - state +0x28 == 0: done, return 1.

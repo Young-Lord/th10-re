@@ -7,6 +7,7 @@
 // virtually binds the record's +0xcc script area on the slot's +0x8 object.
 
 #include "Th10Types.hpp"
+#include "Th10Platform.hpp"
 #include "MainChainRender.hpp"
 
 namespace th10 {
