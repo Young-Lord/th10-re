@@ -423,3 +423,80 @@ TransitionRootPartial 布局同时裁决了旧别名：0x497854=bgm_volume_input
 其余 11 个确认无法按名寻址（位于相邻更大 item 内部，且部分地址无独立代码引用，如 0x474CB4 xref=0，疑为 g_GeneratedSurface 等记录的内部字段）：
 0x474CB4, 0x474CC0, 0x474CC8, 0x474CD0, 0x474E38, 0x47773C, 0x477748, 0x477783, 0x477784, 0x491C40, 0x49250C（QWORD 高半部，头在 0x492508）。
 语义名以本账本与源码 extern 注释为准。
+
+## 结构体迁移第二轮（2026-10-01，本会话）
+
+### 新增 IDB struct（尺寸全部经 type_inspect 验证 + MSVC 编译期断言复核）
+
+| struct | 尺寸 | 源码权威定义 |
+|---|---|---|
+| VmRecord | 0x3AC (940) | src/VmRecord.hpp（本轮新建；此前 0x3AC 布局散落在 20+ 文件注释里） |
+| Vec3InterpBlock | 0x4C | src/VmRecord.hpp |
+| AlphaInterpBlock | 0x2C | src/VmRecord.hpp |
+| ScaleInterpBlock | 0x3C | src/VmRecord.hpp |
+| GameContext | 0x48 (72) | src/GameContext.hpp（本轮新建） |
+| EclInstruction | 0x12 (18) | src/EclScriptVm.hpp |
+| EclRunContext | 0x1024 (4132) | src/EclScriptVm.hpp |
+| EclContextNode | 0xC | src/EclScriptVm.hpp |
+| LargeRenderOwnerLayout | 0x732460 (7545952) | src/LargeRenderOwner.cpp（骨架）+ MainChainRenderAdapters/LargeRenderOwnerFrameLoop 字段级证据 |
+| CachedSurfaceDescriptor | 0x1C (28) | src/MainChainRender.hpp |
+| AsciiManager | 0x89AC (35244) | src/AsciiManager.hpp |
+| AsciiManagerString | 0x68 (104) | src/AsciiManager.hpp |
+
+修正过程记录：初版 VmRecord 934 字节，两处错误——AlphaInterpBlock 少 4 字节（timer 应为 4 个 dword）与 bind_frame_stamp@0x380 为 dword 不能与 gap0382 并存；LargeRenderOwnerLayout 初版 +60 字节（gap3ad130 应为 856、vertex_arena 应为 3670024 的笔误）。均以二分法定位后修正。
+
+### 新增全局指针绑定
+
+| 地址 | 名称 | 类型 |
+|---|---|---|
+| 0x4776EC | g_GameContext | `struct GameContext *` |
+| 0x491C10 | g_MainChainRenderOwner | `struct LargeRenderOwnerLayout *` |
+| 0x4776E0 | g_AsciiManagerHost | `struct AsciiManager *`（SpellBulletVtable.cpp LoadPointerAt(0x4776e0) 证实持指针） |
+| 0x491C14 | g_GameScheduler | `struct CallbackScheduler *` |
+
+### 新增函数签名（39 个，寄存器绑定均以 prologue 反汇编逐个核实）
+
+ECL VM 族（ctx 均为 struct EclRunContext *）：
+- 0x44FF00 EclVmEvalIntArg@<eax>(ctx@<edx>, arg_index, raw_value@<eax>)
+- 0x44FF80 EclVmEvalFloatArg@<st0>(ctx@<eax>, arg_index@<cl>, fallback)
+- 0x44FE40 EclVmEvalFloatArgFromIns@<st0>(ctx@<eax>, arg_index@<ecx>)
+- 0x44FDB0 EclVmEvalIntArgFromIns@<eax>(ctx@<edx>, arg_index)
+- 0x450030 EclVmResolvePointerArg@<eax>(ctx@<esi>, arg_index@<cl>)
+- 0x450070 EclVmResolveStringArg@<eax>(ctx@<eax>, arg_index@<cl>)
+- 0x450160 FindEclContextNodeById@<eax>(manager@<eax>, script_id@<ecx>)
+- 0x44DF70 BeginEclSubFrame@<eax>(ctx, initial_value, parent, first_arg_index)
+- 0x44FD10 RunEclContextListEdiStackAbi@<eax>(manager@<edi>, delta)
+- 0x44E1A0 ExecuteEclInstruction@<eax>(ctx@<eax>, delta) —— 整个 opcode 解释器反编译已全字段化（ctx->ins/stack_cursor/chunk、ins->opcode/variable_mask/rank_mask）
+
+实体/VM 记录族（owner 均为 struct LargeRenderOwnerLayout *，vm 为 struct VmRecord *）：
+- 0x4491C0 FindEntityEdxStackAbi@<eax>(owner@<edx>, id) → struct VmRecord *
+- 0x4492A0 ReleaseEntityById@<eax>(owner@<edx>, id)
+- 0x449470 SetEntityStateWordEaxEsiAbi@<eax>(id_slot@<eax>, value@<esi>)
+- 0x449950 AllocatePoolVmEsiAbi@<eax>(owner@<esi>)（反编译已显示 owner->pool_cursor/pooled_nodes[]/pooled_node_active[] + operator new(0x3AC)）
+- 0x449870 AssignPoolVmScriptEcxEaxAbi@<eax>(vm, script_id)
+- 0x4489D0/0x448A50 LinkEntity(Front)AndAssignIdEaxEsiAbi@<eax>(out_id@<eax>, entity@<ebx>, owner@<edx>)
+- 0x409E50 ExpireEntityHandleEaxAbi@<eax>(handle@<eax>)；0x40C4D0 FireEntityHandleEaxAbi@<eax>(handle@<eax>)
+- 0x4493E0 ReleaseEntitiesUsingResourceEaxEdxAbi@<eax>(owner@<eax>, resource@<edx>)
+
+GameContext 族：
+- 0x405750 UpdateSceneTriggerPopupEdiAbi@<eax>(ctx@<edi>)
+- 0x405860 TickRespawnDeathEffectStackAbi@<eax>(ctx)
+- 0x4059F0 ComputeBombAreaDamageThisAbi（thiscall this=struct GameContext *, position）
+- 0x4055C0 RegisterGameContextSchedulerRecordsEbxAbi@<eax>(ctx@<ebx>)
+
+RenderOwner 族：
+- 0x442F50 FlushRenderOwnerPendingVerticesEsiAbi@<eax>(owner@<esi>)
+- 0x438A30 ReleaseResetSensitiveRenderSlots@<eax>(owner@<eax>)
+- 0x445900 ConstructLargeRenderOwner@<eax>(owner)
+- 0x446220 DestroyLargeRenderOwnerInPlace@<eax>(owner)
+
+ABI 语法经验：__usercall 必须带返回位置注解（@<eax>），否则报 "Not a function type"；double 返回用 @<st0>。
+
+### 整表常量
+
+| 地址 | 名称 | 内容 | 证据 |
+|---|---|---|---|
+| 0x474474 | g_ExtendScoreTableA | int[5] {2000000, 4000000, 8000000, 15000000, 1000000000} | UpdateInGameScoreDisplayEsiAbi 0x417040 延命表（下标 0x474C9C），title-calc-cluster.md |
+| 0x474488 | g_ExtendScoreTableB | int[3] {3000000, 10000000, 1000000000} | 同上；rank 门 bit 0x20 清零且 DAT_00474C74==4 时选用 |
+
+两表已 set_type 为 int 数组并加重复注释。
