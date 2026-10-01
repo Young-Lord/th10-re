@@ -393,3 +393,33 @@
 - 0x4977b0 = g_MainChainSoundWorkerId
 
 - 0x447708 原登记 g_RegistrationDrawOwner 判定为**错误标注**：该地址位于 .text 内（函数 PollManagerWorkQueuesStackAbi 之后）；真正的 g_RegistrationDrawOwner = 0x477708（本轮已改判并写入 IDB）。
+
+## 结构体类型迁移（本轮新增）
+
+从 src/*.hpp 的 offsetof 断言迁移进 IDA 类型库（declare_type），尺寸全部吻合：
+
+| 结构体 | 尺寸 | 绑定 |
+|---|---|---|
+| ChainLink/ChainElem/CallbackScheduler | 0x48 | `g_CallbackScheduler` (0x491BE4) → `struct CallbackScheduler *` |
+| TimelineGateStatePartial | 0x28 | `g_TimelineGateState` (0x477700) → `struct TimelineGateStatePartial *`；主名由 g_TransitionObject 改判 |
+| BgmCommandPartial (0x10C) + TransitionControlPartial (0x20) + TransitionRootPartial | 0x52D0 | `g_TransitionRoot` (0x492590) → `struct TransitionRootPartial *` |
+| MainChainContext | 0x784 | `g_MainChainContext` (0x491C28) → `struct MainChainContext *` |
+
+函数签名（__usercall 寄存器参数定型，反编译已出现 context->requested_state / state_locks[5] / transition_color 等命名字段）：
+- `0x4218D0 MainChainAdvanceState@<eax>(struct MainChainContext *context@<eax>)`
+- `0x421E00 AdvanceTransitionEaxAbi@<eax>(struct TransitionRootPartial *root@<eax>)`（同址 TickBgmFadeSequencerEaxAbi 自动获得 root-> 字段）
+- `0x41FF80` 新命名 MainChainContextUpdate，thiscall 自动携带 MainChainContext*
+
+TransitionRootPartial 布局同时裁决了旧别名：0x497854=bgm_volume_input、0x497858=bgm_volume_enabled、0x49785C=bgm_volume（原 g_TransitionVolumeScale/g_BgmSoundSequenceVolumeScale 判定为误名）；0x4977A8/AC/B0 = bgm_control_thread0/1/thread_id（与 g_MainChainSoundWorker/ResourceThread/SoundWorkerId 同址同义）。
+
+## 待补命名收尾
+
+通过调用点反编译发现容器头并完成命名 4 个：
+- 0x4924F0 `hWnd` → g_MainChainWindow
+- 0x4977B0 `ThreadId` → g_MainChainSoundWorkerId
+- 0x49251C `pvParam` → g_ScreenSaverWasActive
+- 0x492274 `CriticalSection` → g_MainChainCriticalSections（7 个 CRITICAL_SECTION 数组头；g_CallbackSchedulerLock 为首元素别名）
+
+其余 11 个确认无法按名寻址（位于相邻更大 item 内部，且部分地址无独立代码引用，如 0x474CB4 xref=0，疑为 g_GeneratedSurface 等记录的内部字段）：
+0x474CB4, 0x474CC0, 0x474CC8, 0x474CD0, 0x474E38, 0x47773C, 0x477748, 0x477783, 0x477784, 0x491C40, 0x49250C（QWORD 高半部，头在 0x492508）。
+语义名以本账本与源码 extern 注释为准。
