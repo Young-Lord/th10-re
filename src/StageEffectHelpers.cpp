@@ -4,6 +4,7 @@
 #include "EntityHelpers.hpp"
 #include "BgmRuntime.hpp"
 #include "PlayerShotData.hpp"
+#include "VmRecord.hpp"
 
 #include <cmath>
 #include <string.h>
@@ -61,18 +62,18 @@ inline u32 ReadUint(const u8 *bytes, u32 offset)
 void *SpawnStageEffectEdxEbxAbi(void *effect_context,
                                 const float position[3], i32 script_index)
 {
-    void *const vm = AllocatePoolVmEsiAbi(g_MainChainRenderOwner);
-    WriteUint(static_cast<u8 *>(vm), 0x20, 0);
-    WriteUint(static_cast<u8 *>(vm), 0x35c,
-              ReadUint(static_cast<u8 *>(vm), 0x35c) | 0x40000000U);
-    WriteFloat(static_cast<u8 *>(vm), 0x340, position[0] + 224.0f);
-    WriteFloat(static_cast<u8 *>(vm), 0x344, position[1] + 16.0f);
-    WriteFloat(static_cast<u8 *>(vm), 0x348, position[2]);
-    AssignAnmScriptToVmEcxEaxBbxAbi(effect_context, vm, script_index);
+    void *const vm_memory = AllocatePoolVmEsiAbi(g_MainChainRenderOwner);
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(vm_memory);
+    vm.render_kind = 0;
+    vm.flags |= 0x40000000U;
+    vm.delta_pos_x = position[0] + 224.0f;
+    vm.delta_pos_y = position[1] + 16.0f;
+    vm.delta_pos_z = position[2];
+    AssignAnmScriptToVmEcxEaxBbxAbi(effect_context, vm_memory, script_index);
     u32 id = 0;
-    LinkEntityAndAssignIdEaxEsiAbi(&id, vm);
+    LinkEntityAndAssignIdEaxEsiAbi(&id, vm_memory);
     WriteUint(static_cast<u8 *>(effect_context), 0, id);
-    return vm;
+    return vm_memory;
 }
 
 // TH10 0x00405500. Clears the aggregate and seven per-life flag dwords
@@ -115,31 +116,35 @@ void StartBgmTrack(const char *path, i32 param)
 void AttachEffectVmToListB(u32 *out_id, void *vm_memory, void *manager_memory)
 {
     u8 *const manager = static_cast<u8 *>(manager_memory);
-    u8 *const vm = static_cast<u8 *>(vm_memory);
-    u32 *const node = reinterpret_cast<u32 *>(vm + 4);
-    node[0] = reinterpret_cast<u32>(vm);
-    node[1] = 0;
-    node[2] = 0;
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(vm_memory);
+    vm.link_self = vm_memory;
+    vm.link_next = 0;
+    vm.link_prev = 0;
     u32 **const head = reinterpret_cast<u32 **>(manager + 0x72dadc);
     u32 **const tail = reinterpret_cast<u32 **>(manager + 0x72dae0);
     if (*head == 0) {
-        *head = node;
+        *head = reinterpret_cast<u32 *>(&vm.link_self);
     } else {
-        u32 *const last = *tail;
-        u32 *const last_next = reinterpret_cast<u32 *>(last[1]);
-        if (last_next != 0) {
-            node[1] = reinterpret_cast<u32>(last_next);
-            last_next[2] = reinterpret_cast<u32>(node);
+        // Stored list nodes are the records' intrusive {link_self,
+        // link_next, link_prev} trio at record+4.
+        u8 *const last_node = reinterpret_cast<u8 *>(*tail);
+        VmRecord &last_vm =
+            *reinterpret_cast<VmRecord *>(last_node - 0x04);
+        u8 *const last_next_node = static_cast<u8 *>(last_vm.link_next);
+        if (last_next_node != 0) {
+            vm.link_next = last_next_node;
+            reinterpret_cast<VmRecord *>(last_next_node - 0x04)
+                ->link_prev = &vm.link_self;
         }
-        last[1] = reinterpret_cast<u32>(node);
-        node[2] = reinterpret_cast<u32>(last);
+        last_vm.link_next = &vm.link_self;
+        vm.link_prev = &last_vm.link_self;
     }
-    *tail = node;
+    *tail = reinterpret_cast<u32 *>(&vm.link_self);
     u32 *const counter = reinterpret_cast<u32 *>(manager + 0x732454);
     *counter += 1;
     if (*counter == 0)
         *counter = 1;
-    WriteUint(vm, 0, *counter);
+    vm.entity_id = static_cast<i32>(*counter);
     *out_id = *counter;
 }
 
@@ -150,24 +155,26 @@ void AttachEffectVmToListBFront(u32 *out_id, void *vm, void *manager_memory)
 {
     u8 *const manager = static_cast<u8 *>(manager_memory);
     u8 *const vm_bytes = static_cast<u8 *>(vm);
-    u32 *const node = reinterpret_cast<u32 *>(vm_bytes + 4);
-    node[0] = reinterpret_cast<u32>(vm_bytes);
-    node[1] = 0;
-    node[2] = 0;
+    VmRecord &vm_rec = *reinterpret_cast<VmRecord *>(vm_bytes);
+    vm_rec.link_self = vm_bytes;
+    vm_rec.link_next = 0;
+    vm_rec.link_prev = 0;
     u32 **const head = reinterpret_cast<u32 **>(manager + 0x72dadc);
     u32 **const tail = reinterpret_cast<u32 **>(manager + 0x72dae0);
     if (*head == 0) {
-        *tail = node;
+        *tail = reinterpret_cast<u32 *>(&vm_rec.link_self);
     } else {
-        node[1] = reinterpret_cast<u32>(*head);
-        (*head)[2] = reinterpret_cast<u32>(node);
+        vm_rec.link_next = *head;
+        u8 *const head_node = reinterpret_cast<u8 *>(*head);
+        reinterpret_cast<VmRecord *>(head_node - 0x04)->link_prev =
+            &vm_rec.link_self;
     }
-    *head = node;
+    *head = reinterpret_cast<u32 *>(&vm_rec.link_self);
     u32 *const counter = reinterpret_cast<u32 *>(manager + 0x732454);
     *counter += 1;
     if (*counter == 0)
         *counter = 1;
-    WriteUint(vm_bytes, 0, *counter);
+    vm_rec.entity_id = static_cast<i32>(*counter);
     *out_id = *counter;
 }
 
@@ -181,13 +188,12 @@ i32 CreateGameOverOverlay(void *target_memory, i32 id, i32 p2, i32 p3,
     u8 *const entity =
         FindEntityEdxStackAbi(g_MainChainRenderOwner,
                               static_cast<u32>(id));
-    const u8 *const params =
-        *reinterpret_cast<u8 *const *>(entity + 0x394);
+    VmRecord &entity_vm = *reinterpret_cast<VmRecord *>(entity);
+    const u8 *const params = static_cast<const u8 *>(entity_vm.anim_entry);
     if (ReadInt(target, 4) >= 0)
         return -1;
-    WriteInt(target, 4, *reinterpret_cast<const i32 *>(
-                            *reinterpret_cast<const u32 *>(
-                                entity + 0x308)));
+    WriteInt(target, 4,
+             *static_cast<const i32 *>(entity_vm.bound_resource));
     WriteInt(target, 8, p2);
     WriteInt(target, 0x18, static_cast<i32>(
                                ReadFloat(params, 0x30)));

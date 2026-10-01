@@ -30,6 +30,7 @@
 #include "StageEffectHelpers.hpp"
 #include "TimelineRenderObjectSetup.hpp"
 #include "TimelineRenderObjects.hpp"
+#include "VmRecord.hpp"
 
 namespace th10 {
 
@@ -170,7 +171,9 @@ u8 *FindEntityByScriptWord(u16 script_word)
         for (; node != 0; node = reinterpret_cast<const u32 *>(node[1])) {
             u8 *const entity = reinterpret_cast<u8 *>(node[0]);
             if (entity != 0
-                && LoadU16At(entity, 0x38aU) == script_word) {
+                && reinterpret_cast<const VmRecord *>(entity)
+                       ->bound_script_id
+                       == script_word) {
                 return entity;
             }
         }
@@ -191,9 +194,9 @@ u32 SpawnSpellPracticeEntity(void *resource, i32 script_id)
 {
     u8 *const record = static_cast<u8 *>(
         AllocatePoolVmEsiAbi(g_MainChainRenderOwner));
-    StoreU32At(record, 0x35cU,
-               LoadU32At(record, 0x35cU) | 0x40000000U);
-    StoreU32At(record, 0x20U, 0xfU);
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(record);
+    vm.flags |= 0x40000000U;
+    vm.render_kind = 0xfU;
     AssignPoolVmScriptEcxEaxAbi(record, script_id);
     u32 id = 0;
     LinkEntityAndAssignIdEaxEsiAbi(&id, record);
@@ -300,7 +303,7 @@ i32 ClearStageRegionBulletsEbxStackAbi(void *manager, i32 explosion_flag)
             }
             // Unchecked entity: the native stores through a null pointer
             // when the id does not resolve (address 0x2fc).
-            StoreU32At(effect_entity, 0x2fcU, color);
+            reinterpret_cast<VmRecord *>(effect_entity)->primary_color = color;
         }
         StoreU32At(record, 0x450U, 0U);
     }
@@ -468,10 +471,14 @@ i32 UpdateSpellCardStoryStateEcxAbi(void *base_memory)
                         reinterpret_cast<u32 *>(base + offset), 3);
                 }
                 for (u32 index = 0; index != 8U; ++index) {
-                    StoreU16At(base, 0xa7cU + index * 0x3acU, 3);
+                    reinterpret_cast<VmRecord *>(
+                        base + 0xa7cU + index * 0x3acU)
+                        ->state_word = 3;
                 }
                 for (u32 index = 0; index != 5U; ++index) {
-                    StoreU16At(base, 0x27dcU + index * 0x3acU, 3);
+                    reinterpret_cast<VmRecord *>(
+                        base + 0x27dcU + index * 0x3acU)
+                        ->state_word = 3;
                 }
                 StoreU32At(base, 0x378cU,
                            LoadU32At(base, 0x378cU) | 4U);
@@ -484,10 +491,14 @@ i32 UpdateSpellCardStoryStateEcxAbi(void *base_memory)
                     reinterpret_cast<u32 *>(base + offset), 2);
             }
             for (u32 index = 0; index != 8U; ++index) {
-                StoreU16At(base, 0xa7cU + index * 0x3acU, 2);
+                reinterpret_cast<VmRecord *>(
+                    base + 0xa7cU + index * 0x3acU)
+                    ->state_word = 2;
             }
             for (u32 index = 0; index != 5U; ++index) {
-                StoreU16At(base, 0x27dcU + index * 0x3acU, 2);
+                reinterpret_cast<VmRecord *>(
+                    base + 0x27dcU + index * 0x3acU)
+                    ->state_word = 2;
             }
             StoreU32At(base, 0x378cU,
                        LoadU32At(base, 0x378cU) & 0xfffffffbU);
@@ -699,9 +710,11 @@ void StartSpellCardPracticeEaxStackAbi(void *base, i32 spell_card_index,
     // parameter. The native stores through the found pointer without a
     // null check (a miss writes to absolute 0x314) - quirk preserved.
     u8 *const script_19f = FindEntityByScriptWord(0x19f);
-    StoreU32At(script_19f, 0x314U, static_cast<u32>(payload_id));
+    reinterpret_cast<VmRecord *>(script_19f)->reg_10002 =
+        static_cast<u32>(payload_id);
     u8 *const script_1a0 = FindEntityByScriptWord(0x1a0);
-    StoreU32At(script_1a0, 0x314U, static_cast<u32>(payload_id));
+    reinterpret_cast<VmRecord *>(script_1a0)->reg_10002 =
+        static_cast<u32>(payload_id);
     StoreU32At(state, 0x3798U, static_cast<u32>(payload_id));
 
     // Bonus seed: (rank*3 + 10) * score * 10, with the +0x3794 companion

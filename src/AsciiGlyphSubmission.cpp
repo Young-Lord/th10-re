@@ -2,6 +2,7 @@
 
 #include "MainChainRender.hpp"
 #include "Th10Platform.hpp"
+#include "VmRecord.hpp"
 
 namespace th10 {
 
@@ -67,9 +68,9 @@ void FlushGlyphOwnerVertices(void *owner)
 
 void UpdateGlyphRenderStates(void *vm, void *owner)
 {
+    const VmRecord &vm_record = *reinterpret_cast<const VmRecord *>(vm);
     u8 *const owner_bytes = static_cast<u8 *>(owner);
-    const u32 flags = *reinterpret_cast<const u32 *>(
-        static_cast<const u8 *>(vm) + 0x35c);
+    const u32 flags = vm_record.flags;
     const u8 blend_mode = static_cast<u8>((flags >> 4) & 3);
     if (owner_bytes[0x3ada68] != blend_mode) {
         FlushGlyphOwnerVertices(owner);
@@ -144,8 +145,8 @@ void AppendAsciiGlyphScratchQuadAsTriangles(void *owner)
 // and one stack flag; typed callers leave that mixed ABI to a future thunk.
 void SubmitAsciiGlyphScratchQuad(void *vm, void *owner, u32 flags)
 {
+    const VmRecord &vm_record = *reinterpret_cast<const VmRecord *>(vm);
     u8 *const owner_bytes = static_cast<u8 *>(owner);
-    const u8 *const vm_bytes = static_cast<const u8 *>(vm);
     const float offset_x = *reinterpret_cast<const float *>(owner_bytes + 0x5c);
     const float offset_y = *reinterpret_cast<const float *>(owner_bytes + 0x60);
     for (u32 index = 0; index != 4; ++index) {
@@ -167,9 +168,9 @@ void SubmitAsciiGlyphScratchQuad(void *vm, void *owner, u32 flags)
         g_AsciiGlyphScratchQuad[2].y = g_AsciiGlyphScratchQuad[3].y = snapped_y1;
     }
 
-    const u8 *const glyph = *reinterpret_cast<u8 *const *>(vm_bytes + 0x394);
-    const float u_offset = *reinterpret_cast<const float *>(vm_bytes + 0x54);
-    const float v_offset = *reinterpret_cast<const float *>(vm_bytes + 0x58);
+    const u8 *const glyph = static_cast<const u8 *>(vm_record.anim_entry);
+    const float u_offset = vm_record.texture_u;
+    const float v_offset = vm_record.texture_v;
     g_AsciiGlyphScratchQuad[0].u = g_AsciiGlyphScratchQuad[2].u =
         *reinterpret_cast<const float *>(glyph + 0x20) + u_offset;
     g_AsciiGlyphScratchQuad[1].u = g_AsciiGlyphScratchQuad[3].u =
@@ -193,10 +194,9 @@ void SubmitAsciiGlyphScratchQuad(void *vm, void *owner, u32 flags)
         owner_bytes[0x3ada6a] = 1;
     }
     if ((flags & 2) == 0) {
-        const u32 vm_flags = *reinterpret_cast<const u32 *>(vm_bytes + 0x35c);
-        u32 color = (vm_flags & 0x8000U) != 0 ?
-            *reinterpret_cast<const u32 *>(vm_bytes + 0x300) :
-            *reinterpret_cast<const u32 *>(vm_bytes + 0x2fc);
+        const u32 vm_flags = vm_record.flags;
+        u32 color = (vm_flags & 0x8000U) != 0 ? vm_record.secondary_color :
+            vm_record.primary_color;
         if (*reinterpret_cast<const u32 *>(owner_bytes + 0x73245c) != 0)
             color = ModulateColor(color, owner_bytes);
         for (u32 index = 0; index != 4; ++index)

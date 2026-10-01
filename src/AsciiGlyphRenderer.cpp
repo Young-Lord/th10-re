@@ -4,6 +4,7 @@
 #include <math.h>
 
 #include "Th10Types.hpp"
+#include "VmRecord.hpp"
 
 namespace th10 {
 
@@ -93,18 +94,19 @@ void WriteVerticalRange(float base, float extent, u32 anchor, bool floor_center)
 void DrawAsciiAnimationVmQuad(void *vm_memory, bool scaled, void *owner)
 {
     const u8 *const vm = static_cast<const u8 *>(vm_memory);
-    const float width = ReadFloat(vm, 0x3c) * ReadFloat(vm, 0x4c);
-    float height = ReadFloat(vm, 0x40) * ReadFloat(vm, 0x50);
+    const VmRecord &vm_record = *reinterpret_cast<const VmRecord *>(vm);
+    const float width = vm_record.scale_x * ReadFloat(vm, 0x4c);
+    float height = vm_record.scale_y * ReadFloat(vm, 0x50);
     if (scaled)
         height *= 0.5f;
 
-    const float axis_x = ReadFloat(vm, 0x334) + ReadFloat(vm, 0x340) +
-        ReadFloat(vm, 0x34c);
-    const float axis_y = ReadFloat(vm, 0x338) + ReadFloat(vm, 0x344) +
-        ReadFloat(vm, 0x350);
-    const float depth = ReadFloat(vm, 0x33c) + ReadFloat(vm, 0x348) +
-        ReadFloat(vm, 0x354);
-    const u32 flags = ReadWord(vm, 0x35c);
+    const float axis_x = vm_record.base_pos_x + vm_record.delta_pos_x +
+        vm_record.alt_pos_x;
+    const float axis_y = vm_record.base_pos_y + vm_record.delta_pos_y +
+        vm_record.alt_pos_y;
+    const float depth = vm_record.base_pos_z + vm_record.delta_pos_z +
+        vm_record.alt_pos_z;
+    const u32 flags = vm_record.flags;
 
     WriteHorizontalRange(axis_x, width, (flags >> 18) & 3, !scaled);
     WriteVerticalRange(axis_y, height, (flags >> 20) & 3, !scaled);
@@ -118,21 +120,22 @@ void DrawRotatedAsciiAnimationVmQuad(void *vm_memory, void *owner,
                                      bool mode1_nan_fallback)
 {
     const u8 *const vm = static_cast<const u8 *>(vm_memory);
-    const float angle = ReadFloat(vm, 0x2c);
+    const VmRecord &vm_record = *reinterpret_cast<const VmRecord *>(vm);
+    const float angle = vm_record.rotation_z;
     if (angle == 0.0f || (mode1_nan_fallback && angle != angle)) {
         DrawAsciiAnimationVmQuad(vm_memory, true, owner);
         return;
     }
 
-    const float width = ReadFloat(vm, 0x3c) * ReadFloat(vm, 0x4c);
-    const float height = ReadFloat(vm, 0x40) * ReadFloat(vm, 0x50);
-    const float axis_x = ReadFloat(vm, 0x334) + ReadFloat(vm, 0x340) +
-        ReadFloat(vm, 0x34c);
-    const float axis_y = ReadFloat(vm, 0x338) + ReadFloat(vm, 0x344) +
-        ReadFloat(vm, 0x350);
-    const float depth = ReadFloat(vm, 0x33c) + ReadFloat(vm, 0x348) +
-        ReadFloat(vm, 0x354);
-    const u32 flags = ReadWord(vm, 0x35c);
+    const float width = vm_record.scale_x * ReadFloat(vm, 0x4c);
+    const float height = vm_record.scale_y * ReadFloat(vm, 0x50);
+    const float axis_x = vm_record.base_pos_x + vm_record.delta_pos_x +
+        vm_record.alt_pos_x;
+    const float axis_y = vm_record.base_pos_y + vm_record.delta_pos_y +
+        vm_record.alt_pos_y;
+    const float depth = vm_record.base_pos_z + vm_record.delta_pos_z +
+        vm_record.alt_pos_z;
+    const u32 flags = vm_record.flags;
     float left;
     float right;
     float top;

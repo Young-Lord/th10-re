@@ -1,6 +1,7 @@
 #include "EntityHelpers.hpp"
 #include "GameManagerState.hpp"
 #include "Th10Types.hpp"
+#include "VmRecord.hpp"
 
 namespace th10 {
 
@@ -76,15 +77,15 @@ void SetGameManagerSubState(void *game_manager, u32 sub_state)
 void *SpawnManagerEntityFromScript(void *game_manager, u32 script_id)
 {
     u32 *const manager_words = static_cast<u32 *>(game_manager);
-    void *const vm = AllocatePoolVmEsiAbi(g_MainChainRenderOwner);
-    u32 *const vm_words = static_cast<u32 *>(vm);
-    vm_words[0x20 / 4] = 0xf;
-    vm_words[0x35c / 4] = vm_words[0x35c / 4] | 0x40000000U;
-    AssignPoolVmScriptEcxEaxAbi(vm, static_cast<i32>(script_id));
+    void *const vm_memory = AllocatePoolVmEsiAbi(g_MainChainRenderOwner);
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(vm_memory);
+    vm.render_kind = 0xfU;
+    vm.flags |= 0x40000000U;
+    AssignPoolVmScriptEcxEaxAbi(vm_memory, static_cast<i32>(script_id));
     u32 assigned_id = 0;
-    LinkEntityAndAssignIdEaxEsiAbi(&assigned_id, vm);
+    LinkEntityAndAssignIdEaxEsiAbi(&assigned_id, vm_memory);
     manager_words[(0x2c4 + 4 * script_id) / 4] = assigned_id;
-    return vm;
+    return vm_memory;
 }
 
 // TH10 0x0042c770. Write the SI stop-word value to the record addressed by
@@ -100,13 +101,15 @@ i32 SetManagerSlotEntityStopWord(void *game_manager, u32 slot, u16 value)
         manager_words[(0x2c4 + 4 * slot) / 4]);
     if (entity == 0)
         return 0;
-    *reinterpret_cast<u16 *>(entity + 0x304) = value;
-    if (*reinterpret_cast<u32 *>(entity + 0x18) == 0) {
-        u32 **child = reinterpret_cast<u32 **>(
-            *reinterpret_cast<u32 *>(entity + 0x14));
-        for (; child != 0; child = reinterpret_cast<u32 **>(child[1]))
-            *reinterpret_cast<u16 *>(
-                reinterpret_cast<u8 *>(*child) + 0x304) = value;
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(entity);
+    vm.state_word = value;
+    if (vm.parent_link == 0) {
+        u32 **child = static_cast<u32 **>(vm.first_child);
+        for (; child != 0; child = reinterpret_cast<u32 **>(child[1])) {
+            VmRecord &child_vm = *reinterpret_cast<VmRecord *>(
+                reinterpret_cast<u8 *>(child[0]));
+            child_vm.state_word = value;
+        }
     }
     return 1;
 }
@@ -129,10 +132,11 @@ u32 *ResolveChildEntityByKind(u32 *id_slot, i32 kind, u32 *out_handle)
     u8 *node = entity + 0x10;
     while (node != 0) {
         u8 *const child = *reinterpret_cast<u8 **>(node);
-        const i32 child_kind =
-            static_cast<i32>(*reinterpret_cast<const short *>(child + 0x38a));
+        VmRecord &child_vm = *reinterpret_cast<VmRecord *>(child);
+        const i32 child_kind = static_cast<i32>(
+            static_cast<i16>(child_vm.bound_script_id));
         if (child_kind == kind) {
-            *out_handle = *reinterpret_cast<u32 *>(child);
+            *out_handle = static_cast<u32>(child_vm.entity_id);
             return out_handle;
         }
         node = *reinterpret_cast<u8 **>(node + 4);
@@ -150,15 +154,15 @@ void SetEntityStateWordByHandleSlot(u32 *id_slot, i32 value)
     u8 *const entity =
         FindEntityEdxStackAbi(g_MainChainRenderOwner, *id_slot);
     if (entity != 0) {
-        *reinterpret_cast<u16 *>(entity + 0x304) =
-            static_cast<u16>(value);
-        if (*reinterpret_cast<u32 *>(entity + 0x18) == 0) {
-            u32 **child = reinterpret_cast<u32 **>(
-                *reinterpret_cast<u32 *>(entity + 0x14));
-            for (; child != 0; child = reinterpret_cast<u32 **>(child[1]))
-                *reinterpret_cast<u16 *>(
-                    reinterpret_cast<u8 *>(*child) + 0x304) =
-                    static_cast<u16>(value);
+        VmRecord &vm = *reinterpret_cast<VmRecord *>(entity);
+        vm.state_word = static_cast<u16>(value);
+        if (vm.parent_link == 0) {
+            u32 **child = static_cast<u32 **>(vm.first_child);
+            for (; child != 0; child = reinterpret_cast<u32 **>(child[1])) {
+                VmRecord &child_vm = *reinterpret_cast<VmRecord *>(
+                    reinterpret_cast<u8 *>(child[0]));
+                child_vm.state_word = static_cast<u16>(value);
+            }
         }
     }
 }
@@ -171,17 +175,17 @@ void SetEntityStopWordByIdAndRun(u32 id, u32 value)
 {
     u8 *entity = FindEntityEdxStackAbi(g_MainChainRenderOwner, id);
     if (entity != 0) {
-        *reinterpret_cast<u16 *>(entity + 0x304) =
-            static_cast<u16>(value);
+        VmRecord &vm = *reinterpret_cast<VmRecord *>(entity);
+        vm.state_word = static_cast<u16>(value);
         RunEntityAnimationBody(entity);
-        if (*reinterpret_cast<u32 *>(entity + 0x18) == 0) {
-            u32 **child = reinterpret_cast<u32 **>(
-                *reinterpret_cast<u32 *>(entity + 0x14));
+        if (vm.parent_link == 0) {
+            u32 **child = static_cast<u32 **>(vm.first_child);
             for (; child != 0; child = reinterpret_cast<u32 **>(child[1])) {
                 u8 *const child_entity =
-                    reinterpret_cast<u8 *>(*child);
-                *reinterpret_cast<u16 *>(child_entity + 0x304) =
-                    static_cast<u16>(value);
+                    reinterpret_cast<u8 *>(child[0]);
+                VmRecord &child_vm =
+                    *reinterpret_cast<VmRecord *>(child_entity);
+                child_vm.state_word = static_cast<u16>(value);
                 RunEntityAnimationBody(child_entity);
             }
         }
@@ -196,13 +200,15 @@ void ClearEntityFlag2ByHandleSlot(u32 *id_slot)
     u8 *const entity =
         FindEntityEdxStackAbi(g_MainChainRenderOwner, *id_slot);
     if (entity != 0) {
-        *reinterpret_cast<u32 *>(entity + 0x35c) &= ~2U;
-        if (*reinterpret_cast<u32 *>(entity + 0x18) == 0) {
-            u32 **child = reinterpret_cast<u32 **>(
-                *reinterpret_cast<u32 *>(entity + 0x14));
-            for (; child != 0; child = reinterpret_cast<u32 **>(child[1]))
-                *reinterpret_cast<u32 *>(
-                    reinterpret_cast<u8 *>(*child) + 0x35c) &= ~2U;
+        VmRecord &vm = *reinterpret_cast<VmRecord *>(entity);
+        vm.flags &= ~2U;
+        if (vm.parent_link == 0) {
+            u32 **child = static_cast<u32 **>(vm.first_child);
+            for (; child != 0; child = reinterpret_cast<u32 **>(child[1])) {
+                VmRecord &child_vm = *reinterpret_cast<VmRecord *>(
+                    reinterpret_cast<u8 *>(child[0]));
+                child_vm.flags &= ~2U;
+            }
         }
     }
 }
@@ -256,13 +262,15 @@ void ReleaseManagerSlotEntity(void *game_manager, u32 slot)
     u8 *const entity =
         FindEntityEdxStackAbi(g_MainChainRenderOwner, *slot_word);
     if (entity != 0) {
-        *reinterpret_cast<u16 *>(entity + 0x304) = 1;
-        if (*reinterpret_cast<u32 *>(entity + 0x18) == 0) {
-            u32 **child = reinterpret_cast<u32 **>(
-                *reinterpret_cast<u32 *>(entity + 0x14));
-            for (; child != 0; child = reinterpret_cast<u32 **>(child[1]))
-                *reinterpret_cast<u16 *>(
-                    reinterpret_cast<u8 *>(*child) + 0x304) = 1;
+        VmRecord &vm = *reinterpret_cast<VmRecord *>(entity);
+        vm.state_word = 1;
+        if (vm.parent_link == 0) {
+            u32 **child = static_cast<u32 **>(vm.first_child);
+            for (; child != 0; child = reinterpret_cast<u32 **>(child[1])) {
+                VmRecord &child_vm = *reinterpret_cast<VmRecord *>(
+                    reinterpret_cast<u8 *>(child[0]));
+                child_vm.state_word = 1;
+            }
         }
     }
     *slot_word = 0;

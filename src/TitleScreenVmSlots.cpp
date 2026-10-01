@@ -7,6 +7,7 @@
 
 #include "Th10Types.hpp"
 #include "TitleScreenStateCtor.hpp"
+#include "VmRecord.hpp"
 
 namespace th10 {
 
@@ -20,11 +21,19 @@ const u32 kFlagBit1Clear = ~2u;
 void ClearRecordBusyFlags(u8 *record) {
     // The native clears bit 1 of nine scattered flag dwords before the
     // full wipe (dead stores, preserved as the native quirk they are).
-    static const u32 kFlagOffsets[9] = {
-        0x6c, 0xb0, 0xfc, 0x128, 0x174, 0x1b0, 0x1fc, 0x228, 0x378};
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(record);
+    u32 *const flag_slots[9] = {
+        &vm.timer_flags,         // 0x6c
+        &vm.position_anim.flags, // 0xb0
+        &vm.rgb_anim_1.flags,    // 0xfc
+        &vm.alpha_anim_1.flags,  // 0x128
+        &vm.rotation_anim.flags, // 0x174
+        &vm.scale_anim.flags,    // 0x1b0
+        &vm.rgb_anim_2.flags,    // 0x1fc
+        &vm.alpha_anim_2.flags,  // 0x228
+        &vm.saved_timer_flags};  // 0x378
     for (int i = 0; i < 9; ++i) {
-        u32 *flag = reinterpret_cast<u32 *>(record + kFlagOffsets[i]);
-        *flag &= kFlagBit1Clear;
+        *flag_slots[i] &= kFlagBit1Clear;
     }
 }
 
@@ -41,7 +50,7 @@ void *InitTitleScreenVmRecordEcxAbi(void *record) {
     for (int i = 0; i < 0xeb; ++i) {
         wipe[i] = 0;
     }
-    *reinterpret_cast<u16 *>(bytes + 0x384) = 0xffff;
+    reinterpret_cast<VmRecord *>(bytes)->sprite_entry_id = 0xffff;
     return record;
 }
 

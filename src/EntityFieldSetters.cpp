@@ -10,13 +10,14 @@
 // Native register ABIs (EAX = record, stack args) remain thunk boundaries.
 
 #include "Th10Types.hpp"
+#include "VmRecord.hpp"
 
 namespace th10 {
 
 namespace {
 
 u32 &DirtyFlags(u8 *entity) { // +0x35c dirty-flag word
-    return *reinterpret_cast<u32 *>(entity + 0x35c);
+    return reinterpret_cast<VmRecord *>(entity)->flags;
 }
 
 } // namespace
@@ -25,8 +26,9 @@ u32 &DirtyFlags(u8 *entity) { // +0x35c dirty-flag word
 // pair at +0x4c/+0x50 and raises dirty bit 0x8 once (after both stores).
 void SetEntitySizePairEaxStackAbi(void *entity, u32 a, u32 b) {
     u8 *bytes = static_cast<u8 *>(entity);
-    *reinterpret_cast<u32 *>(bytes + 0x4c) = a;
-    *reinterpret_cast<u32 *>(bytes + 0x50) = b;
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(entity);
+    vm.width = a;
+    vm.height = b;
     DirtyFlags(bytes) |= 0x8u;
 }
 

@@ -15,6 +15,7 @@
 #include "AsciiAnimationVm.hpp"
 #include "AsciiRenderModeDispatcher.hpp"
 #include "EffectPoolEntityUpdate.hpp"
+#include "VmRecord.hpp"
 
 namespace th10 {
 
@@ -86,21 +87,18 @@ i32 TickEffectPoolSlots(void *pool)
     u8 *slot = static_cast<u8 *>(pool) + k_slot_base;
 
     for (u32 i = 0; i != k_slot_count; ++i) {
+        VmRecord &vm = *reinterpret_cast<VmRecord *>(slot);
         if (LoadU32At(slot, k_effect_live_flag) != 0U) {
             // Republish the scripted position with the playfield offset.
-            StoreF32At(slot, k_vm_position + 0U,
-                       LoadF32At(slot, k_effect_position + 0U)
-                           + k_playfield_x_offset);
-            StoreF32At(slot, k_vm_position + 4U,
-                       LoadF32At(slot, k_effect_position + 4U)
-                           + k_playfield_y_offset);
-            StoreF32At(slot, k_vm_position + 8U,
-                       LoadF32At(slot, k_effect_position + 8U));
+            vm.base_pos_x = LoadF32At(slot, k_effect_position + 0U)
+                + k_playfield_x_offset;
+            vm.base_pos_y = LoadF32At(slot, k_effect_position + 4U)
+                + k_playfield_y_offset;
+            vm.base_pos_z = LoadF32At(slot, k_effect_position + 8U);
 
             const u32 script_id = LoadU32At(slot, k_effect_script_id);
             const i32 bound_script = static_cast<i32>(
-                static_cast<short>(LoadU32At(slot, k_vm_script_word)
-                                                & 0xffffU));
+                static_cast<short>(vm.sprite_entry_id));
             const float scripted_y =
                 LoadF32At(slot, k_effect_position + 4U)
                     + k_playfield_y_offset;

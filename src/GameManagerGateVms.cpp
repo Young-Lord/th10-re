@@ -12,6 +12,7 @@
 #include "EntityHelpers.hpp"
 #include "Th10Types.hpp"
 #include "GameManagerGateVms.hpp"
+#include "VmRecord.hpp"
 
 namespace th10 {
 
@@ -43,16 +44,17 @@ inline void StoreU32At(void *base, u32 offset, u32 value)
 // shared by both stop twins).
 void StopEntityAndChildren(u8 *entity, u16 stop_word)
 {
-    *reinterpret_cast<u16 *>(entity + 0x304) = stop_word;
-    if (LoadU32At(entity, 0x18) != 0U) {
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(entity);
+    vm.state_word = stop_word;
+    if (vm.parent_link != 0) {
         return;
     }
-    u32 node = LoadU32At(entity, 0x14);
-    while (node != 0U) {
-        u8 *const child = reinterpret_cast<u8 *>(LoadU32At(
-            reinterpret_cast<const void *>(node), 0x0));
-        *reinterpret_cast<u16 *>(child + 0x304) = stop_word;
-        node = LoadU32At(reinterpret_cast<const void *>(node), 0x4);
+    const u32 *node = static_cast<const u32 *>(vm.first_child);
+    while (node != 0) {
+        u8 *const child = reinterpret_cast<u8 *>(node[0]);
+        VmRecord &child_vm = *reinterpret_cast<VmRecord *>(child);
+        child_vm.state_word = stop_word;
+        node = reinterpret_cast<const u32 *>(node[1]);
     }
 }
 
@@ -103,13 +105,15 @@ void SpawnGameManagerBackgroundVmsStackAbi(void *slot_arg,
                                   &g_ManagerBackgroundVmIdB,
                                   &g_ManagerBackgroundVmIdC};
         for (u32 script = 0; script != 3U; ++script) {
-            u8 *const vm = static_cast<u8 *>(AllocatePoolVmEsiAbi(g_MainChainRenderOwner));
-            StoreU32At(vm, 0x35c, LoadU32At(vm, 0x35c) | 0x40000000U);
-            StoreU32At(vm, 0x20, 0xfU);
-            AssignPoolVmScriptEcxEaxAbi(vm, static_cast<i32>(script));
+            u8 *const vm_bytes = static_cast<u8 *>(
+                AllocatePoolVmEsiAbi(g_MainChainRenderOwner));
+            VmRecord &vm = *reinterpret_cast<VmRecord *>(vm_bytes);
+            vm.flags |= 0x40000000U;
+            vm.render_kind = 0xfU;
+            AssignPoolVmScriptEcxEaxAbi(vm_bytes, static_cast<i32>(script));
             // Native uses the tail-append 0x004489d0, not the list-B
             // front-insertion variant.
-            LinkEntityAndAssignIdEaxEsiAbi(id_slots[script], vm);
+            LinkEntityAndAssignIdEaxEsiAbi(id_slots[script], vm_bytes);
         }
         StoreU32At(slot, 0x6fc, 1U);
 

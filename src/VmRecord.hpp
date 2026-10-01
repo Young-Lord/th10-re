@@ -61,17 +61,18 @@ enum VmRecordFlags {
 };
 
 // Generic vec3 animation block (0x4c): position (base +0x70), RGB color 1
-// (+0xbc), rotation (+0x134), RGB color 2 (+0x1bc).
+// (+0xbc), rotation (+0x134), RGB color 2 (+0x1bc). Evidence pins flags at
+// base+0x40 (0xb0 for the position block, 0xfc for rgb_anim_1), so the
+// timer holds four dwords.
 struct Vec3InterpBlock {
     float start[3];       // +0x00
     float end[3];         // +0x0c
     float handle1[3];     // +0x18
     float handle2[3];     // +0x24
-    i32 timer[3];       // +0x30
-    u32 flags;          // +0x3c (bit 0 armed)
-    i32 duration;       // +0x40
-    i32 mode;           // +0x44
-    i32 field_0048;     // +0x48
+    i32 timer[4];       // +0x30
+    u32 flags;          // +0x40 (bit 0 armed)
+    i32 duration;       // +0x44
+    i32 mode;           // +0x48
 };
 
 // Scalar animation block (0x2c): alpha 1 (base +0x108, output +0x2ff) and

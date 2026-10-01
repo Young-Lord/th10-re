@@ -8,6 +8,7 @@
 #include "PlayerDamageOutput.hpp"
 
 #include "EntityHelpers.hpp"
+#include "GameContext.hpp"
 #include "PlayerShotSpawner.hpp"
 #include "Th10Platform.hpp"
 
@@ -155,15 +156,16 @@ void SetResultEntityStateSixByHandleSlot(u32 *id_slot)
 i32 ComputeBombAreaDamageThisAbi(const void *game_context,
                                  const float *position)
 {
-    const u8 *ctx = static_cast<const u8 *>(game_context);
+    const GameContext &ctx =
+        *static_cast<const GameContext *>(game_context);
     // +0x28 zero means no bomb/sub-effect is running.
-    if (*reinterpret_cast<const u32 *>(ctx + 0x28U) == 0)
+    if (ctx.popup_state == 0)
         return 0;
 
-    const float dx = position[0] - ReadF32(ctx, 0x30U);
-    const float dy = position[1] - ReadF32(ctx, 0x34U);
-    const float radius = ReadF32(ctx, 0x3CU);
-    const i32 variant = ReadI32(ctx, 0x44U);
+    const float dx = position[0] - ctx.position_x;
+    const float dy = position[1] - ctx.position_y;
+    const float radius = ctx.radius;
+    const i32 variant = ctx.bomb_variant;
     const bool shot_gate =
         (g_SpellBulletGate[0x378CU] & 1) != 0;
     const bool finish_active =

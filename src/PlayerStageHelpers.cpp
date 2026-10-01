@@ -1,6 +1,7 @@
 #include "PlayerStageHelpers.hpp"
 
 #include "AsciiAnimationVm.hpp"
+#include "GameContext.hpp"
 #include "StageEffectHelpers.hpp"
 #include "BgmRuntime.hpp"
 #include "Th10Platform.hpp"
@@ -61,16 +62,17 @@ inline void WriteUint(u8 *bytes, u32 offset, u32 value)
 // the unconditional reset stops the timer until its first tick.
 void ResetTimerNode(u8 *node)
 {
-    if ((ReadUint(node, 0x24) & 1) == 0) {
-        WriteInt(node, 0x18, 0);
-        WriteInt(node, 0x14, static_cast<i32>(0xfff0bdc1U));
-        WriteInt(node, 0x1c, 0);
-        *reinterpret_cast<const float **>(node + 0x20) = &g_FrameTimeScale;
-        WriteUint(node, 0x24, ReadUint(node, 0x24) | 1);
+    TimerNode &timer = *reinterpret_cast<TimerNode *>(node);
+    if ((timer.flags & 1) == 0) {
+        timer.count = 0;
+        timer.prev = static_cast<i32>(0xfff0bdc1U);
+        timer.accum = 0;
+        timer.rate = &g_FrameTimeScale;
+        timer.flags |= 1;
     }
-    WriteInt(node, 0x18, 0);
-    WriteInt(node, 0x1c, 0);
-    WriteInt(node, 0x14, -1);
+    timer.count = 0;
+    timer.accum = 0;
+    timer.prev = -1;
 }
 
 } // namespace
@@ -80,20 +82,20 @@ void ResetTimerNode(u8 *node)
 // around this call.
 i32 TickRespawnDeathEffectStackAbi(void *node_memory)
 {
-    u8 *const node = static_cast<u8 *>(node_memory);
-    if (ReadInt(node, 0x28) != 0)
+    GameContext &ctx = *static_cast<GameContext *>(node_memory);
+    if (ctx.popup_state != 0)
         return -1;
-    WriteInt(node, 0x28, 1);
-    ResetTimerNode(node);
-    WriteFloat(node, 0x3c, 32.0f);
-    WriteFloat(node, 0x40, 4.0f);
+    ctx.popup_state = 1;
+    ResetTimerNode(reinterpret_cast<u8 *>(&ctx.timer));
+    ctx.radius = 32.0f;
+    ctx.field_0040 = 4.0f;
 
     const float position[3] = {ReadFloat(g_OptionPositionBase, 0x3c0),
                                ReadFloat(g_OptionPositionBase, 0x3c4),
                                ReadFloat(g_OptionPositionBase, 0x3c8)};
-    WriteFloat(node, 0x30, position[0]);
-    WriteFloat(node, 0x34, position[1]);
-    WriteFloat(node, 0x38, position[2]);
+    ctx.position_x = position[0];
+    ctx.position_y = position[1];
+    ctx.position_z = position[2];
 
     i32 script_id = 0x190 + (g_PlayerCharacter != 0 ? 7 : 0);
     u8 *const stage = *static_cast<u8 *const *>(g_SpellBulletBase);
@@ -109,7 +111,7 @@ i32 TickRespawnDeathEffectStackAbi(void *node_memory)
         SpawnStageEffectEdxEbxAbi(*static_cast<void *const *>(
                                       g_SpellBulletBase),
                                   position, script_id);
-    WriteInt(node, 0x2c, ReadInt(static_cast<const u8 *>(vm), 0));
+    ctx.effect_handle = ReadInt(static_cast<const u8 *>(vm), 0);
     // TH10 0x43dd10 with sound id 0x26; the float payload is not
     // observable from the caller and is modeled as zero.
     EnqueueBgmSoundValueFromFloat(&g_TransitionRoot, 0x26, 0.0f);
@@ -124,11 +126,11 @@ i32 TickRespawnDeathEffectStackAbi(void *node_memory)
     else if (g_ScorePenaltyCounter < -0x400)
         g_ScorePenaltyCounter = -0x400;
 
-    WriteInt(node, 0x44,
+    ctx.bomb_variant =
              (ReadUint(stage, 0x378c) & 1) != 0 &&
                      ReadInt(stage, 0x3738) > 0x3c
                  ? 1
-                 : 0);
+                 : 0;
     return 0;
 }
 

@@ -2,6 +2,7 @@
 
 #include "MainChainRender.hpp"
 #include "Th10Platform.hpp"
+#include "VmRecord.hpp"
 
 namespace th10 {
 
@@ -24,8 +25,9 @@ void *GetD3DSlot(D3D9Device *device, u32 index)
 
 void UpdateMode9RenderState(void *owner, const u8 *vm)
 {
+    const VmRecord &vm_record = *reinterpret_cast<const VmRecord *>(vm);
     u8 *const owner_bytes = static_cast<u8 *>(owner);
-    const u32 flags = *reinterpret_cast<const u32 *>(vm + 0x35c);
+    const u32 flags = vm_record.flags;
     const u8 blend = static_cast<u8>((flags >> 4) & 3);
     if (owner_bytes[0x3ada68] != blend) {
         FlushRenderOwnerPendingVertices(reinterpret_cast<RenderOwnerPartial *>(owner));
@@ -55,13 +57,14 @@ i32 DrawAsciiAnimationVmMode9(void *vm_memory, void *owner,
                                const void *vertices, u32 vertex_count)
 {
     const u8 *const vm = static_cast<const u8 *>(vm_memory);
+    const VmRecord &vm_record = *reinterpret_cast<const VmRecord *>(vm);
     u8 *const owner_bytes = static_cast<u8 *>(owner);
-    const u32 flags = *reinterpret_cast<const u32 *>(vm + 0x35c);
+    const u32 flags = vm_record.flags;
     if ((flags & 3U) != 3U || *(vm + 0x2ff) == 0)
         return -1;
     if (*reinterpret_cast<u32 *>(owner_bytes + 0x3adac8) != 0)
         FlushRenderOwnerPendingVertices(reinterpret_cast<RenderOwnerPartial *>(owner));
-    u8 *const glyph = *reinterpret_cast<u8 *const *>(vm + 0x394);
+    u8 *const glyph = static_cast<u8 *>(vm_record.anim_entry);
     void *const texture = *reinterpret_cast<void **>(glyph + 4);
     if (*reinterpret_cast<void **>(owner_bytes + 0x3ada64) != texture) {
         *reinterpret_cast<void **>(owner_bytes + 0x3ada64) = texture;

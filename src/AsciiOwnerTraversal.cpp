@@ -5,6 +5,7 @@
 #include "AsciiRenderModeDispatcher.hpp"
 #include "MainChainRender.hpp"
 #include "MainChainRuntime.hpp"
+#include "VmRecord.hpp"
 
 namespace th10 {
 
@@ -166,26 +167,26 @@ i32 RenderAsciiSceneChannel(void *scene_memory, i32 channel)
                 while (ReadI16(operation, 0) >= 0) {
                     u8 *const vm = scene + 0x17c +
                         static_cast<i32>(ReadI16(operation, 6)) * 0x3ac;
+                    VmRecord &vm_record = *reinterpret_cast<VmRecord *>(vm);
                     if (ReadI16(operation, 0) == 0 &&
-                        (*reinterpret_cast<u32 *>(vm + 0x35c) & 0x03c00000U) >=
-                            0x01000000U) {
-                        WriteFloat(vm, 0x340, ReadFloat(operation, 8) + outer->translation.x);
-                        WriteFloat(vm, 0x344, ReadFloat(operation, 0xc) + outer->translation.y);
-                        WriteFloat(vm, 0x348, ReadFloat(operation, 0x10) + outer->translation.z);
+                        (vm_record.flags & 0x03c00000U) >= 0x01000000U) {
+                        vm_record.delta_pos_x = ReadFloat(operation, 8) + outer->translation.x;
+                        vm_record.delta_pos_y = ReadFloat(operation, 0xc) + outer->translation.y;
+                        vm_record.delta_pos_z = ReadFloat(operation, 0x10) + outer->translation.z;
                         const float scale_x = ReadFloat(operation, 0x14);
                         if (IsNativeNonZero(scale_x)) {
-                            *reinterpret_cast<u32 *>(vm + 0x35c) |= 8;
-                            WriteFloat(vm, 0x3c, scale_x /
-                                ReadFloat(*reinterpret_cast<u8 *const *>(vm + 0x394), 0x34));
+                            vm_record.flags |= 8;
+                            vm_record.scale_x = scale_x /
+                                ReadFloat(static_cast<u8 *>(vm_record.anim_entry), 0x34);
                         }
                         const float scale_y = ReadFloat(operation, 0x18);
                         if (IsNativeNonZero(scale_y)) {
-                            *reinterpret_cast<u32 *>(vm + 0x35c) |= 8;
-                            WriteFloat(vm, 0x40, scale_y /
-                                ReadFloat(*reinterpret_cast<u8 *const *>(vm + 0x394), 0x30));
+                            vm_record.flags |= 8;
+                            vm_record.scale_y = scale_y /
+                                ReadFloat(static_cast<u8 *>(vm_record.anim_entry), 0x30);
                         }
                     }
-                    SetFogEnabled((*reinterpret_cast<u32 *>(vm + 0x35c) &
+                    SetFogEnabled((vm_record.flags &
                         0x03c00000U) == 0x02000000U ? 1 : 0);
                     (void)DispatchAsciiAnimationVmRenderMode(vm,
                         g_MainChainRenderOwner);

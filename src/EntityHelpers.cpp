@@ -2,6 +2,7 @@
 
 #include "AsciiAnimationVm.hpp"
 #include "PlayerFrameworkHelpers.hpp"
+#include "VmRecord.hpp"
 #include <string.h>
 
 namespace th10 {
@@ -12,24 +13,9 @@ extern void *g_MainChainRenderOwner; // TH10 DAT_00491c10
 
 const u32 kSoftReleaseFlag = 0x4000000U; // entity+0x35c bit 26
 
-inline u32 ReadUint(const u8 *bytes, u32 offset)
-{
-    return *reinterpret_cast<const u32 *>(bytes + offset);
-}
-
 inline void WriteUint(u8 *bytes, u32 offset, u32 value)
 {
     *reinterpret_cast<u32 *>(bytes + offset) = value;
-}
-
-inline void WriteU16(u8 *bytes, u32 offset, u16 value)
-{
-    *reinterpret_cast<u16 *>(bytes + offset) = value;
-}
-
-inline void WriteFloat(u8 *bytes, u32 offset, float value)
-{
-    *reinterpret_cast<float *>(bytes + offset) = value;
 }
 
 enum ChildMutation {
@@ -45,33 +31,31 @@ enum ChildMutation {
 void PropagateToChildren(u8 *entity, ChildMutation mutation, u16 state_word,
                          const float *position)
 {
-    if (ReadUint(entity, 0x18) != 0)
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(entity);
+    if (vm.parent_link != 0)
         return;
-    const u32 *child = *reinterpret_cast<u32 *const *>(entity + 0x14);
+    const u32 *child = static_cast<u32 *>(vm.first_child);
     for (; child != 0; child = reinterpret_cast<const u32 *>(child[1])) {
         u8 *const child_entity = reinterpret_cast<u8 *>(child[0]);
         if (child_entity == 0)
             continue;
+        VmRecord &child_vm = *reinterpret_cast<VmRecord *>(child_entity);
         switch (mutation) {
         case ChildMutation_SoftRelease:
-            WriteUint(child_entity, 0x35c,
-                      ReadUint(child_entity, 0x35c) | kSoftReleaseFlag);
+            child_vm.flags |= kSoftReleaseFlag;
             break;
         case ChildMutation_StateWord:
-            WriteU16(child_entity, 0x304, state_word);
+            child_vm.state_word = state_word;
             break;
         case ChildMutation_PositionDirect:
-            WriteUint(child_entity, 0x340,
-                      *reinterpret_cast<const u32 *>(position));
-            WriteUint(child_entity, 0x344,
-                      *reinterpret_cast<const u32 *>(position + 1));
-            WriteUint(child_entity, 0x348,
-                      *reinterpret_cast<const u32 *>(position + 2));
+            child_vm.delta_pos_x = position[0];
+            child_vm.delta_pos_y = position[1];
+            child_vm.delta_pos_z = position[2];
             break;
         case ChildMutation_PositionOffset:
-            WriteFloat(child_entity, 0x340, position[0] + 224.0f);
-            WriteFloat(child_entity, 0x344, position[1] + 16.0f);
-            WriteFloat(child_entity, 0x348, position[2]);
+            child_vm.delta_pos_x = position[0] + 224.0f;
+            child_vm.delta_pos_y = position[1] + 16.0f;
+            child_vm.delta_pos_z = position[2];
             break;
         }
     }
@@ -86,7 +70,8 @@ void SetEntityStateWordEaxEsiAbi(u32 *id_slot, i32 value)
         FindEntityEdxStackAbi(g_MainChainRenderOwner, *id_slot));
     if (entity == 0)
         return;
-    WriteU16(entity, 0x304, static_cast<u16>(value));
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(entity);
+    vm.state_word = static_cast<u16>(value);
     PropagateToChildren(entity, ChildMutation_StateWord,
                         static_cast<u16>(value), 0);
 }
@@ -119,7 +104,8 @@ void *AllocatePoolVmEsiAbi(void *manager_memory)
                 for (u32 i = 0; i != 9; ++i)
                     *reinterpret_cast<u8 *>(vm + kLatchOffsets[i]) &=
                         0xfe;
-                *reinterpret_cast<u16 *>(vm + 0x384) = 0xffff;
+                VmRecord &rec = *reinterpret_cast<VmRecord *>(vm);
+                rec.sprite_entry_id = 0xffffU;
             }
             ResetAsciiAnimationVmRecord(vm);
             *cursor = (*cursor + 1) % 4096U;
@@ -137,14 +123,15 @@ void *AllocatePoolVmEsiAbi(void *manager_memory)
 void AssignPoolVmScriptEcxEaxAbi(void *vm_memory, i32 script_id)
 {
     u8 *const vm = static_cast<u8 *>(vm_memory);
+    VmRecord &rec = *reinterpret_cast<VmRecord *>(vm);
     static const u32 kClearedOffsets[9] = {
         0x340, 0x344, 0x348, 0x334, 0x338, 0x33c, 0x34c, 0x350, 0x354};
     for (u32 index = 0; index != 9; ++index)
         WriteUint(vm, kClearedOffsets[index], 0);
-    WriteUint(vm, 0x35c, ReadUint(vm, 0x35c) | 0x40000000U);
-    *reinterpret_cast<u16 *>(vm + 0x38a) = static_cast<u16>(script_id);
-    vm[0x3a0] = 0x10;
-    vm[0x3a1] = 0x10;
+    rec.flags |= 0x40000000U;
+    rec.bound_script_id = static_cast<u16>(script_id);
+    rec.anim_field_3a0 = 0x10;
+    rec.anim_field_3a1 = 0x10;
     extern void *g_EffectScriptContext; // runtime-filled bind context
     BindEffectScriptContextEaxEcxDxAbi(g_EffectScriptContext, script_id,
                                        vm);
@@ -181,7 +168,8 @@ void LinkEntityAndAssignIdEaxEsiAbi(u32 *out_id, void *entity_memory)
     *counter += 1;
     if (*counter == 0)
         *counter = 1;
-    WriteUint(entity, 0, *counter);
+    reinterpret_cast<VmRecord *>(entity)->entity_id =
+        static_cast<i32>(*counter);
     *out_id = *counter;
 }
 
@@ -210,7 +198,8 @@ void LinkEntityFrontAndAssignIdEaxEsiAbi(u32 *out_id, void *entity_memory)
     *counter += 1;
     if (*counter == 0)
         *counter = 1;
-    WriteUint(entity, 0, *counter);
+    reinterpret_cast<VmRecord *>(entity)->entity_id =
+        static_cast<i32>(*counter);
     *out_id = *counter;
 }
 
@@ -229,7 +218,8 @@ u8 *FindEntityEdxStackAbi(void *manager_memory, u32 id)
         const u32 *node = list_heads[list_index];
         for (; node != 0; node = reinterpret_cast<const u32 *>(node[1])) {
             u8 *const entity = reinterpret_cast<u8 *>(node[0]);
-            if (entity != 0 && ReadUint(entity, 0) == id)
+            if (entity != 0 && reinterpret_cast<VmRecord *>(entity)
+                                   ->entity_id == id)
                 return entity;
         }
     }
@@ -243,7 +233,8 @@ void ReleaseEntityById(void *manager, u32 id)
         static_cast<u8 *>(FindEntityEdxStackAbi(manager, id));
     if (entity == 0)
         return;
-    WriteUint(entity, 0x35c, ReadUint(entity, 0x35c) | kSoftReleaseFlag);
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(entity);
+    vm.flags |= kSoftReleaseFlag;
     PropagateToChildren(entity, ChildMutation_SoftRelease, 0, 0);
 }
 
@@ -255,12 +246,10 @@ void SetEntityPositionDirectEsiAbi(void *manager, u32 id,
         static_cast<u8 *>(FindEntityEdxStackAbi(manager, id));
     if (entity == 0)
         return;
-    WriteUint(entity, 0x340,
-              *reinterpret_cast<const u32 *>(position));
-    WriteUint(entity, 0x344,
-              *reinterpret_cast<const u32 *>(position + 1));
-    WriteUint(entity, 0x348,
-              *reinterpret_cast<const u32 *>(position + 2));
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(entity);
+    vm.delta_pos_x = position[0];
+    vm.delta_pos_y = position[1];
+    vm.delta_pos_z = position[2];
     PropagateToChildren(entity, ChildMutation_PositionDirect, 0, position);
 }
 
@@ -272,9 +261,10 @@ void SetEntityPositionOffsetEsiAbi(void *manager, u32 id,
         static_cast<u8 *>(FindEntityEdxStackAbi(manager, id));
     if (entity == 0)
         return;
-    WriteFloat(entity, 0x340, position[0] + 224.0f);
-    WriteFloat(entity, 0x344, position[1] + 16.0f);
-    WriteFloat(entity, 0x348, position[2]);
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(entity);
+    vm.delta_pos_x = position[0] + 224.0f;
+    vm.delta_pos_y = position[1] + 16.0f;
+    vm.delta_pos_z = position[2];
     PropagateToChildren(entity, ChildMutation_PositionOffset, 0, position);
 }
 
@@ -287,7 +277,8 @@ static void SetEntityStateWordFromHandle(u32 *handle, u16 value)
         FindEntityEdxStackAbi(g_MainChainRenderOwner, *handle));
     if (entity == 0)
         return;
-    WriteU16(entity, 0x304, value);
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(entity);
+    vm.state_word = value;
     PropagateToChildren(entity, ChildMutation_StateWord, value, 0);
 }
 
@@ -298,7 +289,8 @@ void StopEntityById(void *manager, u32 id)
         static_cast<u8 *>(FindEntityEdxStackAbi(manager, id));
     if (entity == 0)
         return;
-    WriteU16(entity, 0x304, 1);
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(entity);
+    vm.state_word = 1;
     PropagateToChildren(entity, ChildMutation_StateWord, 1, 0);
 }
 
@@ -339,8 +331,9 @@ void *ReleaseEntitiesUsingResourceEaxEdxAbi(void *manager, u32 resource)
         while (node != 0) {
             u32 *const next = reinterpret_cast<u32 *>(node[1]);
             u8 *const entity = reinterpret_cast<u8 *>(node[0]);
-            if (*reinterpret_cast<u32 *>(entity + 0x308U) == resource) {
-                *reinterpret_cast<u32 *>(entity + 0x35cU) |= 0x4000000U;
+            VmRecord &vm = *reinterpret_cast<VmRecord *>(entity);
+            if (vm.bound_resource == reinterpret_cast<void *>(resource)) {
+                vm.flags |= 0x4000000U;
             }
             node = next;
         }

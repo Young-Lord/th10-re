@@ -2,6 +2,7 @@
 
 #include "CallbackScheduler.hpp"
 #include "EntityHelpers.hpp"
+#include "GameContext.hpp"
 #include "Th10Platform.hpp"
 #include "TitleCalcCluster.hpp"
 
@@ -243,14 +244,11 @@ void ReleaseLargeRenderOwnerSlotEdiAbi(void *slot_block)
 
 namespace {
 
-// Removes the scheduler chain record stored at base+offset under the
-// scheduler lock, matching the shared destructor idiom (0x00449f60 bracketed
-// by DAT_00492274 and the DAT_0049231c activity-depth byte). The record
-// slot itself is not cleared, matching the native destructors.
-void RemoveManagerSchedulerRecord(void *base, u32 offset)
+// Removes one scheduler chain record under the scheduler lock, matching the
+// shared destructor idiom (0x00449f60 bracketed by DAT_00492274 and the
+// DAT_0049231c activity-depth byte). Null records are ignored.
+void RemoveSchedulerChainRecord(ChainElem *record)
 {
-    ChainElem *const record = *reinterpret_cast<ChainElem **>(
-        static_cast<u8 *>(base) + offset);
     if (record == 0) {
         return;
     }
@@ -259,6 +257,16 @@ void RemoveManagerSchedulerRecord(void *base, u32 offset)
     CallbackSchedulerApi::Remove(g_CallbackScheduler, record);
     LeaveCriticalSection(&g_CallbackSchedulerLock);
     --g_CallbackSchedulerActivityDepth;
+}
+
+// Removes the scheduler chain record stored at base+offset under the
+// scheduler lock, matching the shared destructor idiom (0x00449f60 bracketed
+// by DAT_00492274 and the DAT_0049231c activity-depth byte). The record
+// slot itself is not cleared, matching the native destructors.
+void RemoveManagerSchedulerRecord(void *base, u32 offset)
+{
+    RemoveSchedulerChainRecord(*reinterpret_cast<ChainElem **>(
+        static_cast<u8 *>(base) + offset));
 }
 
 // Scalar destructor of the 0x7F0-byte effect-root record array (TH10
@@ -302,8 +310,9 @@ void RunVectorDestructorIterator(void *array, u32 stride, u32 count,
 // TH10 0x00405620. In-place destructor of the DAT_004776ec game context.
 void DestroyGameContextInPlace(void *context)
 {
-    RemoveManagerSchedulerRecord(context, 0x08U);
-    RemoveManagerSchedulerRecord(context, 0x0cU);
+    GameContext &ctx = *static_cast<GameContext *>(context);
+    RemoveSchedulerChainRecord(ctx.calc_record);
+    RemoveSchedulerChainRecord(ctx.draw_record);
     g_GameContext = 0; // DAT_004776ec
 }
 

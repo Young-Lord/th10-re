@@ -6,6 +6,7 @@
 // helpers operate on the 0x7f0-byte scene-trigger records.
 
 #include "Th10Types.hpp"
+#include "GameContext.hpp"
 #include "EntityHelpers.hpp"
 #include "PlayerTimerHelpers.hpp"
 #include "PlayerStageHelpers.hpp"
@@ -49,19 +50,18 @@ i32 SubmitSceneTriggerPopupEntranceEsiAbi(void *popup);
 //    copy the resolved object's +0x40 into +0x3c, run the entrance
 //    submitter 0x405ac0, and finally tick the +0x14 timer (0x404ed0).
 i32 UpdateSceneTriggerPopupEdiAbi(void *popup) {
-    u8 *bytes = static_cast<u8 *>(popup);
-    u32 state = *reinterpret_cast<u32 *>(bytes + 0x28);
+    GameContext &ctx = *static_cast<GameContext *>(popup);
+    u32 state = ctx.popup_state;
     if (state == 0) {
         return 1;
     }
     if (state == 1) {
-        const i32 handle =
-            *reinterpret_cast<i32 *>(bytes + 0x2c);
+        const i32 handle = ctx.effect_handle;
         void *resolved = ResolveTimelineHandle(g_MainChainRenderOwner,
                                                handle);
         if (resolved == 0) {
-            *reinterpret_cast<u32 *>(bytes + 0x2c) = 0;
-            *reinterpret_cast<u32 *>(bytes + 0x28) = 0;
+            ctx.effect_handle = 0;
+            ctx.popup_state = 0;
             return 1;
         }
 
@@ -81,23 +81,22 @@ i32 UpdateSceneTriggerPopupEdiAbi(void *popup) {
                                                    : kDeltaFast;
             }
         }
-        *reinterpret_cast<float *>(bytes + 0x34) -= delta;
+        ctx.position_y -= delta;
 
         float position[3];
-        position[0] =
-            *reinterpret_cast<float *>(bytes + 0x30) + kXOffset224;
-        position[1] =
-            *reinterpret_cast<float *>(bytes + 0x34) + kYOffset16;
-        position[2] = *reinterpret_cast<float *>(bytes + 0x38);
+        position[0] = ctx.position_x + kXOffset224;
+        position[1] = ctx.position_y + kYOffset16;
+        position[2] = ctx.position_z;
         SetEntityPositionDirectEsiAbi(
             g_MainChainRenderOwner, handle, position);
 
-        *reinterpret_cast<u32 *>(bytes + 0x3c) =
-            *reinterpret_cast<u32 *>(static_cast<u8 *>(resolved) + 0x40);
+        ctx.radius =
+            *reinterpret_cast<const float *>(static_cast<u8 *>(resolved)
+                                             + 0x40);
         SubmitSceneTriggerPopupEntranceEsiAbi(popup);
     }
 
-    TickTimerForwardEsiAbi(bytes + 0x14);
+    TickTimerForwardEsiAbi(&ctx.timer);
     return 1;
 }
 
@@ -107,8 +106,8 @@ i32 UpdateSceneTriggerPopupEdiAbi(void *popup) {
 // story phase window [0x5d..0x60]/0x6d, else 1), then broadcasts the
 // entrance tween for the same position with the radius at +0x3c.
 i32 SubmitSceneTriggerPopupEntranceEsiAbi(void *popup) {
-    u8 *bytes = static_cast<u8 *>(popup);
-    if (*reinterpret_cast<u32 *>(bytes + 0x28) == 0) {
+    GameContext &ctx = *static_cast<GameContext *>(popup);
+    if (ctx.popup_state == 0) {
         return 0;
     }
 
@@ -124,11 +123,9 @@ i32 SubmitSceneTriggerPopupEntranceEsiAbi(void *popup) {
         (phase_flags & 1) != 0 &&
         ((phase >= 0x5d && phase <= 0x60) || phase == 0x6d);
 
-    const float position[3] = {
-        *reinterpret_cast<float *>(bytes + 0x30),
-        *reinterpret_cast<float *>(bytes + 0x34),
-        *reinterpret_cast<float *>(bytes + 0x38)};
-    const float radius = *reinterpret_cast<float *>(bytes + 0x3c);
+    const float position[3] = {ctx.position_x, ctx.position_y,
+                               ctx.position_z};
+    const float radius = ctx.radius;
     const i32 spawn_fx = (~(phase_flags)) & 1;
 
     ScanIntroActivations(g_EffectManagerRoot, position, radius, spawn_fx,

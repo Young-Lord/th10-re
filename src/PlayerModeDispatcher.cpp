@@ -1,5 +1,6 @@
 #include "PlayerModeDispatcher.hpp"
 
+#include "GameContext.hpp"
 #include "PlayerDeathProcessor.hpp"
 #include "PlayerFrameworkHelpers.hpp"
 #include "PlayerStageHelpers.hpp"
@@ -192,9 +193,8 @@ void RunDeathbombDecisionBody(u8 *player, i32 tick)
             *reinterpret_cast<const i32 *>(player + 0x478));
         return;
     }
-    if (g_GameContext == 0 ||
-        *reinterpret_cast<const i32 *>(
-            static_cast<u8 *>(g_GameContext) + 0x28) != 0)
+    GameContext *const game_ctx = static_cast<GameContext *>(g_GameContext);
+    if (game_ctx == 0 || game_ctx->popup_state != 0)
         return;
     if (static_cast<short>(g_PlayerLivesCounter / 20) == 0)
         return;
@@ -429,6 +429,9 @@ i32 UpdatePlayerModeDispatcher(void *player_memory)
     u8 *const player = static_cast<u8 *>(player_memory);
     const u32 mode = static_cast<u32>(
         *reinterpret_cast<const i32 *>(player + 0x458));
+    // Typed view over DAT_004776ec; the goto into mode_1 crosses no
+    // initialization because the view is established here.
+    GameContext *const game_ctx = static_cast<GameContext *>(g_GameContext);
 
     if (mode == 0) {
         RunRespawnIntroBody(player);
@@ -445,9 +448,8 @@ mode_1:
         if (g_AsciiHudOwner != 0 &&
             *reinterpret_cast<const i32 *>(
                 static_cast<u8 *>(g_AsciiHudOwner) + 0x9eb8) == 0 &&
-            g_GameContext != 0 &&
-            *reinterpret_cast<const i32 *>(
-                static_cast<u8 *>(g_GameContext) + 0x28) == 0 &&
+            game_ctx != 0 &&
+            game_ctx->popup_state == 0 &&
             static_cast<short>(g_PlayerLivesCounter / 20) != 0 &&
             (g_InputMask & 2) != 0) {
             TickPlayerTimerEaxStackAbi(player + 0x430c, 0x10e);

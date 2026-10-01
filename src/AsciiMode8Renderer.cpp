@@ -5,6 +5,7 @@
 
 #include "MainChainRender.hpp"
 #include "Th10Platform.hpp"
+#include "VmRecord.hpp"
 
 namespace th10 {
 
@@ -57,17 +58,19 @@ u32 ModulateColor(u32 color, const u8 *owner)
 
 void RebuildMode8MatrixIfDirty(u8 *vm)
 {
-    u32 flags = ReadU32(vm, 0x35c);
+    VmRecord &vm_record = *reinterpret_cast<VmRecord *>(vm);
+    u32 flags = vm_record.flags;
     if ((flags & 0x4000U) != 0 || (flags & 0x0cU) == 0)
         return;
-    D3DMatrix *const matrix = reinterpret_cast<D3DMatrix *>(vm + 0x27c);
-    memcpy(matrix, vm + 0x23c, sizeof(*matrix));
-    matrix->values[0] *= ReadFloat(vm, 0x3c);
-    matrix->values[5] *= ReadFloat(vm, 0x40);
-    *reinterpret_cast<u32 *>(vm + 0x35c) = flags & ~0x08U;
+    D3DMatrix *const matrix =
+        reinterpret_cast<D3DMatrix *>(vm_record.world_matrix);
+    memcpy(matrix, vm_record.base_matrix, sizeof(*matrix));
+    matrix->values[0] *= vm_record.scale_x;
+    matrix->values[5] *= vm_record.scale_y;
+    vm_record.flags = flags & ~0x08U;
     D3DMatrix rotation;
-    const float angles[] = {ReadFloat(vm, 0x24), ReadFloat(vm, 0x28),
-                            ReadFloat(vm, 0x2c)};
+    const float angles[] = {vm_record.rotation_x, vm_record.rotation_y,
+                            vm_record.rotation_z};
     for (u32 index = 0; index != 3; ++index) {
         if (angles[index] == 0.0f || angles[index] != angles[index])
             continue;
@@ -79,13 +82,14 @@ void RebuildMode8MatrixIfDirty(u8 *vm)
             D3dxMatrixRotationZ(&rotation, angles[index]);
         D3dxMatrixMultiply(matrix, matrix, &rotation);
     }
-    *reinterpret_cast<u32 *>(vm + 0x35c) &= ~0x04U;
+    vm_record.flags &= ~0x04U;
 }
 
 void UpdateMode8SharedState(void *owner, const u8 *vm)
 {
+    const VmRecord &vm_record = *reinterpret_cast<const VmRecord *>(vm);
     u8 *const owner_bytes = static_cast<u8 *>(owner);
-    const u32 flags = ReadU32(vm, 0x35c);
+    const u32 flags = vm_record.flags;
     const u8 blend = static_cast<u8>((flags >> 4) & 3);
     if (owner_bytes[0x3ada68] != blend) {
         FlushRenderOwnerPendingVertices(reinterpret_cast<RenderOwnerPartial *>(owner));
@@ -96,8 +100,8 @@ void UpdateMode8SharedState(void *owner, const u8 *vm)
                 g_MainChainD3D9Device, 57))(g_MainChainD3D9Device, 0x14, value);
         }
     }
-    u32 color = (flags & 0x8000U) != 0 ? ReadU32(vm, 0x300) :
-        ReadU32(vm, 0x2fc);
+    u32 color = (flags & 0x8000U) != 0 ? vm_record.secondary_color :
+        vm_record.primary_color;
     if (*reinterpret_cast<const u32 *>(owner_bytes + 0x73245c) != 0)
         color = ModulateColor(color, owner_bytes);
     if (*reinterpret_cast<u32 *>(owner_bytes + 0x3ada60) != color) {
@@ -124,18 +128,23 @@ void UpdateMode8SharedState(void *owner, const u8 *vm)
 i32 DrawAsciiAnimationVmMode8(void *vm_memory, void *owner)
 {
     u8 *const vm = static_cast<u8 *>(vm_memory);
+    const VmRecord &vm_record = *reinterpret_cast<const VmRecord *>(vm);
     u8 *const owner_bytes = static_cast<u8 *>(owner);
-    if ((ReadU32(vm, 0x35c) & 3U) != 3U || *(vm + 0x2ff) == 0)
+    if ((vm_record.flags & 3U) != 3U || *(vm + 0x2ff) == 0)
         return -1;
     if (*reinterpret_cast<u32 *>(owner_bytes + 0x3adac8) != 0)
         FlushRenderOwnerPendingVertices(reinterpret_cast<RenderOwnerPartial *>(owner));
     RebuildMode8MatrixIfDirty(vm);
 
-    D3DMatrix world = *reinterpret_cast<D3DMatrix *>(vm + 0x27c);
-    const u32 flags = ReadU32(vm, 0x35c);
-    const float x = ReadFloat(vm, 0x334) + ReadFloat(vm, 0x340) + ReadFloat(vm, 0x34c);
-    const float y = ReadFloat(vm, 0x338) + ReadFloat(vm, 0x344) + ReadFloat(vm, 0x350);
-    const float z = ReadFloat(vm, 0x33c) + ReadFloat(vm, 0x348) + ReadFloat(vm, 0x354);
+    D3DMatrix world =
+        *reinterpret_cast<const D3DMatrix *>(vm_record.world_matrix);
+    const u32 flags = vm_record.flags;
+    const float x = vm_record.base_pos_x + vm_record.delta_pos_x +
+        vm_record.alt_pos_x;
+    const float y = vm_record.base_pos_y + vm_record.delta_pos_y +
+        vm_record.alt_pos_y;
+    const float z = vm_record.base_pos_z + vm_record.delta_pos_z +
+        vm_record.alt_pos_z;
     const float half_width = static_cast<float>(fabs(static_cast<double>(
         ReadFloat(vm, 0x4c) * ReadFloat(vm, 0x3c) * 0.5f)));
     const float half_height = static_cast<float>(fabs(static_cast<double>(
@@ -155,20 +164,21 @@ i32 DrawAsciiAnimationVmMode8(void *vm_memory, void *owner)
     (void)reinterpret_cast<D3DSetTransformFn>(GetD3DSlot(
         g_MainChainD3D9Device, 44))(g_MainChainD3D9Device, 0x100, &world);
 
-    u8 *const glyph = *reinterpret_cast<u8 **>(vm + 0x394);
+    u8 *const glyph = static_cast<u8 *>(vm_record.anim_entry);
     void *const texture = *reinterpret_cast<void **>(glyph + 4);
     if (*reinterpret_cast<void **>(owner_bytes + 0x3ada64) != texture) {
         *reinterpret_cast<void **>(owner_bytes + 0x3ada64) = texture;
         (void)reinterpret_cast<D3DSetTextureFn>(GetD3DSlot(
             g_MainChainD3D9Device, 65))(g_MainChainD3D9Device, 0, texture);
     }
-    const float u_offset = ReadFloat(vm, 0x54);
+    const float u_offset = vm_record.texture_u;
     if (*reinterpret_cast<void **>(owner_bytes + 0x3ada70) != glyph ||
         (u_offset == u_offset && u_offset != 0.0f)) {
         *reinterpret_cast<void **>(owner_bytes + 0x3ada70) = glyph;
-        D3DMatrix texture_matrix = *reinterpret_cast<D3DMatrix *>(vm + 0x2bc);
+        D3DMatrix texture_matrix =
+            *reinterpret_cast<const D3DMatrix *>(vm_record.texture_matrix);
         texture_matrix.values[8] = ReadFloat(glyph, 0x20) + u_offset;
-        texture_matrix.values[9] = ReadFloat(glyph, 0x24) + ReadFloat(vm, 0x58);
+        texture_matrix.values[9] = ReadFloat(glyph, 0x24) + vm_record.texture_v;
         (void)reinterpret_cast<D3DSetTransformFn>(GetD3DSlot(
             g_MainChainD3D9Device, 44))(g_MainChainD3D9Device, 0x10,
                                         &texture_matrix);

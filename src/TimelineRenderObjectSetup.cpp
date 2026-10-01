@@ -7,6 +7,7 @@
 #include "AsciiAnimationVm.hpp"
 #include "TimelineRenderObjects.hpp"
 #include "Th10Types.hpp"
+#include "VmRecord.hpp"
 
 namespace th10 {
 namespace {
@@ -51,7 +52,7 @@ inline bool ScaleFieldUsesSentinel(float value)
 
 inline u16 &SelectPrngState(u8 *node)
 {
-    if (*reinterpret_cast<u32 *>(node + 0x35c) & 0x40000000U)
+    if (reinterpret_cast<VmRecord *>(node)->flags & 0x40000000U)
         return g_TimelinePrngStateA[0];
     return g_TimelinePrngStateB[0];
 }
@@ -107,27 +108,28 @@ float PrngCenteredFloat(u16 *state)
 
 float ReadVmFloatRegister(u8 *vm, float reg_operand, float fallback)
 {
+    VmRecord &rec = *reinterpret_cast<VmRecord *>(vm);
     switch (ConvertFloatToI32TowardZeroX87(reg_operand)) {
     case 10000:
-        return static_cast<float>(*reinterpret_cast<i32 *>(vm + 0x30c));
+        return static_cast<float>(rec.reg_10000);
     case 10001:
-        return static_cast<float>(*reinterpret_cast<i32 *>(vm + 0x310));
+        return static_cast<float>(rec.reg_10001);
     case 10002:
-        return static_cast<float>(*reinterpret_cast<i32 *>(vm + 0x314));
+        return static_cast<float>(rec.reg_10002);
     case 10003:
-        return static_cast<float>(*reinterpret_cast<i32 *>(vm + 0x318));
+        return static_cast<float>(rec.reg_10003);
     case 10004:
-        return *reinterpret_cast<float *>(vm + 0x31c);
+        return rec.reg_10004;
     case 10005:
-        return *reinterpret_cast<float *>(vm + 0x320);
+        return rec.reg_10005;
     case 10006:
-        return *reinterpret_cast<float *>(vm + 0x324);
+        return rec.reg_10006;
     case 10007:
-        return *reinterpret_cast<float *>(vm + 0x328);
+        return rec.reg_10007;
     case 10008:
-        return static_cast<float>(*reinterpret_cast<i32 *>(vm + 0x32c));
+        return static_cast<float>(rec.reg_10008);
     case 10009:
-        return static_cast<float>(*reinterpret_cast<i32 *>(vm + 0x330));
+        return static_cast<float>(rec.reg_10009);
     case 10010:
         // Native: 0x0044bb90 centered draw * flt_470B18 (pi, 3.14159274f).
         return PrngCenteredFloat(&SelectPrngState(vm)) * 3.14159274f;
@@ -138,11 +140,11 @@ float ReadVmFloatRegister(u8 *vm, float reg_operand, float fallback)
         // Native: 0x0044bb90 centered draw, returned raw.
         return PrngCenteredFloat(&SelectPrngState(vm));
     case 10013:
-        return *reinterpret_cast<float *>(vm + 0x334);
+        return rec.base_pos_x;
     case 10014:
-        return *reinterpret_cast<float *>(vm + 0x338);
+        return rec.base_pos_y;
     case 10015:
-        return *reinterpret_cast<float *>(vm + 0x33c);
+        return rec.base_pos_z;
     case 10016:
         return g_VmGlobalFloat10016;
     case 10017:
@@ -162,31 +164,28 @@ float ReadVmFloatRegister(u8 *vm, float reg_operand, float fallback)
 
 i32 ReadVmIntRegister(u8 *vm, i32 reg_id)
 {
+    VmRecord &rec = *reinterpret_cast<VmRecord *>(vm);
     switch (reg_id - 10000) {
     case 0:
-        return *reinterpret_cast<i32 *>(vm + 0x30c);
+        return rec.reg_10000;
     case 1:
-        return *reinterpret_cast<i32 *>(vm + 0x310);
+        return rec.reg_10001;
     case 2:
-        return *reinterpret_cast<i32 *>(vm + 0x314);
+        return rec.reg_10002;
     case 3:
-        return *reinterpret_cast<i32 *>(vm + 0x318);
+        return rec.reg_10003;
     case 4:
-        return ConvertFloatToI32TowardZeroX87(
-            *reinterpret_cast<float *>(vm + 0x31c));
+        return ConvertFloatToI32TowardZeroX87(rec.reg_10004);
     case 5:
-        return ConvertFloatToI32TowardZeroX87(
-            *reinterpret_cast<float *>(vm + 0x320));
+        return ConvertFloatToI32TowardZeroX87(rec.reg_10005);
     case 6:
-        return ConvertFloatToI32TowardZeroX87(
-            *reinterpret_cast<float *>(vm + 0x324));
+        return ConvertFloatToI32TowardZeroX87(rec.reg_10006);
     case 7:
-        return ConvertFloatToI32TowardZeroX87(
-            *reinterpret_cast<float *>(vm + 0x328));
+        return ConvertFloatToI32TowardZeroX87(rec.reg_10007);
     case 8:
-        return *reinterpret_cast<i32 *>(vm + 0x32c);
+        return rec.reg_10008;
     case 9:
-        return *reinterpret_cast<i32 *>(vm + 0x330);
+        return rec.reg_10009;
     default:
         return reg_id;
     }
@@ -196,19 +195,20 @@ i32 *ResolveVmIntWriteTarget(i32 *reg_id_ptr, u8 *vm, u8 flags, u8 bit)
 {
     if ((flags & static_cast<u8>(1u << bit)) == 0)
         return reg_id_ptr;
+    VmRecord &rec = *reinterpret_cast<VmRecord *>(vm);
     switch (*reg_id_ptr) {
     case 10000:
-        return reinterpret_cast<i32 *>(vm + 0x30c);
+        return &rec.reg_10000;
     case 10001:
-        return reinterpret_cast<i32 *>(vm + 0x310);
+        return &rec.reg_10001;
     case 10002:
-        return reinterpret_cast<i32 *>(vm + 0x314);
+        return &rec.reg_10002;
     case 10003:
-        return reinterpret_cast<i32 *>(vm + 0x318);
+        return &rec.reg_10003;
     case 10008:
-        return reinterpret_cast<i32 *>(vm + 0x32c);
+        return &rec.reg_10008;
     case 10009:
-        return reinterpret_cast<i32 *>(vm + 0x330);
+        return &rec.reg_10009;
     default:
         return reg_id_ptr;
     }
@@ -219,21 +219,22 @@ float *ResolveVmFloatWriteTarget(float *fallback, u8 *vm, u8 flags, u8 bit,
 {
     if ((flags & static_cast<u8>(1u << bit)) == 0)
         return fallback;
+    VmRecord &rec = *reinterpret_cast<VmRecord *>(vm);
     switch (reg_id) {
     case 10004:
-        return reinterpret_cast<float *>(vm + 0x31c);
+        return &rec.reg_10004;
     case 10005:
-        return reinterpret_cast<float *>(vm + 0x320);
+        return &rec.reg_10005;
     case 10006:
-        return reinterpret_cast<float *>(vm + 0x324);
+        return &rec.reg_10006;
     case 10007:
-        return reinterpret_cast<float *>(vm + 0x328);
+        return &rec.reg_10007;
     case 10013:
-        return reinterpret_cast<float *>(vm + 0x334);
+        return &rec.base_pos_x;
     case 10014:
-        return reinterpret_cast<float *>(vm + 0x338);
+        return &rec.base_pos_y;
     case 10015:
-        return reinterpret_cast<float *>(vm + 0x33c);
+        return &rec.base_pos_z;
     default:
         return fallback;
     }
@@ -637,12 +638,15 @@ void SetupPolyline(u8 *node)
 
 void QueueTimelineAudio(u8 *node, i32 audio_id)
 {
-    AdvanceVmTimer(node + 0x5c, static_cast<float>(-audio_id));
+    AdvanceVmTimer(reinterpret_cast<u8 *>(
+                       &reinterpret_cast<VmRecord *>(node)->timer_prev),
+                   static_cast<float>(-audio_id));
 }
 
 void StartVec3Anim(u8 *node, u8 *pc, u32 block_offset, u32 copy_offset,
                    u32 duration_offset)
 {
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(node);
     u8 flags = pc[3];
     i32 anim_id = *reinterpret_cast<i32 *>(pc + 4);
     if (flags & 1U)
@@ -651,10 +655,12 @@ void StartVec3Anim(u8 *node, u8 *pc, u32 block_offset, u32 copy_offset,
     std::memcpy(node + block_offset + 4, g_AnimDefaultVector, sizeof(g_AnimDefaultVector));
     std::memcpy(node + block_offset + 16, g_AnimDefaultVector, sizeof(g_AnimDefaultVector));
     std::memcpy(node + block_offset + 28, g_AnimDefaultVector, sizeof(g_AnimDefaultVector));
-    if ((*reinterpret_cast<u32 *>(node + 0x35c) & 0x100U) == 0) {
-        std::memcpy(node + copy_offset, node + 0x334, 12);
+    if ((vm.flags & 0x100U) == 0) {
+        std::memcpy(node + copy_offset,
+                    reinterpret_cast<u8 *>(&vm.base_pos_x), 12);
     } else {
-        std::memcpy(node + copy_offset, node + 0x34c, 12);
+        std::memcpy(node + copy_offset,
+                    reinterpret_cast<u8 *>(&vm.alt_pos_x), 12);
     }
     i32 duration = *reinterpret_cast<i32 *>(pc + duration_offset);
     if (flags & (1u << ((duration_offset - 4) / 2)))
@@ -666,31 +672,33 @@ void StartVec3Anim(u8 *node, u8 *pc, u32 block_offset, u32 copy_offset,
 void StartFloat2Anim(u8 *node, u8 *pc)
 {
     (void)pc;
-    *reinterpret_cast<u32 *>(node + 0x1b4) = 1U;
-    TriggerVec3Render(node + 0x188);
-    *reinterpret_cast<u32 *>(node + 0x35c) |= 8U;
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(node);
+    vm.scale_anim.duration = 1;
+    TriggerVec3Render(reinterpret_cast<u8 *>(&vm.scale_anim.target[0]));
+    vm.flags |= 8U;
 }
 
 void StartScalarAnim(u8 *node, u8 *pc)
 {
     (void)pc;
-    *reinterpret_cast<u32 *>(node + 0x22c) = 1U;
+    reinterpret_cast<VmRecord *>(node)->alpha_anim_2.duration = 1;
 }
 
 void StartColorAnim(u8 *node, u8 *pc)
 {
     (void)pc;
-    *reinterpret_cast<u32 *>(node + 300) = 1U;
+    reinterpret_cast<VmRecord *>(node)->alpha_anim_1.duration = 1;
 }
 
 void BindSubEntry(u8 *node, u8 *pc)
 {
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(node);
     i32 entry = *reinterpret_cast<i32 *>(pc + 8);
     if (pc[3] & 1U)
         entry = ReadVmIntRegister(node, entry);
     InitializeAsciiAnimationVmEntry(node, static_cast<u32>(entry),
-                                    *reinterpret_cast<void **>(node + 0x308));
-    *reinterpret_cast<i32 *>(node + 0x380) = *reinterpret_cast<i32 *>(node + 0x60);
+                                    vm.bound_resource);
+    vm.bind_frame_stamp = vm.timer_cur;
 }
 
 void LinkChildNode(u8 *parent_link, u8 *child)
@@ -709,18 +717,14 @@ void CopyCreatedObjectVectors(u8 *node, u8 *created, bool copy_all_three)
     // The binary copies all three dwords of both vectors unconditionally;
     // the copy_all_three parameter is retained for call-site compatibility.
     (void)copy_all_three;
-    *reinterpret_cast<i32 *>(created + 0x34c) =
-        *reinterpret_cast<i32 *>(node + 0x334);
-    *reinterpret_cast<i32 *>(created + 0x350) =
-        *reinterpret_cast<i32 *>(node + 0x338);
-    *reinterpret_cast<i32 *>(created + 0x354) =
-        *reinterpret_cast<i32 *>(node + 0x33c);
-    *reinterpret_cast<i32 *>(created + 0x340) =
-        *reinterpret_cast<i32 *>(node + 0x340);
-    *reinterpret_cast<i32 *>(created + 0x344) =
-        *reinterpret_cast<i32 *>(node + 0x344);
-    *reinterpret_cast<i32 *>(created + 0x348) =
-        *reinterpret_cast<i32 *>(node + 0x348);
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(node);
+    VmRecord &created_vm = *reinterpret_cast<VmRecord *>(created);
+    created_vm.alt_pos_x = vm.base_pos_x;
+    created_vm.alt_pos_y = vm.base_pos_y;
+    created_vm.alt_pos_z = vm.base_pos_z;
+    created_vm.delta_pos_x = vm.delta_pos_x;
+    created_vm.delta_pos_y = vm.delta_pos_y;
+    created_vm.delta_pos_z = vm.delta_pos_z;
 }
 
 i32 ResolveIntOperand(u8 *node, u8 *pc, u8 bit, i32 offset)
@@ -741,17 +745,19 @@ float ResolveFloatOperand(u8 *node, u8 *pc, u8 bit, i32 offset)
 
 void JumpConditionalFalse(u8 *node, u8 *pc)
 {
-    ResetVmTimer(node + 0x5c, *reinterpret_cast<i32 *>(pc + 20));
-    *reinterpret_cast<u8 **>(node + 0x390) =
-        *reinterpret_cast<u8 **>(node + 0x38c) +
-        *reinterpret_cast<i32 *>(pc + 16);
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(node);
+    ResetVmTimer(reinterpret_cast<u8 *>(&vm.timer_prev),
+                 *reinterpret_cast<i32 *>(pc + 20));
+    vm.current_instruction = static_cast<u8 *>(vm.script_base) +
+                             *reinterpret_cast<i32 *>(pc + 16);
 }
 
 void RestartKindScript(u8 *node)
 {
-    const short kind = *reinterpret_cast<short *>(node + 0x304);
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(node);
+    const short kind = static_cast<short>(vm.state_word);
     u8 *fallback = 0;
-    u8 *scan = *reinterpret_cast<u8 **>(node + 0x38c);
+    u8 *scan = static_cast<u8 *>(vm.script_base);
     u16 opcode;
     for (;;) {
         opcode = *reinterpret_cast<u16 *>(scan);
@@ -771,127 +777,121 @@ void RestartKindScript(u8 *node)
         if (fallback != 0)
             scan = fallback;
         else {
-            AdvanceVmTimer(node + 0x5c, -1.0f);
+            AdvanceVmTimer(reinterpret_cast<u8 *>(&vm.timer_prev), -1.0f);
             return;
         }
     }
-    *reinterpret_cast<short *>(node + 0x304) = 0;
-    *reinterpret_cast<u32 *>(node + 0x35c) &= ~0x1000U;
-    *reinterpret_cast<i32 *>(node + 0x368) = *reinterpret_cast<i32 *>(node + 0x5c);
-    *reinterpret_cast<i32 *>(node + 0x36c) = *reinterpret_cast<i32 *>(node + 0x60);
-    *reinterpret_cast<i32 *>(node + 0x370) = *reinterpret_cast<i32 *>(node + 0x64);
-    *reinterpret_cast<u32 *>(node + 0x374) =
-        *reinterpret_cast<u32 *>(node + 0x68);
-    *reinterpret_cast<u32 *>(node + 0x378) =
-        *reinterpret_cast<u32 *>(node + 0x6c);
-    *reinterpret_cast<u8 **>(node + 0x37c) =
-        *reinterpret_cast<u8 **>(node + 0x390);
-    ResetVmTimer(node + 0x5c, *reinterpret_cast<i32 *>(scan + 4));
-    *reinterpret_cast<u8 **>(node + 0x390) =
+    vm.state_word = 0;
+    vm.flags &= ~0x1000U;
+    vm.saved_timer_prev = vm.timer_prev;
+    vm.saved_timer_cur = vm.timer_cur;
+    vm.saved_timer_accum = vm.timer_accum;
+    vm.saved_timer_rate = vm.timer_rate;
+    vm.saved_timer_flags = vm.timer_flags;
+    vm.saved_script = vm.current_instruction;
+    ResetVmTimer(reinterpret_cast<u8 *>(&vm.timer_prev),
+                 *reinterpret_cast<i32 *>(scan + 4));
+    vm.current_instruction =
         scan + *reinterpret_cast<u16 *>(scan + 2);
-    *reinterpret_cast<u32 *>(node + 0x35c) |= 1U;
+    vm.flags |= 1U;
 }
 
 void RunPolylineEpilogue(u8 *node)
 {
-    i32 count = *reinterpret_cast<i32 *>(node + 0x30c) - 1;
-    float *cursor = *reinterpret_cast<float **>(node + 0x358);
-    float angle = *reinterpret_cast<float *>(node + 0x2c);
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(node);
+    i32 count = vm.reg_10000 - 1;
+    float *cursor = static_cast<float *>(vm.vertex_buffer);
+    float angle = vm.rotation_z;
     const float step = kTwoPi / static_cast<float>(count);
     float phase = 0.0f;
     const float radial_step =
-        static_cast<float>(*reinterpret_cast<i32 *>(node + 0x310)) /
+        static_cast<float>(vm.reg_10001) /
         static_cast<float>(count);
     float *const anchor = cursor;
     if (count > 0) {
         do {
             cursor[3] = kUnity;
-            cursor[4] = *reinterpret_cast<float *>(node + 0x2fc);
-            cursor[5] = *reinterpret_cast<float *>(
-                            *reinterpret_cast<u8 **>(node + 0x394) + 0x20) +
-                        *reinterpret_cast<float *>(node + 0x54);
-            cursor[6] = phase + *reinterpret_cast<float *>(node + 0x58);
+            cursor[4] =
+                *reinterpret_cast<const float *>(&vm.primary_color);
+            cursor[5] = *reinterpret_cast<const float *>(
+                            static_cast<const u8 *>(vm.anim_entry) + 0x20) +
+                        vm.texture_u;
+            cursor[6] = phase + vm.texture_v;
             PolarToCartesian(
                 cursor, angle,
-                *reinterpret_cast<float *>(node + 0x3c) * kEaseHalf +
-                    *reinterpret_cast<float *>(node + 0x40));
+                vm.scale_x * kEaseHalf + vm.scale_y);
             cursor[2] = 0.0f;
-            cursor[0] = *reinterpret_cast<float *>(node + 0x340) +
-                        *reinterpret_cast<float *>(node + 0x334) + cursor[0];
-            cursor[1] = *reinterpret_cast<float *>(node + 0x344) +
-                        *reinterpret_cast<float *>(node + 0x338) + cursor[1];
-            cursor[2] = *reinterpret_cast<float *>(node + 0x348) +
-                        *reinterpret_cast<float *>(node + 0x33c) + cursor[2];
+            cursor[0] = vm.delta_pos_x + vm.base_pos_x + cursor[0];
+            cursor[1] = vm.delta_pos_y + vm.base_pos_y + cursor[1];
+            cursor[2] = vm.delta_pos_z + vm.base_pos_z + cursor[2];
             cursor[10] = kUnity;
-            cursor[11] = *reinterpret_cast<float *>(node + 0x2fc);
-            cursor[12] = *reinterpret_cast<float *>(
-                             *reinterpret_cast<u8 **>(node + 0x394) + 0x28) +
-                         *reinterpret_cast<float *>(node + 0x54);
-            cursor[13] = phase + *reinterpret_cast<float *>(node + 0x58);
+            cursor[11] =
+                *reinterpret_cast<const float *>(&vm.primary_color);
+            cursor[12] = *reinterpret_cast<const float *>(
+                             static_cast<const u8 *>(vm.anim_entry) + 0x28) +
+                         vm.texture_u;
+            cursor[13] = phase + vm.texture_v;
             PolarToCartesian(
                 cursor + 7, phase,
-                *reinterpret_cast<float *>(node + 0x40) -
-                    *reinterpret_cast<float *>(node + 0x3c) * kEaseHalf);
+                vm.scale_y - vm.scale_x * kEaseHalf);
             cursor[9] = 0.0f;
-            cursor[7] = *reinterpret_cast<float *>(node + 0x340) +
-                       *reinterpret_cast<float *>(node + 0x334) + cursor[7];
-            cursor[8] = *reinterpret_cast<float *>(node + 0x344) +
-                       *reinterpret_cast<float *>(node + 0x338) + cursor[8];
-            cursor[9] = *reinterpret_cast<float *>(node + 0x348) +
-                       *reinterpret_cast<float *>(node + 0x33c) + cursor[9];
+            cursor[7] = vm.delta_pos_x + vm.base_pos_x + cursor[7];
+            cursor[8] = vm.delta_pos_y + vm.base_pos_y + cursor[8];
+            cursor[9] = vm.delta_pos_z + vm.base_pos_z + cursor[9];
             phase += radial_step;
             angle = WrapAnglePi(angle, step);
             count -= 1;
             cursor += 14;
         } while (count != 0);
     }
-    float *src = *reinterpret_cast<float **>(node + 0x358);
+    float *src = static_cast<float *>(vm.vertex_buffer);
     float *dst = anchor;
     for (i32 i = 0; i != 7; ++i)
         dst[i] = src[i];
-    dst[6] = phase + *reinterpret_cast<float *>(node + 0x58);
-    src = *reinterpret_cast<float **>(node + 0x358) + 7;
+    dst[6] = phase + vm.texture_v;
+    src = static_cast<float *>(vm.vertex_buffer) + 7;
     dst = anchor + 7;
     for (i32 i = 0; i != 7; ++i)
         dst[i] = src[i];
-    dst[6] = phase + *reinterpret_cast<float *>(node + 0x58);
+    dst[6] = phase + vm.texture_v;
 }
 
 i32 RunSetupEpilogue(u8 *node)
 {
-    if (ScaleFieldUsesSentinel(*reinterpret_cast<float *>(node + 0x30))) {
-        *reinterpret_cast<float *>(node + 0x24) = WrapAnglePi(
-            *reinterpret_cast<float *>(node + 0x24),
-            g_MainChainStartupScale * *reinterpret_cast<float *>(node + 0x30));
-        *reinterpret_cast<u32 *>(node + 0x35c) |= 4U;
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(node);
+    if (ScaleFieldUsesSentinel(vm.rotation_rate_x)) {
+        vm.rotation_x = WrapAnglePi(
+            vm.rotation_x,
+            g_MainChainStartupScale * vm.rotation_rate_x);
+        vm.flags |= 4U;
     }
-    if (ScaleFieldUsesSentinel(*reinterpret_cast<float *>(node + 0x34))) {
-        *reinterpret_cast<float *>(node + 0x28) = WrapAnglePi(
-            *reinterpret_cast<float *>(node + 0x28),
-            g_MainChainStartupScale * *reinterpret_cast<float *>(node + 0x34));
-        *reinterpret_cast<u32 *>(node + 0x35c) |= 4U;
+    if (ScaleFieldUsesSentinel(vm.rotation_rate_y)) {
+        vm.rotation_y = WrapAnglePi(
+            vm.rotation_y,
+            g_MainChainStartupScale * vm.rotation_rate_y);
+        vm.flags |= 4U;
     }
-    if (ScaleFieldUsesSentinel(*reinterpret_cast<float *>(node + 0x38))) {
-        *reinterpret_cast<float *>(node + 0x2c) = WrapAnglePi(
-            *reinterpret_cast<float *>(node + 0x2c),
-            g_MainChainStartupScale * *reinterpret_cast<float *>(node + 0x38));
-        *reinterpret_cast<u32 *>(node + 0x35c) |= 4U;
+    if (ScaleFieldUsesSentinel(vm.rotation_rate_z)) {
+        vm.rotation_z = WrapAnglePi(
+            vm.rotation_z,
+            g_MainChainStartupScale * vm.rotation_rate_z);
+        vm.flags |= 4U;
     }
-    if (ScaleFieldUsesSentinel(*reinterpret_cast<float *>(node + 0x48))) {
-        *reinterpret_cast<float *>(node + 0x40) =
-            g_MainChainStartupScale * *reinterpret_cast<float *>(node + 0x48) +
-            *reinterpret_cast<float *>(node + 0x40);
-        *reinterpret_cast<u32 *>(node + 0x35c) |= 8U;
+    if (ScaleFieldUsesSentinel(vm.scale_rate_y)) {
+        vm.scale_y =
+            g_MainChainStartupScale * vm.scale_rate_y +
+            vm.scale_y;
+        vm.flags |= 8U;
     }
-    if (ScaleFieldUsesSentinel(*reinterpret_cast<float *>(node + 0x44))) {
-        *reinterpret_cast<float *>(node + 0x3c) =
-            g_MainChainStartupScale * *reinterpret_cast<float *>(node + 0x44) +
-            *reinterpret_cast<float *>(node + 0x3c);
-        *reinterpret_cast<u32 *>(node + 0x35c) |= 0xcU;
+    if (ScaleFieldUsesSentinel(vm.scale_rate_x)) {
+        vm.scale_x =
+            g_MainChainStartupScale * vm.scale_rate_x +
+            vm.scale_x;
+        vm.flags |= 0xcU;
     }
     float angle = g_MainChainStartupScale *
-                      *reinterpret_cast<float *>(node + 0x234) +
-                  *reinterpret_cast<float *>(node + 0x54);
+                      vm.uv_scroll_rate_x +
+                  vm.texture_u;
     if (angle < kUnity) {
         if (angle < kScaleSentinel !=
             (((angle) != (angle)) || ((kScaleSentinel) != (kScaleSentinel))))
@@ -899,10 +899,10 @@ i32 RunSetupEpilogue(u8 *node)
     } else {
         angle -= kUnity;
     }
-    *reinterpret_cast<float *>(node + 0x54) = angle;
+    vm.texture_u = angle;
     angle = g_MainChainStartupScale *
-                *reinterpret_cast<float *>(node + 0x238) +
-            *reinterpret_cast<float *>(node + 0x58);
+                vm.uv_scroll_rate_y +
+            vm.texture_v;
     if (angle < kUnity) {
         if (angle < kScaleSentinel !=
             (((angle) != (angle)) || ((kScaleSentinel) != (kScaleSentinel))))
@@ -910,79 +910,78 @@ i32 RunSetupEpilogue(u8 *node)
     } else {
         angle -= kUnity;
     }
-    *reinterpret_cast<float *>(node + 0x58) = angle;
-    if (*reinterpret_cast<u32 *>(node + 0x35c) & 0x2000U) {
-        *reinterpret_cast<float *>(node + 0x340) += g_TimelineGlobalOffsetX;
-        *reinterpret_cast<float *>(node + 0x344) += g_TimelineGlobalOffsetY;
-        *reinterpret_cast<float *>(node + 0x348) += g_TimelineGlobalOffsetZ;
+    vm.texture_v = angle;
+    if (vm.flags & 0x2000U) {
+        vm.delta_pos_x += g_TimelineGlobalOffsetX;
+        vm.delta_pos_y += g_TimelineGlobalOffsetY;
+        vm.delta_pos_z += g_TimelineGlobalOffsetZ;
     }
-    if (*reinterpret_cast<i32 *>(node + 0xb4) != 0) {
+    if (vm.position_anim.duration != 0) {
         float sample[3];
-        if ((*reinterpret_cast<u32 *>(node + 0x35c) & 0x100U) == 0)
-            FetchTickVector(node + 0x70, sample);
+        if ((vm.flags & 0x100U) == 0)
+            FetchTickVector(reinterpret_cast<u8 *>(&vm.position_anim), sample);
         else
-            FetchTickVector(node + 0x70, sample);
-        if ((*reinterpret_cast<u32 *>(node + 0x35c) & 0x100U) == 0) {
-            *reinterpret_cast<float *>(node + 0x334) = sample[0];
-            *reinterpret_cast<float *>(node + 0x338) = sample[1];
-            *reinterpret_cast<float *>(node + 0x33c) = sample[2];
+            FetchTickVector(reinterpret_cast<u8 *>(&vm.position_anim), sample);
+        if ((vm.flags & 0x100U) == 0) {
+            vm.base_pos_x = sample[0];
+            vm.base_pos_y = sample[1];
+            vm.base_pos_z = sample[2];
         } else {
-            *reinterpret_cast<float *>(node + 0x34c) = sample[0];
-            *reinterpret_cast<float *>(node + 0x350) = sample[1];
-            *reinterpret_cast<float *>(node + 0x354) = sample[2];
+            vm.alt_pos_x = sample[0];
+            vm.alt_pos_y = sample[1];
+            vm.alt_pos_z = sample[2];
         }
     }
-    if (*reinterpret_cast<i32 *>(node + 0x100) != 0)
-        SampleVec3Anim(node + 0xbc, node + 0x2fc);
-    if (*reinterpret_cast<i32 *>(node + 300) != 0)
-        *reinterpret_cast<u8 *>(node + 0x2ff) = SampleScalarAnim(node + 0x108);
-    if (*reinterpret_cast<i32 *>(node + 0x1b4) != 0) {
+    if (vm.rgb_anim_1.duration != 0)
+        SampleVec3Anim(reinterpret_cast<u8 *>(&vm.rgb_anim_1),
+                       reinterpret_cast<u8 *>(&vm.primary_color));
+    if (vm.alpha_anim_1.duration != 0)
+        *reinterpret_cast<u8 *>(node + 0x2ff) =
+            SampleScalarAnim(reinterpret_cast<u8 *>(&vm.alpha_anim_1));
+    if (vm.scale_anim.duration != 0) {
         float sample[2];
-        SampleFloat2Anim(node + 0x180, sample);
-        *reinterpret_cast<float *>(node + 0x3c) = sample[0];
-        *reinterpret_cast<float *>(node + 0x40) = sample[1];
-        *reinterpret_cast<u32 *>(node + 0x35c) |= 8U;
+        SampleFloat2Anim(reinterpret_cast<u8 *>(&vm.scale_anim), sample);
+        vm.scale_x = sample[0];
+        vm.scale_y = sample[1];
+        vm.flags |= 8U;
     }
-    if (*reinterpret_cast<i32 *>(node + 0x178) != 0) {
+    if (vm.rotation_anim.duration != 0) {
         float sample[3];
-        FetchTickVector(node + 0x134, sample);
-        *reinterpret_cast<float *>(node + 0x24) = sample[0];
-        *reinterpret_cast<float *>(node + 0x28) = sample[1];
-        *reinterpret_cast<float *>(node + 0x2c) = sample[2];
-        *reinterpret_cast<u32 *>(node + 0x35c) |= 4U;
+        FetchTickVector(reinterpret_cast<u8 *>(&vm.rotation_anim), sample);
+        vm.rotation_x = sample[0];
+        vm.rotation_y = sample[1];
+        vm.rotation_z = sample[2];
+        vm.flags |= 4U;
     }
-    if (*reinterpret_cast<i32 *>(node + 0x200) != 0)
-        SampleVec3Anim(node + 0x1bc, node + 0x300);
-    if (*reinterpret_cast<i32 *>(node + 0x22c) != 0)
-        *reinterpret_cast<u8 *>(node + 0x303) = SampleScalarAnim(node + 0x208);
-    if ((*reinterpret_cast<u32 *>(node + 0x35c) & 0x3c00000U) == 0x2400000U)
+    if (vm.rgb_anim_2.duration != 0)
+        SampleVec3Anim(reinterpret_cast<u8 *>(&vm.rgb_anim_2),
+                       reinterpret_cast<u8 *>(&vm.secondary_color));
+    if (vm.alpha_anim_2.duration != 0)
+        *reinterpret_cast<u8 *>(node + 0x303) =
+            SampleScalarAnim(reinterpret_cast<u8 *>(&vm.alpha_anim_2));
+    if ((vm.flags & 0x3c00000U) == 0x2400000U)
         RunPolylineEpilogue(node);
-    const float *rate =
-        *reinterpret_cast<const float *const *>(node + 0x68);
-    *reinterpret_cast<i32 *>(node + 0x5c) =
-        *reinterpret_cast<i32 *>(node + 0x60);
+    const float *rate = vm.timer_rate;
+    vm.timer_prev = vm.timer_cur;
     if ((rate[0] <= kRateUnityHigh) &&
         (rate[0] < kRateUnityLow ==
          (((rate[0]) != (rate[0])) || ((kRateUnityLow) != (kRateUnityLow))))) {
-        *reinterpret_cast<float *>(node + 0x64) =
-            rate[0] + *reinterpret_cast<float *>(node + 0x64);
-        *reinterpret_cast<i32 *>(node + 0x60) =
-            ConvertFloatToI32TowardZeroX87(*reinterpret_cast<float *>(node + 0x64));
+        vm.timer_accum = rate[0] + vm.timer_accum;
+        vm.timer_cur = ConvertFloatToI32TowardZeroX87(vm.timer_accum);
     } else {
-        *reinterpret_cast<i32 *>(node + 0x60) =
-            *reinterpret_cast<i32 *>(node + 0x60) + 1;
-        *reinterpret_cast<float *>(node + 0x64) =
-            *reinterpret_cast<float *>(node + 0x64) + kUnity;
+        vm.timer_cur = vm.timer_cur + 1;
+        vm.timer_accum = vm.timer_accum + kUnity;
     }
     return 0;
 }
 
 bool DispatchSetupOpcode(u8 *node, u8 *pc)
 {
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(node);
     const u16 opcode = *reinterpret_cast<u16 *>(pc);
     const u16 step = *reinterpret_cast<u16 *>(pc + 2);
     u8 flags = pc[3];
-    u32 &node_flags = *reinterpret_cast<u32 *>(node + 0x35c);
+    u32 &node_flags = vm.flags;
 
     switch (opcode) {
     case 0xffff:
@@ -990,17 +989,17 @@ bool DispatchSetupOpcode(u8 *node, u8 *pc)
         node_flags &= ~1U;
         // fallthrough
     case 2:
-        *reinterpret_cast<u8 **>(node + 0x390) = 0;
+        vm.current_instruction = 0;
         return false;
     case 3:
         node_flags |= 1U;
             BindSubEntry(node, pc);
         return true;
     case 4:
-        ResetVmTimer(node + 0x5c, *reinterpret_cast<i32 *>(pc + 12));
-        *reinterpret_cast<u8 **>(node + 0x390) =
-            *reinterpret_cast<u8 **>(node + 0x38c) +
-            *reinterpret_cast<i32 *>(pc + 8);
+        ResetVmTimer(reinterpret_cast<u8 *>(&vm.timer_prev),
+                     *reinterpret_cast<i32 *>(pc + 12));
+        vm.current_instruction = static_cast<u8 *>(vm.script_base) +
+                                 *reinterpret_cast<i32 *>(pc + 8);
         return true;
     case 5: {
         i32 count = *reinterpret_cast<i32 *>(pc + 8);
@@ -1013,10 +1012,10 @@ bool DispatchSetupOpcode(u8 *node, u8 *pc)
             JumpConditionalFalse(node, pc);
             return true;
         }
-        ResetVmTimer(node + 0x5c, *reinterpret_cast<i32 *>(pc + 16));
-        *reinterpret_cast<u8 **>(node + 0x390) =
-            *reinterpret_cast<u8 **>(node + 0x38c) +
-            *reinterpret_cast<i32 *>(pc + 12);
+        ResetVmTimer(reinterpret_cast<u8 *>(&vm.timer_prev),
+                     *reinterpret_cast<i32 *>(pc + 16));
+        vm.current_instruction = static_cast<u8 *>(vm.script_base) +
+                                 *reinterpret_cast<i32 *>(pc + 12);
         return true;
     }
     case 6: {
@@ -1356,28 +1355,23 @@ bool DispatchSetupOpcode(u8 *node, u8 *pc)
         float x = ResolveFloatOperand(node, pc, 0, 8);
         float *target = 0;
         if ((node_flags & 0x100U) == 0)
-            target = reinterpret_cast<float *>(node + 0x334);
+            target = &vm.base_pos_x;
         else
-            target = reinterpret_cast<float *>(node + 0x34c);
+            target = &vm.alt_pos_x;
         target[0] = x;
         target[1] = y;
         target[2] = z;
         break;
     }
     case 0x31:
-        *reinterpret_cast<float *>(node + 0x24) =
-            ResolveFloatOperand(node, pc, 0, 8);
-        *reinterpret_cast<float *>(node + 0x28) =
-            ResolveFloatOperand(node, pc, 1, 12);
-        *reinterpret_cast<float *>(node + 0x2c) =
-            ResolveFloatOperand(node, pc, 2, 16);
+        vm.rotation_x = ResolveFloatOperand(node, pc, 0, 8);
+        vm.rotation_y = ResolveFloatOperand(node, pc, 1, 12);
+        vm.rotation_z = ResolveFloatOperand(node, pc, 2, 16);
         node_flags |= 4U;
         break;
     case 0x32:
-        *reinterpret_cast<float *>(node + 0x3c) =
-            ResolveFloatOperand(node, pc, 0, 8);
-        *reinterpret_cast<float *>(node + 0x40) =
-            ResolveFloatOperand(node, pc, 1, 12);
+        vm.scale_x = ResolveFloatOperand(node, pc, 0, 8);
+        vm.scale_y = ResolveFloatOperand(node, pc, 1, 12);
         node_flags |= 8U;
         break;
     case 0x33: {
@@ -1395,24 +1389,19 @@ bool DispatchSetupOpcode(u8 *node, u8 *pc)
         break;
     }
     case 0x35:
-        *reinterpret_cast<float *>(node + 0x30) =
-            ResolveFloatOperand(node, pc, 0, 8);
-        *reinterpret_cast<float *>(node + 0x34) =
-            ResolveFloatOperand(node, pc, 1, 12);
-        *reinterpret_cast<float *>(node + 0x38) =
-            ResolveFloatOperand(node, pc, 2, 16);
+        vm.rotation_rate_x = ResolveFloatOperand(node, pc, 0, 8);
+        vm.rotation_rate_y = ResolveFloatOperand(node, pc, 1, 12);
+        vm.rotation_rate_z = ResolveFloatOperand(node, pc, 2, 16);
         node_flags |= 4U;
         break;
     case 0x36:
-        *reinterpret_cast<float *>(node + 0x44) =
-            ResolveFloatOperand(node, pc, 0, 8);
+        vm.scale_rate_x = ResolveFloatOperand(node, pc, 0, 8);
         if (flags & 2U)
-            *reinterpret_cast<float *>(node + 0x48) =
+            vm.scale_rate_y =
                 ReadVmFloatRegister(node, *reinterpret_cast<float *>(pc + 12),
                                     *reinterpret_cast<float *>(pc + 12));
         else
-            *reinterpret_cast<float *>(node + 0x48) =
-                *reinterpret_cast<float *>(pc + 12);
+            vm.scale_rate_y = *reinterpret_cast<float *>(pc + 12);
         break;
     case 0x37:
         StartScalarAnim(node, pc);
@@ -1433,13 +1422,11 @@ bool DispatchSetupOpcode(u8 *node, u8 *pc)
         StartFloat2Anim(node, pc);
         break;
     case 0x3d:
-        *reinterpret_cast<float *>(node + 0x3c) =
-            *reinterpret_cast<float *>(node + 0x3c) * kMirror;
+        vm.scale_x = vm.scale_x * kMirror;
         node_flags = (node_flags ^ 0x200U) | 8U;
         break;
     case 0x3e:
-        *reinterpret_cast<float *>(node + 0x40) =
-            *reinterpret_cast<float *>(node + 0x40) * kMirror;
+        vm.scale_y = vm.scale_y * kMirror;
         node_flags = (node_flags ^ 0x400U) | 8U;
         break;
     case 0x3f:
@@ -1462,7 +1449,7 @@ bool DispatchSetupOpcode(u8 *node, u8 *pc)
         break;
     }
     case 0x44:
-        *reinterpret_cast<u32 *>(node + 0x20) = pc[8];
+        vm.render_kind = pc[8];
         break;
     case 0x45:
         node_flags &= ~1U;
@@ -1470,21 +1457,19 @@ bool DispatchSetupOpcode(u8 *node, u8 *pc)
         return true;
     case 0x46:
         if (flags & 1U)
-            *reinterpret_cast<float *>(node + 0x234) =
+            vm.uv_scroll_rate_x =
                 ReadVmFloatRegister(node, *reinterpret_cast<float *>(pc + 8),
                                     *reinterpret_cast<float *>(pc + 8));
         else
-            *reinterpret_cast<i32 *>(node + 0x234) =
-                *reinterpret_cast<i32 *>(pc + 8);
+            vm.uv_scroll_rate_x = *reinterpret_cast<const float *>(pc + 8);
         break;
     case 0x47:
         if (flags & 1U)
-            *reinterpret_cast<float *>(node + 0x238) =
+            vm.uv_scroll_rate_y =
                 ReadVmFloatRegister(node, *reinterpret_cast<float *>(pc + 8),
                                     *reinterpret_cast<float *>(pc + 8));
         else
-            *reinterpret_cast<i32 *>(node + 0x238) =
-                *reinterpret_cast<i32 *>(pc + 8);
+            vm.uv_scroll_rate_y = *reinterpret_cast<const float *>(pc + 8);
         break;
     case 0x48:
         node_flags ^= (static_cast<u32>(pc[8]) ^ node_flags) & 1U;
@@ -1522,32 +1507,26 @@ bool DispatchSetupOpcode(u8 *node, u8 *pc)
         node_flags ^= (pc[8] << 0xf) & 0x8000U;
         break;
     case 0x51:
-        *reinterpret_cast<i32 *>(node + 0x5c) =
-            *reinterpret_cast<i32 *>(node + 0x368);
-        *reinterpret_cast<i32 *>(node + 0x60) =
-            *reinterpret_cast<i32 *>(node + 0x36c);
-        *reinterpret_cast<i32 *>(node + 0x64) =
-            *reinterpret_cast<i32 *>(node + 0x370);
-        *reinterpret_cast<u32 *>(node + 0x68) =
-            *reinterpret_cast<u32 *>(node + 0x374);
-        *reinterpret_cast<u32 *>(node + 0x6c) =
-            *reinterpret_cast<u32 *>(node + 0x378);
-        *reinterpret_cast<u8 **>(node + 0x390) =
-            *reinterpret_cast<u8 **>(node + 0x37c);
+        vm.timer_prev = vm.saved_timer_prev;
+        vm.timer_cur = vm.saved_timer_cur;
+        vm.timer_accum = vm.saved_timer_accum;
+        vm.timer_rate = vm.saved_timer_rate;
+        vm.timer_flags = vm.saved_timer_flags;
+        vm.current_instruction = vm.saved_script;
         break;
     case 0x52:
         node_flags ^= (pc[8] << 0x1b) & 0x8000000U;
         break;
     case 0x53:
-        std::memcpy(node + 0x334, node + 0x340, 12);
-        *reinterpret_cast<i32 *>(node + 0x340) = 0;
-        *reinterpret_cast<i32 *>(node + 0x344) = 0;
-        *reinterpret_cast<i32 *>(node + 0x348) = 0;
+        std::memcpy(&vm.base_pos_x, &vm.delta_pos_x, 12);
+        vm.delta_pos_x = 0.0f;
+        vm.delta_pos_y = 0.0f;
+        vm.delta_pos_z = 0.0f;
         break;
     case 0x54: {
         i32 count = ResolveIntOperand(node, pc, 0, 8);
         node_flags = node_flags & 0xfe7fffffU | 0x2400000U;
-        *reinterpret_cast<void **>(node + 0x358) =
+        vm.vertex_buffer =
             std::malloc(static_cast<size_t>(count) * 0x38U);
         break;
     }
@@ -1565,10 +1544,10 @@ bool DispatchSetupOpcode(u8 *node, u8 *pc)
     case 0x58: {
         i32 entry = ResolveIntOperand(node, pc, 0, 8);
         i32 *created = SpawnSetupEffectVmListABack(
-            entry, *reinterpret_cast<u32 *>(node + 0x20));
+            entry, vm.render_kind);
         u8 *child = static_cast<u8 *>(
             RefreshTimelineTextHandle(reinterpret_cast<void **>(created)));
-        LinkChildNode(node + 0x10, child);
+        LinkChildNode(reinterpret_cast<u8 *>(&vm.child_head), child);
         CopyCreatedObjectVectors(node, child, true);
         break;
     }
@@ -1579,30 +1558,30 @@ bool DispatchSetupOpcode(u8 *node, u8 *pc)
     case 0x5a: {
         i32 entry = ResolveIntOperand(node, pc, 0, 8);
         i32 *created = SpawnSetupEffectVmListBBack(
-            entry, *reinterpret_cast<u32 *>(node + 0x20));
+            entry, vm.render_kind);
         u8 *child = static_cast<u8 *>(
             RefreshTimelineTextHandle(reinterpret_cast<void **>(created)));
-        LinkChildNode(node + 0x10, child);
+        LinkChildNode(reinterpret_cast<u8 *>(&vm.child_head), child);
         CopyCreatedObjectVectors(node, child, true);
         break;
     }
     case 0x5b: {
         i32 entry = ResolveIntOperand(node, pc, 0, 8);
         i32 *created = SpawnSetupEffectVmListAFront(
-            entry, *reinterpret_cast<u32 *>(node + 0x20));
+            entry, vm.render_kind);
         u8 *child = static_cast<u8 *>(
             RefreshTimelineTextHandle(reinterpret_cast<void **>(created)));
-        LinkChildNode(node + 0x10, child);
+        LinkChildNode(reinterpret_cast<u8 *>(&vm.child_head), child);
         CopyCreatedObjectVectors(node, child, false);
         break;
     }
     case 0x5c: {
         i32 entry = ResolveIntOperand(node, pc, 0, 8);
         i32 *created = SpawnSetupEffectVmListBFront(
-            entry, *reinterpret_cast<u32 *>(node + 0x20));
+            entry, vm.render_kind);
         u8 *child = static_cast<u8 *>(
             RefreshTimelineTextHandle(reinterpret_cast<void **>(created)));
-        LinkChildNode(node + 0x10, child);
+        LinkChildNode(reinterpret_cast<u8 *>(&vm.child_head), child);
         CopyCreatedObjectVectors(node, child, false);
         break;
     }
@@ -1610,7 +1589,7 @@ bool DispatchSetupOpcode(u8 *node, u8 *pc)
         JumpConditionalFalse(node, pc);
         return true;
     }
-    *reinterpret_cast<u8 **>(node + 0x390) = pc + step;
+    vm.current_instruction = pc + step;
     return true;
 }
 
@@ -1619,22 +1598,23 @@ bool DispatchSetupOpcode(u8 *node, u8 *pc)
 i32 FinalizeTimelineRenderObjectSetup(void *node_memory)
 {
     u8 *const node = static_cast<u8 *>(node_memory);
-    if (*reinterpret_cast<u8 **>(node + 0x390) == 0)
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(node);
+    if (vm.current_instruction == 0)
         return 1;
-    if (*reinterpret_cast<u32 *>(node + 0x35c) & 0x20000U)
+    if (vm.flags & 0x20000U)
         return 0;
 
     const float saved_scale = g_MainChainStartupScale;
-    if (*reinterpret_cast<u32 *>(node + 0x35c) & 0x20000000U)
+    if (vm.flags & 0x20000000U)
         g_MainChainStartupScale = kUnity;
 
-    if (*reinterpret_cast<short *>(node + 0x304) != 0)
+    if (vm.state_word != 0)
         RestartKindScript(node);
 
     for (;;) {
-        u8 *const pc = *reinterpret_cast<u8 **>(node + 0x390);
+        u8 *const pc = static_cast<u8 *>(vm.current_instruction);
         const i32 limit = static_cast<i32>(*reinterpret_cast<const short *>(pc + 4));
-        if (*reinterpret_cast<i32 *>(node + 0x60) >= limit)
+        if (vm.timer_cur >= limit)
             break;
         if (!DispatchSetupOpcode(node, pc)) {
             g_MainChainStartupScale = saved_scale;

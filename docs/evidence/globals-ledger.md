@@ -500,3 +500,14 @@ ABI 语法经验：__usercall 必须带返回位置注解（@<eax>），否则�
 | 0x474488 | g_ExtendScoreTableB | int[3] {3000000, 10000000, 1000000000} | 同上；rank 门 bit 0x20 清零且 DAT_00474C74==4 时选用 |
 
 两表已 set_type 为 int 数组并加重复注释。
+
+## 裸偏移→struct 字段改写（第三轮，2026-10-01）
+
+源码侧把 0x3AC VmRecord 与 0x48 GameContext 的裸 `+ 0x...` 访问改写为命名字段访问。33 个 cpp、约 550 处访问转换，全部单文件编译 + 全量脚本验证（227 obj，仅 SceneTriggerUpdate.cpp 两个预存 C4700 警告）。
+
+- GameContext 族（7 文件）：PlayerStageHelpers（含新提取的 TimerNode 视图，ResetTimerNode 同时服务 ctx+0x14 与 enemy+0x3f8）、SceneTriggerPopup、PlayerDamageOutput、PlayerModeDispatcher（deathbomb 门）、GameContextLifecycle、ManagerReleaseWrappers（calc_record/draw_record）、EclScriptLibrary（g_StageNode 门）。
+- VmRecord 族（26 文件）：实体/效果池族、ASCII 渲染族（Mode8/Mode9/Glyph/Projected/Traversal 等 10 文件）、时间轴/舞台族（TimelineRenderObjectSetup 约 230 处、StageObjectVtable、SpellBulletVtable 等 9 文件）。所有转换经函数级 `VmRecord &vm = *reinterpret_cast<VmRecord *>(...)` 视图完成，ABI 注释与语句顺序原样保留。
+- 结构修正（本轮发现并修入两处）：Vec3InterpBlock 的 timer 实为 4 个 dword（证据：三个块 flags 均在 base+0x40，即 0xb0/0xfc），此前误作 timer[3]+field_0048；GameContext 内嵌 TimerNode（源码与 IDB 同步）。0x6c/0xb0/0xfc/0x128/0x174/0x1b0/0x1fc/0x228/0x378 旗标表独立印证了块内偏移。
+- 刻意保留的裸访问类别：子 dword 颜色字节（0x2ff/0x303）、u32 位模式写入 float 字段（0x3c/0x40/0x2c/0x34/0x38，字段赋值会改变语义）、数组驱动的批量清零/旗标循环、块指针参数化的插值器内部、以及上下文不足以归属对象类型的访问。
+
+剩余裸偏移热点（下一批候选）：RenderOwner 侧 +0x3ada60 族与 +0x72dad4 族（源码已有 LargeRenderOwnerLayout 骨架但未统一引用）、GameManager/管理器槽位、player 对象。

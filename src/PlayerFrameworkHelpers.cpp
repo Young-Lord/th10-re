@@ -6,6 +6,7 @@
 #include "TimelineRenderObjectSetup.hpp"
 #include "PlayerShotSpawner.hpp"
 #include "BgmRuntime.hpp"
+#include "VmRecord.hpp"
 
 #include <cmath>
 #include <string.h>
@@ -55,16 +56,6 @@ inline float ReadFloat(const u8 *bytes, u32 offset)
 inline void WriteFloat(u8 *bytes, u32 offset, float value)
 {
     *reinterpret_cast<float *>(bytes + offset) = value;
-}
-
-inline u32 ReadUint(const u8 *bytes, u32 offset)
-{
-    return *reinterpret_cast<const u32 *>(bytes + offset);
-}
-
-inline void WriteUint(u8 *bytes, u32 offset, u32 value)
-{
-    *reinterpret_cast<u32 *>(bytes + offset) = value;
 }
 
 inline u32 ReadUintAt(const u8 *bytes, u32 offset)
@@ -123,11 +114,13 @@ void RefreshLifeIconsEaxStackAbi(i32 count)
 {
     u8 *const hud = static_cast<u8 *>(g_AsciiHudOwner);
     for (i32 index = 0; index < count && index < 9; ++index)
-        *reinterpret_cast<u32 *>(hud + 0x4cdc + index * 0x3ac) |= 2;
+        reinterpret_cast<VmRecord *>(hud + 0x4cdc + index * 0x3ac)
+            ->entity_id |= 2;
     if (count > 8)
         return;
     for (i32 index = count < 0 ? 0 : count; index < 9; ++index)
-        *reinterpret_cast<u32 *>(hud + 0x4cdc + index * 0x3ac) &= ~2U;
+        reinterpret_cast<VmRecord *>(hud + 0x4cdc + index * 0x3ac)
+            ->entity_id &= ~2U;
 }
 
 // TH10 0x00424650. Shortens the lifetime of the texts already on the
@@ -258,7 +251,8 @@ void SpawnExplosionParticleEaxEcxEfxAbi(void *manager_memory,
         // stack=context, EAX=script id.
         InitializePlayerMainVmEsiStackAbi(record + 0x14, manager,
                                           script_id);
-        WriteInt(record, 0x2fc, static_cast<i32>(color));
+        VmRecord &record_vm = *reinterpret_cast<VmRecord *>(record);
+        record_vm.primary_color = color;
         return;
     }
 }
@@ -295,9 +289,9 @@ void RunGameOverPathBStackAbi(void *manager_memory, i32 param)
 
     for (u32 pass = 0; pass != 2; ++pass) {
         void *const vm = AllocatePoolVmEsiAbi(g_MainChainRenderOwner);
-        *reinterpret_cast<u32 *>(static_cast<u8 *>(vm) + 0x35c) |=
-            0x40000000U;
-        *reinterpret_cast<u32 *>(static_cast<u8 *>(vm) + 0x20) = 0xf;
+        VmRecord &vm_record = *reinterpret_cast<VmRecord *>(vm);
+        vm_record.flags |= 0x40000000U;
+        vm_record.render_kind = 0xf;
         AssignPoolVmScriptEcxEaxAbi(vm, pass == 0 ? 0 : 0x80);
         u32 overlay_id = 0;
         AttachEffectVmToListB(&overlay_id, vm, g_MainChainRenderOwner);
@@ -325,6 +319,7 @@ void BindEffectScriptContextEaxEcxDxAbi(void *context_memory,
                                         i32 script_index, void *vm_memory)
 {
     u8 *const vm = static_cast<u8 *>(vm_memory);
+    VmRecord &rec = *reinterpret_cast<VmRecord *>(vm);
     u8 *const context = static_cast<u8 *>(context_memory);
     void *const script_list =
         *reinterpret_cast<void *const *>(context + 0x11c);
@@ -336,25 +331,23 @@ void BindEffectScriptContextEaxEcxDxAbi(void *context_memory,
         memset(vm, 0, 0x3ac);
         return;
     }
-    *reinterpret_cast<u16 *>(vm + 0x38a) =
-        static_cast<u16>(script_index);
-    *reinterpret_cast<u16 *>(vm + 0x386) =
-        *reinterpret_cast<const u16 *>(context);
-    WriteUint(vm, 0x308, reinterpret_cast<u32>(context));
-    WriteUint(vm, 0x35c, ReadUint(vm, 0x35c) & ~0x600U);
-    WriteUint(vm, 0x38c, reinterpret_cast<u32>(script));
-    WriteUint(vm, 0x390, reinterpret_cast<u32>(script));
-    if ((ReadUint(vm, 0x6c) & 1) == 0) {
-        WriteUint(vm, 0x60, 0);
-        WriteUint(vm, 0x5c, 0xfff0bdc1U);
-        WriteUint(vm, 0x64, 0);
-        *reinterpret_cast<const float **>(vm + 0x68) = &g_FrameTimeScale;
-        WriteUint(vm, 0x6c, ReadUint(vm, 0x6c) | 1);
+    rec.bound_script_id = static_cast<u16>(script_index);
+    rec.bound_file_id = *reinterpret_cast<const u16 *>(context);
+    rec.bound_resource = context;
+    rec.flags &= ~0x600U;
+    rec.script_base = script;
+    rec.current_instruction = script;
+    if ((rec.timer_flags & 1) == 0) {
+        rec.timer_cur = 0;
+        rec.timer_prev = static_cast<i32>(0xfff0bdc1U);
+        rec.timer_accum = 0.0f;
+        rec.timer_rate = &g_FrameTimeScale;
+        rec.timer_flags |= 1;
     }
-    WriteUint(vm, 0x60, 0);
-    WriteUint(vm, 0x64, 0);
-    WriteUint(vm, 0x5c, 0xffffffffU);
-    WriteUint(vm, 0x35c, ReadUint(vm, 0x35c) & ~1U);
+    rec.timer_cur = 0;
+    rec.timer_accum = 0.0f;
+    rec.timer_prev = static_cast<i32>(0xffffffffU);
+    rec.flags &= ~1U;
     (void)script_index;
     (void)FinalizeTimelineRenderObjectSetup(vm);
     *reinterpret_cast<u32 *>(static_cast<u8 *>(g_MainChainRenderOwner) +

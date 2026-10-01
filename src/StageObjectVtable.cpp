@@ -34,6 +34,7 @@
 #include "Th10Types.hpp"
 #include "TimelineRenderObjectSetup.hpp"
 #include "TitleBulletUpdate.hpp"
+#include "VmRecord.hpp"
 #include "ZunMath.hpp"
 
 #include <cmath>
@@ -194,11 +195,12 @@ i32 TH10_STDCALL ClassifyPositionInPlayerRegionEaxEcxStackAbi(
 void SpawnRingEffectVm(i32 script_index, const float position[3], float z)
 {
     u8 *rec = static_cast<u8 *>(AllocatePoolVmEsiAbi(g_MainChainRenderOwner));
-    StoreU32At(rec, 0x35cU, LoadU32At(rec, 0x35cU) | 0x40000000U);
-    StoreU32At(rec, 0x20U, 0U);
-    StoreFloatAt(rec, 0x340U, position[0] + kSpawnZ);
-    StoreFloatAt(rec, 0x344U, position[1] + kTipGateZ);
-    StoreFloatAt(rec, 0x348U, z);
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(rec);
+    vm.flags |= 0x40000000U;
+    vm.render_kind = 0U;
+    vm.delta_pos_x = position[0] + kSpawnZ;
+    vm.delta_pos_y = position[1] + kTipGateZ;
+    vm.delta_pos_z = z;
     void *anm_work = *reinterpret_cast<void **>(
         static_cast<u8 *>(g_BulletManagerSlot) + 0x458U);
     AssignAnmScriptToVmEcxEaxBbxAbi(anm_work, rec, script_index);
@@ -332,16 +334,22 @@ namespace {
 // every stored value except the trailing word is erased; the order is kept.
 void ResetVmRecord(u8 *record)
 {
-    static const u32 kFlagOffsets[9] = {
-        0x06cU, 0x0b0U, 0x0fcU, 0x128U, 0x174U, 0x1b0U, 0x1fcU, 0x228U,
-        0x378U
-    };
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(record);
+    u32 *const flag_slots[9] = {
+        &vm.timer_flags,         // 0x06c
+        &vm.position_anim.flags, // 0x0b0
+        &vm.rgb_anim_1.flags,    // 0x0fc
+        &vm.alpha_anim_1.flags,  // 0x128
+        &vm.rotation_anim.flags, // 0x174
+        &vm.scale_anim.flags,    // 0x1b0
+        &vm.rgb_anim_2.flags,    // 0x1fc
+        &vm.alpha_anim_2.flags,  // 0x228
+        &vm.saved_timer_flags};  // 0x378
     for (u32 i = 0; i < 9U; ++i) {
-        StoreU32At(record, kFlagOffsets[i],
-                   LoadU32At(record, kFlagOffsets[i]) & 0xFFFFFFFEU);
+        *flag_slots[i] &= 0xFFFFFFFEU;
     }
     ZeroBlock(record, 0x3acU);
-    StoreU16At(record, 0x384U, 0xFFFFU);
+    vm.sprite_entry_id = 0xFFFFU;
 }
 
 } // namespace
@@ -438,6 +446,7 @@ i32 TH10_STDCALL StageObjectSpawnDescriptorA(void *object,
     // VM 1: script = DAT_00474170[(i16)+0x448] + (i16)+0x44a.
     {
         u8 *rec = obj + kSobOffRecA_A;
+        VmRecord &rec_vm = *reinterpret_cast<VmRecord *>(rec);
         const i16 slot = static_cast<i16>(LoadU16At(obj, 0x448U));
         const i16 kind = static_cast<i16>(LoadU16At(obj, 0x44aU));
         const i32 script = static_cast<i32>(
@@ -445,25 +454,22 @@ i32 TH10_STDCALL StageObjectSpawnDescriptorA(void *object,
             + kind;
         InitializePlayerMainVmEsiStackAbi(rec, anm_work, script);
         FinalizeTimelineRenderObjectSetup(rec);
-        StoreU16At(obj, 0x904U, 2); // rec1+0x304 mode word
+        rec_vm.state_word = 2; // rec1+0x304 mode word
         if ((LoadU32At(obj, 0x44cU) & 1U) != 0U)
-            StoreU32At(rec, 0x35cU,
-                       (LoadU32At(rec, 0x35cU) & 0xFFFFFFDFU) | 0x10U);
-        StoreU32At(obj, 0x95cU,
-                   (LoadU32At(obj, 0x95cU) & 0xFC63FFFFU) | 0x600000U);
+            rec_vm.flags = (rec_vm.flags & 0xFFFFFFDFU) | 0x10U;
+        rec_vm.flags = (rec_vm.flags & 0xFC63FFFFU) | 0x600000U;
     }
 
     // VM 2: script = (i16)+0x44a + 0x103.
     {
         u8 *rec = obj + kSobOffRecA_B;
+        VmRecord &rec_vm = *reinterpret_cast<VmRecord *>(rec);
         const i16 kind = static_cast<i16>(LoadU16At(obj, 0x44aU));
         InitializePlayerMainVmEsiStackAbi(rec, anm_work, kind + 0x103);
         FinalizeTimelineRenderObjectSetup(rec);
-        StoreU16At(obj, 0xcb0U, 2); // rec2+0x304 mode word
-        StoreU32At(rec, 0x35cU,
-                   (LoadU32At(rec, 0x35cU) & 0xFFFFFFDFU) | 0x10U);
-        StoreU32At(obj, 0xd08U,
-                   (LoadU32At(obj, 0xd08U) & 0xFC7FFFFFU) | 0x400000U);
+        rec_vm.state_word = 2; // rec2+0x304 mode word
+        rec_vm.flags = (rec_vm.flags & 0xFFFFFFDFU) | 0x10U;
+        rec_vm.flags = (rec_vm.flags & 0xFC7FFFFFU) | 0x400000U;
     }
 
     // Lazy timer arm (+0x410 record), then the spawn defaults.
@@ -515,28 +521,26 @@ i32 TH10_STDCALL StageObjectSpawnDescriptorB(void *object,
 
     {
         u8 *rec = obj + kSobOffRecB_A;
+        VmRecord &rec_vm = *reinterpret_cast<VmRecord *>(rec);
         const i32 script = static_cast<i32>(
             LoadU32At(g_TriggerVmScriptTable, 4U * static_cast<u32>(slot)))
             + kind;
         InitializePlayerMainVmEsiStackAbi(rec, anm_work, script);
         FinalizeTimelineRenderObjectSetup(rec);
-        StoreU16At(obj, 0x920U, 2); // rec1+0x304
+        rec_vm.state_word = 2; // rec1+0x304
         if ((LoadU32At(obj, 0x468U) & 2U) != 0U)
-            StoreU32At(rec, 0x35cU,
-                       (LoadU32At(rec, 0x35cU) & 0xFFFFFFDFU) | 0x10U);
-        StoreU32At(obj, 0x978U,
-                   (LoadU32At(obj, 0x978U) & 0xFC63FFFFU) | 0x600000U);
+            rec_vm.flags = (rec_vm.flags & 0xFFFFFFDFU) | 0x10U;
+        rec_vm.flags = (rec_vm.flags & 0xFC63FFFFU) | 0x600000U;
     }
 
     {
         u8 *rec = obj + kSobOffRecB_B;
+        VmRecord &rec_vm = *reinterpret_cast<VmRecord *>(rec);
         InitializePlayerMainVmEsiStackAbi(rec, anm_work, kind + 0x103);
         FinalizeTimelineRenderObjectSetup(rec);
-        StoreU16At(obj, 0xcccU, 2); // rec2+0x304
-        StoreU32At(rec, 0x35cU,
-                   (LoadU32At(rec, 0x35cU) & 0xFFFFFFDFU) | 0x10U);
-        StoreU32At(obj, 0xd24U,
-                   (LoadU32At(obj, 0xd24U) & 0xFC7FFFFFU) | 0x400000U);
+        rec_vm.state_word = 2; // rec2+0x304
+        rec_vm.flags = (rec_vm.flags & 0xFFFFFFDFU) | 0x10U;
+        rec_vm.flags = (rec_vm.flags & 0xFC7FFFFFU) | 0x400000U;
     }
 
     StoreFloatAt(obj, kSobOffPos + 0x00U, LoadFloatAt(obj, kSobOffDesc + 0U));
@@ -714,16 +718,15 @@ i32 TH10_STDCALL StageObjectUpdateA(void *object)
     // VM position publication and ticks.
     {
         u8 *rec1 = obj + kSobOffRecA_A;
-        const u32 scale_ptr = LoadU32At(rec1, 0x394U);
-        StoreU32At(rec1, 0x35cU, LoadU32At(rec1, 0x35cU) | 8U);
-        StoreFloatAt(rec1, 0x3cU,
-                     LoadFloatAt(obj, kSobOffAlpha)
-                         / LoadFloatAt(reinterpret_cast<void *>(scale_ptr),
-                                       0x34U));
-        StoreFloatAt(rec1, 0x40U,
-                     LoadFloatAt(obj, kSobOffDepth)
-                         / LoadFloatAt(reinterpret_cast<void *>(scale_ptr),
-                                       0x30U));
+        VmRecord &rec_vm = *reinterpret_cast<VmRecord *>(rec1);
+        const void *scale_ptr = rec_vm.anim_entry;
+        rec_vm.flags |= 8U;
+        rec_vm.scale_x =
+            LoadFloatAt(obj, kSobOffAlpha)
+                / LoadFloatAt(scale_ptr, 0x34U);
+        rec_vm.scale_y =
+            LoadFloatAt(obj, kSobOffDepth)
+                / LoadFloatAt(scale_ptr, 0x30U);
         FinalizeTimelineRenderObjectSetup(rec1);
         if (LoadFloatAt(obj, kSobOffZVel) == kZero)
             FinalizeTimelineRenderObjectSetup(obj + kSobOffRecA_B);
@@ -1287,16 +1290,15 @@ i32 TH10_STDCALL StageObjectUpdateB(void *object)
     // VM publication (kind B record bases).
     {
         u8 *rec1 = obj + kSobOffRecB_A;
-        const u32 scale_ptr = LoadU32At(rec1, 0x394U);
-        StoreU32At(rec1, 0x35cU, LoadU32At(rec1, 0x35cU) | 8U);
-        StoreFloatAt(rec1, 0x3cU,
-                     LoadFloatAt(obj, kSobOffAlpha)
-                         / LoadFloatAt(reinterpret_cast<void *>(scale_ptr),
-                                       0x34U));
-        StoreFloatAt(rec1, 0x40U,
-                     LoadFloatAt(obj, kSobOffDepth)
-                         / LoadFloatAt(reinterpret_cast<void *>(scale_ptr),
-                                       0x30U));
+        VmRecord &rec_vm = *reinterpret_cast<VmRecord *>(rec1);
+        const void *scale_ptr = rec_vm.anim_entry;
+        rec_vm.flags |= 8U;
+        rec_vm.scale_x =
+            LoadFloatAt(obj, kSobOffAlpha)
+                / LoadFloatAt(scale_ptr, 0x34U);
+        rec_vm.scale_y =
+            LoadFloatAt(obj, kSobOffDepth)
+                / LoadFloatAt(scale_ptr, 0x30U);
         FinalizeTimelineRenderObjectSetup(rec1);
         if (LoadFloatAt(obj, kSobOffZVel) == kZero)
             FinalizeTimelineRenderObjectSetup(obj + kSobOffRecB_B);

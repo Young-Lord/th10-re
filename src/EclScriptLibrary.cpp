@@ -2,6 +2,7 @@
 
 #include "EclScriptVm.hpp"
 #include "EntityHelpers.hpp"
+#include "GameContext.hpp"
 #include "TimelineRenderObjectSetup.hpp"
 #include "PlayerMotionHelpers.hpp"
 #include "PlayerTimerHelpers.hpp"
@@ -445,8 +446,10 @@ i32 RunEclScriptSetupStackAbi(void *sub_record)
     // +0x144c) into +0xf4 and rebind the first entity slot. With no active
     // stage node the 0x200000 path clears bits 0x200000|1 instead.
     if ((flags & 0x100000U) != 0U) {
-        const u32 stage_active =
-            LoadU32(reinterpret_cast<const u8 *>(g_StageNode), 0x28U);
+        // g_StageNode holds the 0x48-byte game context (DAT_004776ec); the
+        // +0x28 popup-state dword doubles as the stage-active gate.
+        GameContext &stage_ctx = *static_cast<GameContext *>(g_StageNode);
+        const u32 stage_active = stage_ctx.popup_state;
         if (stage_active == 0U) {
             if ((flags & 0x200000U) != 0U) {
                 const u32 id = LoadU32(rec, 0x144cU);

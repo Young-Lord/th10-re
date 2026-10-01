@@ -6,6 +6,7 @@
 #include "ManagerWork.hpp"
 #include "StageEffectHelpers.hpp"
 #include "TimelineRenderObjectSetup.hpp"
+#include "VmRecord.hpp"
 
 namespace th10 {
 
@@ -77,27 +78,27 @@ void *NodeFromLink(OwnerLink *link)
 
 i32 ReadHandle(const void *node)
 {
-    return *reinterpret_cast<const i32 *>(static_cast<const u8 *>(node));
+    return static_cast<const VmRecord *>(node)->entity_id;
 }
 
 void WriteHandle(void *node, i32 handle)
 {
-    *reinterpret_cast<i32 *>(static_cast<u8 *>(node)) = handle;
+    static_cast<VmRecord *>(node)->entity_id = handle;
 }
 
 u32 &NodeFlags(void *node)
 {
-    return *reinterpret_cast<u32 *>(static_cast<u8 *>(node) + 0x35c);
+    return static_cast<VmRecord *>(node)->flags;
 }
 
 u16 &NodeKind(void *node)
 {
-    return *reinterpret_cast<u16 *>(static_cast<u8 *>(node) + 0x304);
+    return static_cast<VmRecord *>(node)->state_word;
 }
 
 u32 &NodeKindField(void *node)
 {
-    return *reinterpret_cast<u32 *>(static_cast<u8 *>(node) + 0x20);
+    return static_cast<VmRecord *>(node)->render_kind;
 }
 
 void *FindNodeByHandle(const void *owner, i32 handle)
@@ -122,10 +123,10 @@ void *FindNodeByHandle(const void *owner, i32 handle)
 void MarkNodeForRelease(void *node)
 {
     NodeFlags(node) |= 0x4000000U;
-    if (*reinterpret_cast<const i32 *>(static_cast<const u8 *>(node) + 0x18) != 0)
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(node);
+    if (vm.parent_link != 0)
         return;
-    for (OwnerLink *link = *reinterpret_cast<OwnerLink **>(
-             static_cast<u8 *>(node) + 0x14);
+    for (OwnerLink *link = static_cast<OwnerLink *>(vm.first_child);
          link != 0; link = link->next) {
         NodeFlags(NodeFromLink(link)) |= 0x4000000U;
     }
@@ -134,10 +135,10 @@ void MarkNodeForRelease(void *node)
 void MarkNodeKind(void *node, u16 kind)
 {
     NodeKind(node) = kind;
-    if (*reinterpret_cast<const i32 *>(static_cast<const u8 *>(node) + 0x18) != 0)
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(node);
+    if (vm.parent_link != 0)
         return;
-    for (OwnerLink *link = *reinterpret_cast<OwnerLink **>(
-             static_cast<u8 *>(node) + 0x14);
+    for (OwnerLink *link = static_cast<OwnerLink *>(vm.first_child);
          link != 0; link = link->next) {
         NodeKind(NodeFromLink(link)) = kind;
     }
@@ -179,23 +180,29 @@ void *AllocateRenderOwnerNode(void *owner)
 void RegisterRenderOwnerNode(void *owner, void *node)
 {
     RenderOwnerAccess access(owner);
-    OwnerLink *const link = reinterpret_cast<OwnerLink *>(
-        static_cast<u8 *>(node) + 0x4);
-    link->self_node = node;
-    link->next = 0;
-    link->previous = 0;
+    // The intrusive list node is the record's {link_self, link_next,
+    // link_prev} trio at record+4.
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(node);
+    vm.link_self = node;
+    vm.link_next = 0;
+    vm.link_prev = 0;
     if (access.first_list_a() == 0) {
-        *reinterpret_cast<OwnerLink **>(const_cast<u8 *>(access.base) + 0x72dad4) = link;
+        *reinterpret_cast<OwnerLink **>(const_cast<u8 *>(access.base) + 0x72dad4) =
+            reinterpret_cast<OwnerLink *>(&vm.link_self);
     } else {
         OwnerLink *const tail = *access.last_list_a();
-        if (tail->next != 0) {
-            link->next = tail->next;
-            tail->next->previous = link;
+        VmRecord &tail_vm = *reinterpret_cast<VmRecord *>(
+            reinterpret_cast<u8 *>(tail) - 0x04);
+        if (tail_vm.link_next != 0) {
+            vm.link_next = tail_vm.link_next;
+            reinterpret_cast<VmRecord *>(
+                static_cast<u8 *>(tail_vm.link_next) - 0x04)
+                ->link_prev = &vm.link_self;
         }
-        tail->next = link;
-        link->previous = tail;
+        tail_vm.link_next = &vm.link_self;
+        vm.link_prev = &tail_vm.link_self;
     }
-    *access.last_list_a() = link;
+    *access.last_list_a() = reinterpret_cast<OwnerLink *>(&vm.link_self);
 
     i32 handle = *access.next_handle() + 1;
     *access.next_handle() = handle;
@@ -215,16 +222,16 @@ void *CreateRegisteredRenderOwnerNode(void *owner)
 
 void ZeroRenderObjectVectors(void *node)
 {
-    u8 *const base = static_cast<u8 *>(node);
-    *reinterpret_cast<u32 *>(base + 0x340) = 0;
-    *reinterpret_cast<u32 *>(base + 0x344) = 0;
-    *reinterpret_cast<u32 *>(base + 0x348) = 0;
-    *reinterpret_cast<u32 *>(base + 0x334) = 0;
-    *reinterpret_cast<u32 *>(base + 0x338) = 0;
-    *reinterpret_cast<u32 *>(base + 0x33c) = 0;
-    *reinterpret_cast<u32 *>(base + 0x34c) = 0;
-    *reinterpret_cast<u32 *>(base + 0x350) = 0;
-    *reinterpret_cast<u32 *>(base + 0x354) = 0;
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(node);
+    vm.delta_pos_x = 0.0f;
+    vm.delta_pos_y = 0.0f;
+    vm.delta_pos_z = 0.0f;
+    vm.base_pos_x = 0.0f;
+    vm.base_pos_y = 0.0f;
+    vm.base_pos_z = 0.0f;
+    vm.alt_pos_x = 0.0f;
+    vm.alt_pos_y = 0.0f;
+    vm.alt_pos_z = 0.0f;
 }
 
 void ClearRenderObjectNode(void *node)
@@ -236,25 +243,25 @@ void ClearRenderObjectNode(void *node)
 
 void InitializeRenderObjectTimerBlock(void *node)
 {
-    u8 *const base = static_cast<u8 *>(node);
-    u32 flags = *reinterpret_cast<u32 *>(base + 0x6c);
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(node);
+    u32 flags = vm.timer_flags;
     if ((flags & 1U) == 0) {
-        *reinterpret_cast<i32 *>(base + 0x60) = 0;
-        *reinterpret_cast<i32 *>(base + 0x5c) = static_cast<i32>(0xfff0bdc1U);
-        *reinterpret_cast<i32 *>(base + 0x64) = 0;
-        *reinterpret_cast<const float **>(base + 0x68) = &g_MainChainStartupScale;
-        *reinterpret_cast<u32 *>(base + 0x6c) = flags | 1U;
+        vm.timer_cur = 0;
+        vm.timer_prev = static_cast<i32>(0xfff0bdc1U);
+        vm.timer_accum = 0.0f;
+        vm.timer_rate = &g_MainChainStartupScale;
+        vm.timer_flags = flags | 1U;
     }
-    *reinterpret_cast<i32 *>(base + 0x60) = 0;
-    *reinterpret_cast<i32 *>(base + 0x64) = 0;
-    *reinterpret_cast<i32 *>(base + 0x5c) = -1;
+    vm.timer_cur = 0;
+    vm.timer_accum = 0.0f;
+    vm.timer_prev = -1;
     NodeFlags(node) &= ~1U;
 }
 
 bool BindTimelineRenderObjectFromManagerWork(ManagerWorkPartial *manager_work,
                                              u32 clone_index, void *node)
 {
-    u8 *const dest = static_cast<u8 *>(node);
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(node);
     void **const table = reinterpret_cast<void **>(
         manager_work->output_pointer_list_011c);
     void *const table_entry = table[clone_index];
@@ -263,13 +270,12 @@ bool BindTimelineRenderObjectFromManagerWork(ManagerWorkPartial *manager_work,
     if (manager_work->active_cursor != 0)
         return false;
 
-    *reinterpret_cast<u16 *>(dest + 0x38a) = static_cast<u16>(clone_index);
-    *reinterpret_cast<u16 *>(dest + 0x386) =
-        *reinterpret_cast<u16 *>(manager_work);
-    *reinterpret_cast<void **>(dest + 0x308) = manager_work;
+    vm.bound_script_id = static_cast<u16>(clone_index);
+    vm.bound_file_id = *reinterpret_cast<const u16 *>(manager_work);
+    vm.bound_resource = manager_work;
     NodeFlags(node) &= ~0x600U;
-    *reinterpret_cast<void **>(dest + 0x38c) = table_entry;
-    *reinterpret_cast<void **>(dest + 0x390) = table_entry;
+    vm.script_base = table_entry;
+    vm.current_instruction = table_entry;
     InitializeRenderObjectTimerBlock(node);
     FinalizeTimelineRenderObjectSetup(node);
     ++(*RenderOwnerAccess(g_MainChainRenderOwner).live_object_count());
@@ -279,10 +285,11 @@ bool BindTimelineRenderObjectFromManagerWork(ManagerWorkPartial *manager_work,
 void ApplyTimelineRenderObjectClone(void *destination, ManagerWorkPartial *source,
                                     u16 clone_field)
 {
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(destination);
     ZeroRenderObjectVectors(destination);
     NodeFlags(destination) |= 0x40000000U;
-    *reinterpret_cast<u8 *>(static_cast<u8 *>(destination) + 0x3a0) = 0x10;
-    *reinterpret_cast<u8 *>(static_cast<u8 *>(destination) + 0x3a1) = 0x10;
+    vm.anim_field_3a0 = 0x10;
+    vm.anim_field_3a1 = 0x10;
     if (!BindTimelineRenderObjectFromManagerWork(source, clone_field, destination))
         ClearRenderObjectNode(destination);
 }
@@ -290,7 +297,7 @@ void ApplyTimelineRenderObjectClone(void *destination, ManagerWorkPartial *sourc
 void BindTimelineContinuationFromManagerWork(void *manager_work, u32 kind,
                                              void *node)
 {
-    u8 *const dest = static_cast<u8 *>(node);
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(node);
     ManagerWorkPartial *const work =
         reinterpret_cast<ManagerWorkPartial *>(manager_work);
     void **const table = reinterpret_cast<void **>(
@@ -302,13 +309,12 @@ void BindTimelineContinuationFromManagerWork(void *manager_work, u32 kind,
     }
 
     ResetPooledRenderOwnerNodeEsiEdiAbi(g_MainChainRenderOwner, node);
-    *reinterpret_cast<u16 *>(dest + 0x38a) = static_cast<u16>(kind);
-    *reinterpret_cast<u16 *>(dest + 0x386) =
-        *reinterpret_cast<u16 *>(manager_work);
-    *reinterpret_cast<void **>(dest + 0x308) = manager_work;
+    vm.bound_script_id = static_cast<u16>(kind);
+    vm.bound_file_id = *reinterpret_cast<const u16 *>(manager_work);
+    vm.bound_resource = manager_work;
     NodeFlags(node) &= ~0x600U;
-    *reinterpret_cast<void **>(dest + 0x38c) = table_entry;
-    *reinterpret_cast<void **>(dest + 0x390) = table_entry;
+    vm.script_base = table_entry;
+    vm.current_instruction = table_entry;
     InitializeRenderObjectTimerBlock(node);
     FinalizeTimelineRenderObjectSetup(node);
     ++(*RenderOwnerAccess(g_MainChainRenderOwner).live_object_count());
@@ -317,9 +323,10 @@ void BindTimelineContinuationFromManagerWork(void *manager_work, u32 kind,
 void ConfigureTimelineContinuationRenderObject(void *node, void *manager_work,
                                                u32 kind, const float params[3])
 {
-    *reinterpret_cast<float *>(static_cast<u8 *>(node) + 0x340) = params[0];
-    *reinterpret_cast<float *>(static_cast<u8 *>(node) + 0x344) = params[1];
-    *reinterpret_cast<float *>(static_cast<u8 *>(node) + 0x348) = params[2];
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(node);
+    vm.delta_pos_x = params[0];
+    vm.delta_pos_y = params[1];
+    vm.delta_pos_z = params[2];
     BindTimelineContinuationFromManagerWork(manager_work, kind, node);
 }
 
@@ -451,11 +458,12 @@ void *CreateTimelineContinuationRenderObject(void *manager_work, u32 kind,
 void ApplyTimelineRenderObjectPresetClone(ManagerWorkPartial *work, void *node,
                                           u16 clone_field)
 {
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(node);
     ZeroRenderObjectVectors(node);
     NodeFlags(node) |= 0x40000000U;
-    *reinterpret_cast<u8 *>(static_cast<u8 *>(node) + 0x3a0) = 0x10;
-    *reinterpret_cast<u8 *>(static_cast<u8 *>(node) + 0x3a1) = 0x10;
-    *reinterpret_cast<u16 *>(static_cast<u8 *>(node) + 0x38a) = clone_field;
+    vm.anim_field_3a0 = 0x10;
+    vm.anim_field_3a1 = 0x10;
+    vm.bound_script_id = clone_field;
     if (!BindTimelineRenderObjectFromManagerWork(work, clone_field, node))
         ClearRenderObjectNode(node);
 }

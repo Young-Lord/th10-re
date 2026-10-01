@@ -4,13 +4,15 @@
 #include "AsciiMode8Renderer.hpp"
 #include "AsciiMode9Renderer.hpp"
 #include "AsciiProjectedRenderer.hpp"
+#include "VmRecord.hpp"
 
 namespace th10 {
 
 i32 DispatchAsciiAnimationVmRenderMode(void *vm_memory, void *owner)
 {
     u8 *const vm = static_cast<u8 *>(vm_memory);
-    const u32 flags = *reinterpret_cast<const u32 *>(vm + 0x35c);
+    const VmRecord &vm_record = *reinterpret_cast<const VmRecord *>(vm);
+    const u32 flags = vm_record.flags;
     if ((flags & 3U) != 3U || *(vm + 0x2ff) == 0)
         return -1;
 
@@ -38,9 +40,10 @@ i32 DispatchAsciiAnimationVmRenderMode(void *vm_memory, void *owner)
     case 8:
         return DrawAsciiAnimationVmMode8(vm, owner);
     case 9: {
-        const u32 vertex_count = *reinterpret_cast<const u32 *>(vm + 0x30c) * 2U;
+        const u32 vertex_count =
+            static_cast<u32>(vm_record.reg_10000) * 2U;
         return DrawAsciiAnimationVmMode9(vm, owner,
-            *reinterpret_cast<void *const *>(vm + 0x358), vertex_count);
+            vm_record.vertex_buffer, vertex_count);
     }
     default:
         return 0;

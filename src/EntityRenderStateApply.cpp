@@ -13,6 +13,7 @@
 
 #include "MainChainRender.hpp"
 #include "Th10Platform.hpp"
+#include "VmRecord.hpp"
 
 namespace th10 {
 
@@ -64,7 +65,7 @@ void ApplyEntityRenderStateEaxEbxAbi(void *owner /* EAX */,
                                      const void *entity /* EBX */)
 {
     u8 *const owner_bytes = static_cast<u8 *>(owner);
-    const u8 *const entity_bytes = static_cast<const u8 *>(entity);
+    const VmRecord &vm = *reinterpret_cast<const VmRecord *>(entity);
 
     // Blend mode: +0x35c bits 4..5 against the owner blend cache at
     // +0x3ada68. On a mismatch the pending vertices are flushed first, then
@@ -72,7 +73,7 @@ void ApplyEntityRenderStateEaxEbxAbi(void *owner /* EAX */,
     // mode 0 -> 6 (D3DBLEND_INVSRCALPHA), modes 1 and 2 -> 2
     // (D3DBLEND_ONE), mode 3 leaves the device state untouched while the
     // cache still advances.
-    const u8 blend = static_cast<u8>((ReadU32At(entity_bytes + 0x35cU) >> 4)
+    const u8 blend = static_cast<u8>((vm.flags >> 4)
         & 3U);
     if (owner_bytes[0x3ada68U] != blend) {
         FlushRenderOwnerPendingVertices(reinterpret_cast<RenderOwnerPartial *>(
@@ -87,9 +88,9 @@ void ApplyEntityRenderStateEaxEbxAbi(void *owner /* EAX */,
     // (+0x300) and primary (+0x2fc) color dwords. When the owner's global
     // modulation gate at +0x73245c is nonzero, each byte is scaled by the
     // matching multiplier; otherwise the raw color is published.
-    u32 color = (ReadU32At(entity_bytes + 0x35cU) & 0x8000U) != 0U
-        ? ReadU32At(entity_bytes + 0x300U)
-        : ReadU32At(entity_bytes + 0x2fcU);
+    u32 color = (vm.flags & 0x8000U) != 0U
+        ? vm.secondary_color
+        : vm.primary_color;
     if (ReadU32At(owner_bytes + 0x73245cU) != 0U)
         color = ModulateColorBytes(color, owner_bytes);
 
@@ -104,7 +105,7 @@ void ApplyEntityRenderStateEaxEbxAbi(void *owner /* EAX */,
     // +0x3ada6e. 0 -> linear (2), 1 -> point (1), applied to both
     // D3DSAMP_MAGFILTER (5) and D3DSAMP_MINFILTER (6) of sampler 0 through
     // the vtable +0x114 entry.
-    const u8 sampler = static_cast<u8>(ReadU32At(entity_bytes + 0x35cU) >> 31);
+    const u8 sampler = static_cast<u8>(vm.flags >> 31);
     if (owner_bytes[0x3ada6eU] != sampler) {
         FlushRenderOwnerPendingVertices(reinterpret_cast<RenderOwnerPartial *>(
             owner));

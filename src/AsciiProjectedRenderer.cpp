@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "MainChainRender.hpp"
+#include "VmRecord.hpp"
 
 namespace th10 {
 
@@ -111,10 +112,11 @@ D3DMatrix MakeTranslationMatrix(float x, float y, float z)
 
 D3DVector3 GetVmWorldPosition(const u8 *vm)
 {
+    const VmRecord &vm_record = *reinterpret_cast<const VmRecord *>(vm);
     D3DVector3 position = {
-        ReadFloat(vm, 0x334) + ReadFloat(vm, 0x340) + ReadFloat(vm, 0x34c),
-        ReadFloat(vm, 0x338) + ReadFloat(vm, 0x344) + ReadFloat(vm, 0x350),
-        ReadFloat(vm, 0x33c) + ReadFloat(vm, 0x348) + ReadFloat(vm, 0x354)
+        vm_record.base_pos_x + vm_record.delta_pos_x + vm_record.alt_pos_x,
+        vm_record.base_pos_y + vm_record.delta_pos_y + vm_record.alt_pos_y,
+        vm_record.base_pos_z + vm_record.delta_pos_z + vm_record.alt_pos_z
     };
     return position;
 }
@@ -136,6 +138,7 @@ void ProjectQuadVertex(AsciiGlyphVertex *destination, const D3DVector3 *source,
 i32 BuildPerspectiveAsciiGlyphQuad(void *vm_memory)
 {
     const u8 *const vm = static_cast<const u8 *>(vm_memory);
+    const VmRecord &vm_record = *reinterpret_cast<const VmRecord *>(vm);
     const D3DVector3 world_position = GetVmWorldPosition(vm);
     const D3DMatrix world = MakeTranslationMatrix(world_position.x,
                                                     world_position.y,
@@ -160,17 +163,17 @@ i32 BuildPerspectiveAsciiGlyphQuad(void *vm_memory)
     const float scale = 0.5f * static_cast<float>(sqrt(
         static_cast<double>(delta_x * delta_x + delta_y * delta_y +
                             delta_z * delta_z)));
-    const float width = ReadFloat(vm, 0x3c) * ReadFloat(vm, 0x4c) * scale;
-    const float height = ReadFloat(vm, 0x40) * ReadFloat(vm, 0x50) * scale;
+    const float width = vm_record.scale_x * ReadFloat(vm, 0x4c) * scale;
+    const float height = vm_record.scale_y * ReadFloat(vm, 0x50) * scale;
     float left;
     float right;
     float top;
     float bottom;
-    const u32 flags = ReadU32(vm, 0x35c);
+    const u32 flags = vm_record.flags;
     WriteAnchoredAxis(&left, &right, width, (flags >> 18) & 3);
     WriteAnchoredAxis(&top, &bottom, height, (flags >> 20) & 3);
 
-    const float angle = ReadFloat(vm, 0x2c);
+    const float angle = vm_record.rotation_z;
     const float cosine = static_cast<float>(cos(static_cast<double>(angle)));
     const float sine = static_cast<float>(sin(static_cast<double>(angle)));
     const float input_x[] = {left, right, left, right};
@@ -188,33 +191,36 @@ i32 BuildPerspectiveAsciiGlyphQuad(void *vm_memory)
 // TH10 0x00444240 semantic body. Every D3DX result is intentionally ignored.
 u32 BuildAndProjectMode7AsciiGlyphQuad(void *vm_memory, void *owner)
 {
-    u8 *const vm = static_cast<u8 *>(vm_memory);
-    u32 flags = ReadU32(vm, 0x35c);
+    VmRecord &vm_record = *reinterpret_cast<VmRecord *>(vm_memory);
+    u32 flags = vm_record.flags;
     if ((flags & 0x4000U) == 0 && (flags & 0x0cU) != 0) {
         flags &= ~0x08U;
-        *reinterpret_cast<u32 *>(vm + 0x35c) = flags;
-        D3DMatrix *const matrix = reinterpret_cast<D3DMatrix *>(vm + 0x27c);
-        memcpy(matrix, vm + 0x23c, sizeof(*matrix));
-        matrix->values[0] *= ReadFloat(vm, 0x3c);
-        matrix->values[5] *= ReadFloat(vm, 0x40);
+        vm_record.flags = flags;
+        D3DMatrix *const matrix =
+            reinterpret_cast<D3DMatrix *>(vm_record.world_matrix);
+        memcpy(matrix, vm_record.base_matrix, sizeof(*matrix));
+        matrix->values[0] *= vm_record.scale_x;
+        matrix->values[5] *= vm_record.scale_y;
         D3DMatrix rotation;
-        if (ReadFloat(vm, 0x24) != 0.0f) {
-            D3dxMatrixRotationX(&rotation, ReadFloat(vm, 0x24));
+        if (vm_record.rotation_x != 0.0f) {
+            D3dxMatrixRotationX(&rotation, vm_record.rotation_x);
             D3dxMatrixMultiply(matrix, matrix, &rotation);
         }
-        if (ReadFloat(vm, 0x28) != 0.0f) {
-            D3dxMatrixRotationY(&rotation, ReadFloat(vm, 0x28));
+        if (vm_record.rotation_y != 0.0f) {
+            D3dxMatrixRotationY(&rotation, vm_record.rotation_y);
             D3dxMatrixMultiply(matrix, matrix, &rotation);
         }
-        if (ReadFloat(vm, 0x2c) != 0.0f) {
-            D3dxMatrixRotationZ(&rotation, ReadFloat(vm, 0x2c));
+        if (vm_record.rotation_z != 0.0f) {
+            D3dxMatrixRotationZ(&rotation, vm_record.rotation_z);
             D3dxMatrixMultiply(matrix, matrix, &rotation);
         }
-        *reinterpret_cast<u32 *>(vm + 0x35c) &= ~0x04U;
+        vm_record.flags &= ~0x04U;
     }
 
-    D3DMatrix world = *reinterpret_cast<D3DMatrix *>(vm + 0x27c);
-    const D3DVector3 position = GetVmWorldPosition(vm);
+    D3DMatrix world =
+        *reinterpret_cast<const D3DMatrix *>(vm_record.world_matrix);
+    const D3DVector3 position = GetVmWorldPosition(
+        static_cast<const u8 *>(vm_memory));
     world.values[12] += position.x;
     world.values[13] += position.y;
     world.values[14] = position.z;
@@ -223,7 +229,7 @@ u32 BuildAndProjectMode7AsciiGlyphQuad(void *vm_memory, void *owner)
     float right;
     float top;
     float bottom;
-    flags = ReadU32(vm, 0x35c);
+    flags = vm_record.flags;
     WriteAnchoredAxis(&left, &right, 256.0f, (flags >> 18) & 3);
     WriteAnchoredAxis(&top, &bottom, 256.0f, (flags >> 20) & 3);
     const D3DVector3 local[] = {
@@ -251,6 +257,7 @@ u32 DrawAsciiAnimationVmProjectedMode5(void *vm, void *owner)
 i32 DrawAsciiAnimationVmPerspectiveFadedMode6(void *vm_memory, void *owner)
 {
     const u8 *const vm = static_cast<const u8 *>(vm_memory);
+    const VmRecord &vm_record = *reinterpret_cast<const VmRecord *>(vm);
     const u8 *const owner_bytes = static_cast<const u8 *>(owner);
     if (BuildPerspectiveAsciiGlyphQuad(vm_memory) != 0)
         return -1;
@@ -261,9 +268,9 @@ i32 DrawAsciiAnimationVmPerspectiveFadedMode6(void *vm_memory, void *owner)
     const float dz = world.z - g_AsciiFogPosition.z;
     const float distance = static_cast<float>(sqrt(static_cast<double>(
         dx * dx + dy * dy + dz * dz)));
-    const u32 flags = ReadU32(vm, 0x35c);
-    u32 color = (flags & 0x8000U) != 0 ? ReadU32(vm, 0x300) :
-        ReadU32(vm, 0x2fc);
+    const u32 flags = vm_record.flags;
+    u32 color = (flags & 0x8000U) != 0 ? vm_record.secondary_color :
+        vm_record.primary_color;
     if (*reinterpret_cast<const u32 *>(owner_bytes + 0x73245c) != 0)
         color = ModulateColor(color, owner_bytes);
     if (distance > g_AsciiFogNearDistance) {
@@ -293,11 +300,12 @@ i32 DrawAsciiAnimationVmPerspectiveFadedMode6(void *vm_memory, void *owner)
 
 u32 DrawAsciiAnimationVmProjectedFoggedMode7(void *owner, void *vm_memory)
 {
-    const u8 *const vm = static_cast<const u8 *>(vm_memory);
+    const VmRecord &vm_record =
+        *reinterpret_cast<const VmRecord *>(vm_memory);
     const u8 *const owner_bytes = static_cast<const u8 *>(owner);
     (void)BuildAndProjectMode7AsciiGlyphQuad(vm_memory, owner);
-    const u32 source_color = (ReadU32(vm, 0x35c) & 0x8000U) != 0 ?
-        ReadU32(vm, 0x300) : ReadU32(vm, 0x2fc);
+    const u32 source_color = (vm_record.flags & 0x8000U) != 0 ?
+        vm_record.secondary_color : vm_record.primary_color;
     for (u32 index = 0; index != 4; ++index) {
         D3DVector4 transformed;
         (void)D3dxVec3Transform(&transformed,

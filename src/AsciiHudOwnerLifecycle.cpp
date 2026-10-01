@@ -6,6 +6,7 @@
 #include "EntityHelpers.hpp"
 #include "ManagerReleaseWrappers.hpp"
 #include "Th10Types.hpp"
+#include "VmRecord.hpp"
 
 #include <stdlib.h>
 #include <string.h>
@@ -205,7 +206,7 @@ void ReleaseAsciiHudOwnerResources(void *record_memory)
                             *reinterpret_cast<u32 **>(entity + 0x14);
                         for (; child != 0;
                              child = *reinterpret_cast<u32 **>(child + 1))
-                            *reinterpret_cast<u32 *>(*child + 0x35c) |=
+                            reinterpret_cast<VmRecord *>(*child)->flags |=
                                 0x4000000U;
                     }
                 }

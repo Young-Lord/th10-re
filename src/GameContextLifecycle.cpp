@@ -6,6 +6,7 @@
 #include "Th10Types.hpp"
 #include "Th10Platform.hpp"
 #include "CallbackScheduler.hpp"
+#include "GameContext.hpp"
 #include "ManagerReleaseWrappers.hpp"
 
 namespace th10 {
@@ -33,14 +34,14 @@ const u32 kDrawPriority = 0x22;
 // the draw chain at priority 0x22, and publishes the elements at
 // context+8 / context+0xc. Returns 0.
 i32 RegisterGameContextSchedulerRecordsEbxAbi(void *context) {
+    GameContext &ctx = *static_cast<GameContext *>(context);
     ChainElem *calc = CallbackSchedulerApi::Create(
         reinterpret_cast<ChainCallback>(GameContextPopupUpdateAdapterThunk));
     calc->flags |= ChainElemFlag_Enabled;
     calc->arg = context;
     CallbackSchedulerApi::AddToCalculationChain(g_CallbackScheduler, calc,
                                                 kCalcPriority);
-    *reinterpret_cast<ChainElem **>(
-        static_cast<u8 *>(context) + 0x8) = calc;
+    ctx.calc_record = calc;
 
     ChainElem *draw = CallbackSchedulerApi::Create(
         reinterpret_cast<ChainCallback>(GameContextDrawReadyThunk));
@@ -48,8 +49,7 @@ i32 RegisterGameContextSchedulerRecordsEbxAbi(void *context) {
     draw->arg = context;
     CallbackSchedulerApi::AddToDrawChain(g_CallbackScheduler, draw,
                                          kDrawPriority);
-    *reinterpret_cast<ChainElem **>(
-        static_cast<u8 *>(context) + 0xc) = draw;
+    ctx.draw_record = draw;
     return 0;
 }
 
@@ -66,7 +66,8 @@ void *CreateGameContextObject() {
         for (int i = 0; i < 0x12; ++i) {
             wipe[i] = 0;
         }
-        *wipe |= 2u;
+        // Bit 1 of the +0x00 flags dword (dead store against the wipe).
+        static_cast<GameContext *>(context)->flags |= 2u;
     }
     g_StageNode = context; // publish DAT_004776ec
     const i32 result = RegisterGameContextSchedulerRecordsEbxAbi(context);

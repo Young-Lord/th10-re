@@ -2,6 +2,7 @@
 
 #include "AsciiAnimationVm.hpp"
 #include "PackedArchive.hpp"
+#include "VmRecord.hpp"
 
 #include <cmath>
 #include <string.h>
@@ -39,26 +40,22 @@ inline void WriteUint(u8 *bytes, u32 offset, u32 value)
     *reinterpret_cast<u32 *>(bytes + offset) = value;
 }
 
-inline void WriteU16(u8 *bytes, u32 offset, u16 value)
-{
-    *reinterpret_cast<u16 *>(bytes + offset) = value;
-}
-
 // The 0x5c timer block inside a VM record (prev/acc pair at 0x5c..0x68,
 // flag at 0x6c); the sentinel write is overwritten by the unconditional
 // reset, matching the native order.
 void ResetVmTimerBlock(u8 *vm)
 {
-    if ((ReadUint(vm, 0x6c) & 1) == 0) {
-        WriteUint(vm, 0x60, 0);
-        WriteUint(vm, 0x5c, 0xfff0bdc1U);
-        WriteUint(vm, 0x64, 0);
-        *reinterpret_cast<const float **>(vm + 0x68) = &g_FrameTimeScale;
-        WriteUint(vm, 0x6c, ReadUint(vm, 0x6c) | 1);
+    VmRecord &rec = *reinterpret_cast<VmRecord *>(vm);
+    if ((rec.timer_flags & 1) == 0) {
+        rec.timer_cur = 0;
+        rec.timer_prev = static_cast<i32>(0xfff0bdc1U);
+        rec.timer_accum = 0.0f;
+        rec.timer_rate = &g_FrameTimeScale;
+        rec.timer_flags |= 1;
     }
-    WriteUint(vm, 0x60, 0);
-    WriteUint(vm, 0x64, 0);
-    WriteUint(vm, 0x5c, 0xffffffffU);
+    rec.timer_cur = 0;
+    rec.timer_accum = 0.0f;
+    rec.timer_prev = static_cast<i32>(0xffffffffU);
 }
 
 } // namespace
@@ -69,6 +66,7 @@ void AssignAnmScriptToVmEcxEaxBbxAbi(void *anm_work, void *vm_memory,
                                      i32 script_index)
 {
     u8 *const vm = static_cast<u8 *>(vm_memory);
+    VmRecord &rec = *reinterpret_cast<VmRecord *>(vm);
     u8 *const manager = static_cast<u8 *>(anm_work);
     void *const script = ReadUint(manager, 0x11c) != 0
         ? reinterpret_cast<void **>(ReadUint(manager, 0x11c))[script_index]
@@ -78,14 +76,14 @@ void AssignAnmScriptToVmEcxEaxBbxAbi(void *anm_work, void *vm_memory,
         return;
     }
     ResetAsciiAnimationVmRecord(vm);
-    WriteU16(vm, 0x38a, static_cast<u16>(script_index));
-    WriteU16(vm, 0x386, ReadU16(manager, 0));
-    WriteUint(vm, 0x308, reinterpret_cast<u32>(manager));
-    WriteUint(vm, 0x35c, ReadUint(vm, 0x35c) & ~0x600U);
-    WriteUint(vm, 0x38c, reinterpret_cast<u32>(script));
-    WriteUint(vm, 0x390, reinterpret_cast<u32>(script));
+    rec.bound_script_id = static_cast<u16>(script_index);
+    rec.bound_file_id = ReadU16(manager, 0);
+    rec.bound_resource = manager;
+    rec.flags &= ~0x600U;
+    rec.script_base = script;
+    rec.current_instruction = script;
     ResetVmTimerBlock(vm);
-    WriteUint(vm, 0x35c, ReadUint(vm, 0x35c) & ~1U);
+    rec.flags &= ~1U;
     UpdateAnimationVmStackAbi(vm);
     *reinterpret_cast<u32 *>(static_cast<u8 *>(g_MainChainRenderOwner) +
                              0x4c) += 1;
@@ -97,14 +95,15 @@ void InitializePlayerMainVmEsiStackAbi(void *vm_memory, void *anm_work,
                                        i32 script_index)
 {
     u8 *const vm = static_cast<u8 *>(vm_memory);
+    VmRecord &rec = *reinterpret_cast<VmRecord *>(vm);
     ResetAsciiAnimationVmRecord(vm);
     static const u32 kClearedOffsets[9] = {
         0x340, 0x344, 0x348, 0x334, 0x338, 0x33c, 0x34c, 0x350, 0x354};
     for (u32 index = 0; index != 9; ++index)
         WriteUint(vm, kClearedOffsets[index], 0);
-    *reinterpret_cast<u8 *>(vm + 0x3a1) = 0x10;
-    *reinterpret_cast<u8 *>(vm + 0x3a0) = 0x10;
-    WriteU16(vm, 0x38a, static_cast<u16>(script_index));
+    rec.anim_field_3a1 = 0x10;
+    rec.anim_field_3a0 = 0x10;
+    rec.bound_script_id = static_cast<u16>(script_index);
     AssignAnmScriptToVmEcxEaxBbxAbi(anm_work, vm, script_index);
 }
 

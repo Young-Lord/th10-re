@@ -3,6 +3,7 @@
 #include "AsciiAnimationVm.hpp"
 #include "EntityHelpers.hpp"
 #include "PlayerShotData.hpp"
+#include "VmRecord.hpp"
 
 namespace th10 {
 
@@ -52,8 +53,9 @@ u32 SpawnLinkedOverlayVm(void *anm_work, i32 script_id)
 {
     u8 *const vm = static_cast<u8 *>(
         AllocatePoolVmEsiAbi(g_MainChainRenderOwner));
-    WriteU32(vm, 0x20, 15U);
-    WriteU32(vm, 0x35c, ReadU32(vm, 0x35c) | 0x40000000U);
+    VmRecord &vm_record = *reinterpret_cast<VmRecord *>(vm);
+    vm_record.render_kind = 15U;
+    vm_record.flags |= 0x40000000U;
     AssignPoolVmScriptEcxEaxAbi(vm, script_id);
     u32 id = 0;
     LinkEntityAndAssignIdEaxEsiAbi(&id, vm);

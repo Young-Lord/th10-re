@@ -3,6 +3,7 @@
 #include "EclEasedTransforms.hpp"
 #include "PlayerMotionHelpers.hpp"
 #include "PlayerTimerHelpers.hpp"
+#include "VmRecord.hpp"
 
 #include <cmath>
 #include <stdlib.h>
@@ -252,29 +253,24 @@ void LinkChildListNode(void *node_memory, void *list_owner_memory)
 void SetupScaleInterpolation(void *entity_memory, const float target[2],
                              i32 duration, i32 mode)
 {
-    u8 *const entity = static_cast<u8 *>(entity_memory);
-    *reinterpret_cast<i32 *>(entity + 0x1b4) = duration;
-    *reinterpret_cast<u8 *>(entity + 0x1b8) =
-        static_cast<u8>(mode);
-    *reinterpret_cast<u32 *>(entity + 0x180) =
-        *reinterpret_cast<const u32 *>(entity + 0x3c);
-    *reinterpret_cast<u32 *>(entity + 0x184) =
-        *reinterpret_cast<const u32 *>(entity + 0x40);
-    *reinterpret_cast<u32 *>(entity + 0x188) =
-        *reinterpret_cast<const u32 *>(target);
-    *reinterpret_cast<u32 *>(entity + 0x18c) =
-        *reinterpret_cast<const u32 *>(target + 1);
-    u8 *const timer = entity + 0x1a0;
-    if ((*reinterpret_cast<u32 *>(timer + 0x10) & 1) == 0) {
-        *reinterpret_cast<i32 *>(timer + 4) = 0;
-        *reinterpret_cast<i32 *>(timer) = static_cast<i32>(0xfff0bdc1U);
-        *reinterpret_cast<float *>(timer + 8) = 0.0f;
-        *reinterpret_cast<const float **>(timer + 0xc) = &g_FrameTimeScale;
-        *reinterpret_cast<u32 *>(timer + 0x10) |= 1;
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(entity_memory);
+    vm.scale_anim.duration = duration;
+    *reinterpret_cast<u8 *>(&vm.scale_anim.mode) = static_cast<u8>(mode);
+    vm.scale_anim.snapshot[0] = vm.scale_x;
+    vm.scale_anim.snapshot[1] = vm.scale_y;
+    vm.scale_anim.target[0] = target[0];
+    vm.scale_anim.target[1] = target[1];
+    if ((vm.scale_anim.flags & 1) == 0) {
+        vm.scale_anim.timer[1] = 0;
+        vm.scale_anim.timer[0] = static_cast<i32>(0xfff0bdc1U);
+        *reinterpret_cast<float *>(&vm.scale_anim.timer[2]) = 0.0f;
+        *reinterpret_cast<const float **>(&vm.scale_anim.gap_002c) =
+            &g_FrameTimeScale;
+        vm.scale_anim.flags |= 1;
     }
-    *reinterpret_cast<i32 *>(timer + 4) = 0;
-    *reinterpret_cast<float *>(timer + 8) = 0.0f;
-    *reinterpret_cast<i32 *>(timer) = -1;
+    vm.scale_anim.timer[1] = 0;
+    *reinterpret_cast<float *>(&vm.scale_anim.timer[2]) = 0.0f;
+    vm.scale_anim.timer[0] = -1;
 }
 
 // TH10 0x00442220 / 0x00442050 (and the scalar twins 0x00442300 /
@@ -345,8 +341,10 @@ void SetupAlphaInterpolation(void *vm_memory, u32 block_base, i32 start,
 // (base +0x5c) through the shared delta-shift helper.
 void ShiftVmTimerBack(void *vm_memory, i32 frames)
 {
-    ShiftTimerByEsiStackAbi(static_cast<u8 *>(vm_memory) + 0x5c,
-                            static_cast<float>(-frames));
+    ShiftTimerByEsiStackAbi(
+        reinterpret_cast<u8 *>(
+            &reinterpret_cast<VmRecord *>(vm_memory)->timer_prev),
+        static_cast<float>(-frames));
 }
 
 namespace {
@@ -395,16 +393,14 @@ void FreeHeapBlock(void *pointer);
 i32 RebuildRibbonRingBuffer(void *entity_memory)
 {
     u8 *const entity = static_cast<u8 *>(entity_memory);
-    u8 *const previous =
-        *reinterpret_cast<u8 *const *>(entity + 0x358);
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(entity);
+    u8 *const previous = static_cast<u8 *>(vm.vertex_buffer);
     if (previous != 0)
         FreeHeapBlock(previous);
     u8 *const buffer = AllocateHeapBlock(0x4b0);
-    *reinterpret_cast<u8 **>(entity + 0x358) = buffer;
-    *reinterpret_cast<void **>(entity + 0x398) =
-        reinterpret_cast<void *>(&RibbonFrameUpdateCallback);
-    *reinterpret_cast<void **>(entity + 0x39c) =
-        reinterpret_cast<void *>(&RibbonRenderCallback);
+    vm.vertex_buffer = buffer;
+    vm.frame_callback = reinterpret_cast<void *>(&RibbonFrameUpdateCallback);
+    vm.render_callback = reinterpret_cast<void *>(&RibbonRenderCallback);
     WriteFloat(buffer, 0x4a4, PrngCenteredFloat() / 120.0f);
     WriteFloat(buffer, 0x4a8, PrngCenteredFloat() / 120.0f);
 

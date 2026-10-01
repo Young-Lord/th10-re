@@ -34,6 +34,7 @@
 
 #include "MainChainRender.hpp"
 #include "Th10Platform.hpp"
+#include "VmRecord.hpp"
 
 namespace th10 {
 
@@ -114,9 +115,9 @@ float LoadUnsignedAsFloat(const void *base, u32 offset)
 // sync with the VM flag word, flushing pending vertices on changes.
 void UpdateGlyphRenderStatesLocal(void *vm, void *owner)
 {
+    const VmRecord &vm_record = *reinterpret_cast<const VmRecord *>(vm);
     u8 *const owner_bytes = static_cast<u8 *>(owner);
-    const u32 flags = *reinterpret_cast<const u32 *>(
-        static_cast<const u8 *>(vm) + 0x35cU);
+    const u32 flags = vm_record.flags;
     const u8 blend_mode = static_cast<u8>((flags >> 4) & 3U);
     if (owner_bytes[0x3ada68U] != blend_mode) {
         FlushRenderOwnerPendingVertices(
@@ -167,7 +168,7 @@ void AppendScratchQuadAsTriangles(void *owner)
 
 i32 SubmitAsciiProjectedQuadEaxEcxStackAbi(void *vm, void *owner, u32 flags)
 {
-    u8 *const vm_bytes = static_cast<u8 *>(vm);
+    const VmRecord &vm_record = *reinterpret_cast<const VmRecord *>(vm);
     u8 *const owner_bytes = static_cast<u8 *>(owner);
 
     // 1. camera offset accumulation over the four vertex positions.
@@ -198,17 +199,15 @@ i32 SubmitAsciiProjectedQuadEaxEcxStackAbi(void *vm, void *owner, u32 flags)
     }
 
     // 3. UV re-derivation from the VM's texture-source record.
-    const u8 *const source =
-        reinterpret_cast<const u8 *>(
-            *reinterpret_cast<const u32 *>(vm_bytes + 0x394U));
+    const u8 *const source = static_cast<const u8 *>(vm_record.anim_entry);
     const float u_left = *reinterpret_cast<const float *>(source + 0x28U) +
-                         *reinterpret_cast<const float *>(vm_bytes + 0x54U);
+                         vm_record.texture_u;
     const float u_right = *reinterpret_cast<const float *>(source + 0x20U) +
-                          *reinterpret_cast<const float *>(vm_bytes + 0x54U);
+                          vm_record.texture_u;
     const float v_top = *reinterpret_cast<const float *>(source + 0x24U) +
-                        *reinterpret_cast<const float *>(vm_bytes + 0x58U);
+                        vm_record.texture_v;
     const float v_bottom = *reinterpret_cast<const float *>(source + 0x2cU) +
-                           *reinterpret_cast<const float *>(vm_bytes + 0x58U);
+                           vm_record.texture_v;
     g_AsciiGlyphScratchQuad[0].u = u_left;
     g_AsciiGlyphScratchQuad[2].u = u_left;
     g_AsciiGlyphScratchQuad[1].u = u_right;
@@ -272,8 +271,7 @@ i32 SubmitAsciiProjectedQuadEaxEcxStackAbi(void *vm, void *owner, u32 flags)
     }
 
     // 5. texture bind through the owner cache.
-    const u8 *const source_record = reinterpret_cast<const u8 *>(
-        *reinterpret_cast<const u32 *>(vm_bytes + 0x394U));
+    const u8 *const source_record = static_cast<const u8 *>(vm_record.anim_entry);
     const u32 texture = *reinterpret_cast<const u32 *>(source_record + 4U);
     if (*reinterpret_cast<u32 *>(owner_bytes + 0x3ada64U) != texture) {
         *reinterpret_cast<u32 *>(owner_bytes + 0x3ada64U) = texture;
@@ -291,11 +289,10 @@ i32 SubmitAsciiProjectedQuadEaxEcxStackAbi(void *vm, void *owner, u32 flags)
 
     // 6. color update (skipped with flags bit 1).
     if ((flags & 2U) == 0U) {
-        const u32 vm_flags =
-            *reinterpret_cast<const u32 *>(vm_bytes + 0x35cU);
+        const u32 vm_flags = vm_record.flags;
         u32 color = (vm_flags & 0x8000U) != 0U
-                        ? *reinterpret_cast<const u32 *>(vm_bytes + 0x300U)
-                        : *reinterpret_cast<const u32 *>(vm_bytes + 0x2fcU);
+                        ? vm_record.secondary_color
+                        : vm_record.primary_color;
         if (*reinterpret_cast<const u32 *>(owner_bytes + 0x73245cU) != 0U) {
             color = ModulateColor(color, owner_bytes);
         }
