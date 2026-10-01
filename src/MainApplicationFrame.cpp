@@ -4,6 +4,7 @@
 
 #include "BgmRuntime.hpp"
 #include "CallbackScheduler.hpp"
+#include "LargeRenderOwnerLayout.hpp"
 #include "MainChainContext.hpp"
 #include "MainChainFrameTime.hpp"
 #include "MainChainRender.hpp"
@@ -110,11 +111,11 @@ i32 RunMainChainFrame(MainApplicationFrameState *state)
         static_cast<i32>(g_RegistrationFrameIncrement) + 1) {
         (void)reinterpret_cast<D3DBeginSceneFn>(GetD3DSlot(
             g_MainChainD3D9Device, 41))(g_MainChainD3D9Device);
-        u8 *const owner = static_cast<u8 *>(
-            static_cast<void *>(g_MainChainRenderOwner));
-        *reinterpret_cast<u32 *>(owner + 0x3adac8) = 0;
-        *reinterpret_cast<void **>(owner + 0x72dacc) = owner + 0x3adacc;
-        *reinterpret_cast<void **>(owner + 0x72dad0) = owner + 0x3adacc;
+        LargeRenderOwnerLayout &owner = *reinterpret_cast<LargeRenderOwnerLayout *>(
+            g_MainChainRenderOwner);
+        owner.pending_quad_count = 0;
+        owner.vertex_write_cursor = owner.vertex_arena;
+        owner.draw_source = owner.vertex_arena;
         g_MainChainPresentColor = 0xff;
         (void)DisableMainChainFogIfNeeded(&g_MainChainContext);
         (void)CallbackSchedulerApi::DispatchDraw(g_CallbackScheduler);

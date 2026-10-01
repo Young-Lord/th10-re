@@ -34,6 +34,7 @@
 // the format table maps the selector to 0x15/0 or 0x14.
 #include "RenderOwnerSurfaceLoading.hpp"
 
+#include "LargeRenderOwnerLayout.hpp"
 #include "MainChainRender.hpp"
 #include "Th10Platform.hpp"
 
@@ -136,14 +137,14 @@ void ReleaseComObject(void *object)
 i32 LoadRenderOwnerCachedSurfaceFromFile(void *owner, const char *file_name,
                                          u32 cache_slot)
 {
-    u8 *const owner_bytes = static_cast<u8 *>(owner);
-    void **const primary_slots =
-        reinterpret_cast<void **>(owner_bytes + 0x3ad4e0U);
-    void **const shadow_slots =
-        reinterpret_cast<void **>(owner_bytes + 0x3ad560U);
-    void **const buffers = reinterpret_cast<void **>(owner_bytes + 0x3ad5e0U);
-    u32 *const sizes = reinterpret_cast<u32 *>(owner_bytes + 0x3ad660U);
-    void *const descriptor = owner_bytes + 0x3ad6e0U + 0x1cU * cache_slot;
+    LargeRenderOwnerLayout &owner_state =
+        *static_cast<LargeRenderOwnerLayout *>(owner);
+    void **const primary_slots = owner_state.render_targets;
+    void **const shadow_slots = owner_state.shadow_surfaces;
+    void **const buffers = owner_state.cached_file_buffers;
+    u32 *const sizes = owner_state.cached_file_sizes;
+    CachedRenderSurfaceDescriptor *const descriptor =
+        &owner_state.surface_descriptors[cache_slot];
 
     if (primary_slots[cache_slot] != 0) {
         ReleaseLargeRenderOwnerCachedSurfacePair(owner, cache_slot);
@@ -191,8 +192,8 @@ i32 LoadRenderOwnerCachedSurfaceFromFile(void *owner, const char *file_name,
 
     // Primary surface: render-target first, offscreen fallback. The real
     // dimensions come from the decoded D3DXIMAGE_INFO descriptor.
-    const u32 width = LoadU32At(descriptor, 0U);
-    const u32 height = LoadU32At(descriptor, 4U);
+    const u32 width = descriptor->width;
+    const u32 height = descriptor->height;
     if (reinterpret_cast<D3DCreateRenderTargetFn>(GetD3DSlot(device, 28))(
             device, width, height, g_MainChainBackBufferFormat, 0U, 0U, 1U,
             &primary_slots[cache_slot], 0) != 0 &&

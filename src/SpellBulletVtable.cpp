@@ -24,6 +24,7 @@
 #include "AsciiAnimationVm.hpp"
 #include "BgmRuntime.hpp"
 #include "EntityHelpers.hpp"
+#include "LargeRenderOwnerLayout.hpp"
 #include "PlayerFrameworkHelpers.hpp"
 #include "PlayerShotData.hpp"
 #include "ResultScreenState.hpp"
@@ -161,15 +162,14 @@ void CopyTerminatedString(char *dst, const char *src)
 // inlines this scan twice in 0x409280 (words 0x19f / 0x1a0).
 u8 *FindEntityByScriptWord(u16 script_word)
 {
-    u8 *const manager = static_cast<u8 *>(g_MainChainRenderOwner);
-    const u32 *const heads[2] = {
-        *reinterpret_cast<u32 *const *>(manager + 0x72dad4U),
-        *reinterpret_cast<u32 *const *>(manager + 0x72dadcU)
-    };
+    const LargeRenderOwnerLayout &owner =
+        *static_cast<const LargeRenderOwnerLayout *>(g_MainChainRenderOwner);
+    const OwnerLink *const heads[2] = {owner.first_list_a,
+                                       owner.first_list_b};
     for (u32 list_index = 0; list_index != 2; ++list_index) {
-        const u32 *node = heads[list_index];
-        for (; node != 0; node = reinterpret_cast<const u32 *>(node[1])) {
-            u8 *const entity = reinterpret_cast<u8 *>(node[0]);
+        for (const OwnerLink *node = heads[list_index]; node != 0;
+             node = node->next) {
+            u8 *const entity = static_cast<u8 *>(node->self_node);
             if (entity != 0
                 && reinterpret_cast<const VmRecord *>(entity)
                        ->bound_script_id

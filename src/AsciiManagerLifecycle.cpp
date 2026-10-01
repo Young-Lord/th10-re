@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "CallbackScheduler.hpp"
+#include "LargeRenderOwnerLayout.hpp"
 #include "MainChainRender.hpp"
 #include "ManagerWork.hpp"
 
@@ -83,8 +84,8 @@ void RemoveAsciiCallback(ChainElem *record)
 
 void ReleaseAsciiResourceSlot(void *owner, u32 slot)
 {
-    void **const slot_pointer = reinterpret_cast<void **>(
-        static_cast<u8 *>(owner) + 0x3ad06c + slot * sizeof(void *));
+    LargeRenderOwnerLayout &owner_ref = *static_cast<LargeRenderOwnerLayout *>(owner);
+    void **const slot_pointer = &owner_ref.work_slots[slot];
     ManagerWorkPartial *const work = static_cast<ManagerWorkPartial *>(
         *slot_pointer);
     if (work == 0)

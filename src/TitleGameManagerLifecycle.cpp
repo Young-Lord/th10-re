@@ -5,6 +5,7 @@
 #include "EntityHelpers.hpp"
 #include "GameManagerState.hpp"
 #include "GlobalLifecycleManager.hpp"
+#include "LargeRenderOwnerLayout.hpp"
 #include "ManagerWork.hpp"
 #include "Th10Platform.hpp"
 #include "Th10Types.hpp"
@@ -277,12 +278,12 @@ u32 TH10_CDECL GameManagerWorkerThread(void *unused)
                (g_MainChainRuntimeFlags & 0x80U) == 0)
             g_LoadWaitFrameYield(0x10);
 
-        u32 *const loading_slot = reinterpret_cast<u32 *>(
-            static_cast<u8 *>(g_MainChainRenderOwner) + 0x3ad070);
-        if (*loading_slot != 0) {
+        LargeRenderOwnerLayout &owner =
+            *static_cast<LargeRenderOwnerLayout *>(g_MainChainRenderOwner);
+        if (owner.work_slots[1] != 0) { // work slot at owner+0x3ad070
             ReleaseLargeRenderOwnerSlot();
-            FreeMainChainObject(reinterpret_cast<void *>(*loading_slot));
-            *loading_slot = 0;
+            FreeMainChainObject(owner.work_slots[1]);
+            owner.work_slots[1] = 0;
         }
     }
 
@@ -418,17 +419,18 @@ i32 RunGameManagerCalculationBody(void *game_manager)
 
     switch (state) {
     case 0: {
-        u8 *const owner_bytes = static_cast<u8 *>(g_MainChainRenderOwner);
+        LargeRenderOwnerLayout &owner =
+            *static_cast<LargeRenderOwnerLayout *>(g_MainChainRenderOwner);
         ReleaseOwnerTrackedValue(
-            owner_bytes, *reinterpret_cast<void **>(owner_bytes + 0x3ad084));
+            &owner, owner.work_slots[6]);   // owner+0x3ad084
         ReleaseOwnerTrackedValue(
-            owner_bytes, *reinterpret_cast<void **>(owner_bytes + 0x3ad088));
+            &owner, owner.work_slots[7]);   // owner+0x3ad088
         ReleaseOwnerTrackedValue(
-            owner_bytes, *reinterpret_cast<void **>(owner_bytes + 0x3ad074));
+            &owner, owner.work_slots[2]);   // owner+0x3ad074
         ReleaseOwnerTrackedValue(
-            owner_bytes, *reinterpret_cast<void **>(owner_bytes + 0x3ad078));
+            &owner, owner.work_slots[3]);   // owner+0x3ad078
         ReleaseOwnerTrackedValue(
-            owner_bytes, *reinterpret_cast<void **>(owner_bytes + 0x3ad06c));
+            &owner, owner.work_slots[0]);   // owner+0x3ad06c
 
         u8 *const ascii_target =
             static_cast<u8 *>(g_AsciiManagerHost) + 0x89a4;
@@ -615,11 +617,13 @@ i32 TitleScreenDrawCallback(void *title_screen)
 {
     u8 *const bytes = static_cast<u8 *>(title_screen);
     if ((*reinterpret_cast<u32 *>(bytes + 0x58) & 4U) == 0) {
-        u32 *const owner = static_cast<u32 *>(g_MainChainRenderOwner);
-        owner[0x4c / 4] = 0;
-        owner[0x50 / 4] = 0;
-        owner[0x54 / 4] = 0;
-        owner[0x58 / 4] = 0;
+        LargeRenderOwnerLayout &owner =
+            *static_cast<LargeRenderOwnerLayout *>(g_MainChainRenderOwner);
+        owner.live_object_count = 0;    // +0x4c
+        *reinterpret_cast<u32 *>(
+            reinterpret_cast<u8 *>(&owner) + 0x50U) = 0; // gap at +0x50
+        owner.render_mode_counter = 0;  // +0x54
+        owner.flush_counter = 0;        // +0x58
     }
     return 1;
 }
@@ -833,12 +837,12 @@ void DestroyTitleScreenStateBufferInPlace(void *object)
     if ((g_GlobalModeFlags & 1U) == 0U) {
         u32 index = (*reinterpret_cast<const u32 *>(state + 0x2a30U) & 1U) + 4U;
         if (index < 0x21U) {
-            u32 *const slot = reinterpret_cast<u32 *>(
-                reinterpret_cast<u8 *>(g_MainChainRenderOwner)
-                + index * 4U + 0x3ad06cU);
+            LargeRenderOwnerLayout &owner =
+                *static_cast<LargeRenderOwnerLayout *>(g_MainChainRenderOwner);
+            void **const slot = &owner.work_slots[index];
             if (*slot != 0U) {
                 ReleaseLargeRenderOwnerSlot();
-                FreeMainChainObject(reinterpret_cast<void *>(*slot));
+                FreeMainChainObject(*slot);
                 *slot = 0U;
             }
         }
@@ -1117,12 +1121,14 @@ void TeardownGameManagerInPlace(void *game_manager)
                                                      record);
     }
 
-    u8 *const owner = static_cast<u8 *>(g_MainChainRenderOwner);
-    for (u32 slot = 0x3ad0d0; slot <= 0x3ad0d4; slot += 4) {
-        u32 *const tracked = reinterpret_cast<u32 *>(owner + slot);
+    LargeRenderOwnerLayout &owner =
+        *static_cast<LargeRenderOwnerLayout *>(g_MainChainRenderOwner);
+    // Tracked work slots at owner+0x3ad0d0 / owner+0x3ad0d4.
+    for (u32 slot = 0x19U; slot <= 0x1aU; ++slot) {
+        void **const tracked = &owner.work_slots[slot];
         if (*tracked != 0) {
             ReleaseLargeRenderOwnerSlot();
-            ReleaseResourceBuffer(reinterpret_cast<void *>(*tracked));
+            ReleaseResourceBuffer(*tracked);
             *tracked = 0;
         }
     }
@@ -1137,28 +1143,25 @@ void TeardownGameManagerInPlace(void *game_manager)
     }
 
     const i32 entity_id = static_cast<i32>(manager[0x174]);
-    u32 **node = 0;
+    OwnerLink *node = 0;
     if (entity_id != 0) {
-        const u32 list_head_a = *reinterpret_cast<u32 *>(owner + 0x72dad4);
-        u32 **cursor = reinterpret_cast<u32 **>(list_head_a);
-        for (; cursor != 0 && node == 0;
-                cursor = reinterpret_cast<u32 **>(cursor[1])) {
-            if (static_cast<i32>(**cursor) == entity_id)
+        OwnerLink *cursor = owner.first_list_a; // owner+0x72dad4 head
+        for (; cursor != 0 && node == 0; cursor = cursor->next) {
+            if (static_cast<i32>(*reinterpret_cast<u32 *>(
+                    cursor->self_node)) == entity_id)
                 node = cursor;
         }
         if (node == 0) {
-            const u32 list_head_b =
-                *reinterpret_cast<u32 *>(owner + 0x72dadc);
-            cursor = reinterpret_cast<u32 **>(list_head_b);
-            for (; cursor != 0 && node == 0;
-                    cursor = reinterpret_cast<u32 **>(cursor[1])) {
-                if (static_cast<i32>(**cursor) == entity_id)
+            cursor = owner.first_list_b; // owner+0x72dadc head
+            for (; cursor != 0 && node == 0; cursor = cursor->next) {
+                if (static_cast<i32>(*reinterpret_cast<u32 *>(
+                        cursor->self_node)) == entity_id)
                     node = cursor;
             }
         }
     }
     if (node != 0) {
-        void *const entity = reinterpret_cast<void *>(*node);
+        void *const entity = node->self_node;
         if (entity != 0) {
             u8 *const entity_bytes = static_cast<u8 *>(entity);
             *reinterpret_cast<u16 *>(entity_bytes + 0x304) = 1;

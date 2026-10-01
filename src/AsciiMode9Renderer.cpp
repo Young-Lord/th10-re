@@ -1,5 +1,6 @@
 #include "AsciiMode9Renderer.hpp"
 
+#include "LargeRenderOwnerLayout.hpp"
 #include "MainChainRender.hpp"
 #include "Th10Platform.hpp"
 #include "VmRecord.hpp"
@@ -26,12 +27,12 @@ void *GetD3DSlot(D3D9Device *device, u32 index)
 void UpdateMode9RenderState(void *owner, const u8 *vm)
 {
     const VmRecord &vm_record = *reinterpret_cast<const VmRecord *>(vm);
-    u8 *const owner_bytes = static_cast<u8 *>(owner);
+    LargeRenderOwnerLayout &owner_ref = *static_cast<LargeRenderOwnerLayout *>(owner);
     const u32 flags = vm_record.flags;
     const u8 blend = static_cast<u8>((flags >> 4) & 3);
-    if (owner_bytes[0x3ada68] != blend) {
+    if (owner_ref.blend_mode_cache != blend) {
         FlushRenderOwnerPendingVertices(reinterpret_cast<RenderOwnerPartial *>(owner));
-        owner_bytes[0x3ada68] = blend;
+        owner_ref.blend_mode_cache = blend;
         if (blend == 0 || blend == 1) {
             (void)reinterpret_cast<D3DSetRenderStateFn>(GetD3DSlot(
                 g_MainChainD3D9Device, 57))(g_MainChainD3D9Device, 0x14,
@@ -39,16 +40,16 @@ void UpdateMode9RenderState(void *owner, const u8 *vm)
         }
     }
     const u8 sampler = static_cast<u8>(flags >> 31);
-    if (owner_bytes[0x3ada6e] != sampler) {
+    if (owner_ref.sampler_filter_cache != sampler) {
         FlushRenderOwnerPendingVertices(reinterpret_cast<RenderOwnerPartial *>(owner));
-        owner_bytes[0x3ada6e] = sampler;
+        owner_ref.sampler_filter_cache = sampler;
         const u32 value = sampler == 0 ? 2 : 1;
         (void)reinterpret_cast<D3DSetTextureStageStateFn>(GetD3DSlot(
             g_MainChainD3D9Device, 67))(g_MainChainD3D9Device, 0, 5, value);
         (void)reinterpret_cast<D3DSetTextureStageStateFn>(GetD3DSlot(
             g_MainChainD3D9Device, 67))(g_MainChainD3D9Device, 0, 6, value);
     }
-    ++*reinterpret_cast<u32 *>(owner_bytes + 0x54);
+    ++owner_ref.render_mode_counter;
 }
 
 } // namespace
@@ -58,23 +59,23 @@ i32 DrawAsciiAnimationVmMode9(void *vm_memory, void *owner,
 {
     const u8 *const vm = static_cast<const u8 *>(vm_memory);
     const VmRecord &vm_record = *reinterpret_cast<const VmRecord *>(vm);
-    u8 *const owner_bytes = static_cast<u8 *>(owner);
+    LargeRenderOwnerLayout &owner_ref = *static_cast<LargeRenderOwnerLayout *>(owner);
     const u32 flags = vm_record.flags;
     if ((flags & 3U) != 3U || *(vm + 0x2ff) == 0)
         return -1;
-    if (*reinterpret_cast<u32 *>(owner_bytes + 0x3adac8) != 0)
+    if (owner_ref.pending_quad_count != 0)
         FlushRenderOwnerPendingVertices(reinterpret_cast<RenderOwnerPartial *>(owner));
     u8 *const glyph = static_cast<u8 *>(vm_record.anim_entry);
     void *const texture = *reinterpret_cast<void **>(glyph + 4);
-    if (*reinterpret_cast<void **>(owner_bytes + 0x3ada64) != texture) {
-        *reinterpret_cast<void **>(owner_bytes + 0x3ada64) = texture;
+    if (owner_ref.bound_texture != texture) {
+        owner_ref.bound_texture = texture;
         (void)reinterpret_cast<D3DSetTextureFn>(GetD3DSlot(
             g_MainChainD3D9Device, 65))(g_MainChainD3D9Device, 0, texture);
     }
-    if (owner_bytes[0x3ada6a] != 3) {
+    if (owner_ref.fvf_active_cache != 3) {
         (void)reinterpret_cast<D3DSetFVFFn>(GetD3DSlot(
             g_MainChainD3D9Device, 89))(g_MainChainD3D9Device, 0x144);
-        owner_bytes[0x3ada6a] = 3;
+        owner_ref.fvf_active_cache = 3;
     }
     UpdateMode9RenderState(owner, vm);
     (void)reinterpret_cast<D3DSetTextureStageStateFn>(GetD3DSlot(

@@ -2,6 +2,7 @@
 
 #include "BgmRuntime.hpp"
 #include "GeneratedFontTable.hpp"
+#include "LargeRenderOwnerLayout.hpp"
 #include "MainChainDirectInputAdapter.hpp"
 #include "MainChainRuntime.hpp"
 #include "MidiTimer.hpp"
@@ -51,10 +52,10 @@ i32 ShutdownMainChainRuntime(MainChainContext *context)
     DestroyAllMainChainObjects();
     DestroyRegistrationDrawOwner(g_RegistrationDrawOwner);
 
-    void **const render_resource = reinterpret_cast<void **>(
-        static_cast<u8 *>(g_MainChainRenderOwner) + 0x3ada74);
-    if (*render_resource != 0)
-        ReleaseAndClear(render_resource);
+    LargeRenderOwnerLayout &render_owner =
+        *static_cast<LargeRenderOwnerLayout *>(g_MainChainRenderOwner);
+    if (render_owner.com_viewport_interface != 0)
+        ReleaseAndClear(&render_owner.com_viewport_interface);
 
     QueueBgmCommand(&g_TransitionRoot, "dummy", 4, 0);
     DestroyGeneratedTableAndFonts();

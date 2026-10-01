@@ -1,3 +1,4 @@
+#include "LargeRenderOwnerLayout.hpp"
 #include "MainChainRender.hpp"
 #include "MainChainContext.hpp"
 #include "MainChainRuntime.hpp"
@@ -65,21 +66,11 @@ void *GetD3DSlot(D3D9Device *device, u32 index)
     return device->vtable[index];
 }
 
-u32 ReadU32(const void *address)
-{
-    return *static_cast<const u32 *>(address);
-}
-
-void WriteU32(void *address, u32 value)
-{
-    *static_cast<u32 *>(address) = value;
-}
-
 void *ResolveLargeRenderOwnerSourceSurface(void *owner, i32 group, u32 slot)
 {
-    u8 *const bytes = static_cast<u8 *>(owner);
-    void *const source_group = *reinterpret_cast<void **>(bytes + 0x3ad06c +
-        static_cast<u32>(group) * sizeof(void *));
+    LargeRenderOwnerLayout &owner_state =
+        *static_cast<LargeRenderOwnerLayout *>(owner);
+    void *const source_group = owner_state.work_slots[static_cast<u32>(group)];
     u8 *const source_slots = *reinterpret_cast<u8 **>(
         static_cast<u8 *>(source_group) + 0x120);
     return *reinterpret_cast<void **>(source_slots + slot * 0x10);
@@ -93,11 +84,12 @@ i32 GetMainChainD3DBackBuffer(void **out_back_buffer)
 
 bool RebuildLargeRenderOwnerPrimaryFromShadow(void *owner, u32 cache_slot)
 {
-    u8 *const bytes = static_cast<u8 *>(owner);
-    void **const primary_slots = reinterpret_cast<void **>(bytes + 0x3ad4e0);
-    void **const shadow_slots = reinterpret_cast<void **>(bytes + 0x3ad560);
+    LargeRenderOwnerLayout &owner_state =
+        *static_cast<LargeRenderOwnerLayout *>(owner);
+    void **const primary_slots = owner_state.render_targets;
+    void **const shadow_slots = owner_state.shadow_surfaces;
     CachedRenderSurfaceDescriptor *const descriptors =
-        reinterpret_cast<CachedRenderSurfaceDescriptor *>(bytes + 0x3ad6e0);
+        owner_state.surface_descriptors;
     if (primary_slots[cache_slot] != 0)
         return true;
 
@@ -253,8 +245,9 @@ void *UpdateMainChainD3DFrameStateEdiAbi(MainChainCameraWork *work)
 
 void FlushRenderOwnerPendingVertices(RenderOwnerPartial *owner)
 {
-    u8 *const bytes = reinterpret_cast<u8 *>(owner);
-    const u32 count = ReadU32(bytes + 0x3adac8);
+    LargeRenderOwnerLayout &owner_state =
+        *reinterpret_cast<LargeRenderOwnerLayout *>(owner);
+    const u32 count = owner_state.pending_quad_count;
     if (count == 0)
         return;
 
@@ -266,35 +259,35 @@ void FlushRenderOwnerPendingVertices(RenderOwnerPartial *owner)
         g_D3D9ClearDevice, 0x144);
     (void)reinterpret_cast<D3DDrawPrimitiveUPFn>(GetD3DSlot(
         g_D3D9ClearDevice, 83))(g_D3D9ClearDevice, 4, count << 1,
-        *reinterpret_cast<const void *const *>(bytes + 0x72dad0), 0x1c);
+        owner_state.draw_source, 0x1c);
 
-    WriteU32(bytes + 0x72dad0, ReadU32(bytes + 0x72dacc));
-    WriteU32(bytes + 0x3adac8, 0);
-    WriteU32(bytes + 0x58, ReadU32(bytes + 0x58) + 1);
+    owner_state.draw_source = owner_state.vertex_write_cursor;
+    owner_state.pending_quad_count = 0;
+    owner_state.flush_counter = owner_state.flush_counter + 1U;
 }
 
 void FlushRenderOwnerPendingRenderBatches(void *owner)
 {
-    u8 *const bytes = static_cast<u8 *>(owner);
-    i32 *const second_batch_index = reinterpret_cast<i32 *>(bytes + 0x4);
-    if (*second_batch_index >= 0) {
+    LargeRenderOwnerLayout &owner_state =
+        *static_cast<LargeRenderOwnerLayout *>(owner);
+    if (owner_state.deferred_slot_1 >= 0) {
         SubmitLargeRenderOwnerSecondDeferredBatch(owner);
-        *second_batch_index = -1;
+        owner_state.deferred_slot_1 = -1;
     }
 
-    i32 *const first_batch_index = reinterpret_cast<i32 *>(bytes);
-    if (*first_batch_index >= 0) {
+    if (owner_state.deferred_slot_0 >= 0) {
         SubmitLargeRenderOwnerFirstDeferredBatch(owner);
-        *first_batch_index = -1;
+        owner_state.deferred_slot_0 = -1;
     }
 }
 
 void SubmitLargeRenderOwnerSecondDeferredBatch(void *owner)
 {
-    u8 *const bytes = static_cast<u8 *>(owner);
-    const i32 group = *reinterpret_cast<const i32 *>(bytes + 0x4);
-    const u32 source_slot = *reinterpret_cast<const u32 *>(bytes + 0x28);
-    const u32 *const rectangles = reinterpret_cast<const u32 *>(bytes + 0x8);
+    LargeRenderOwnerLayout &owner_state =
+        *static_cast<LargeRenderOwnerLayout *>(owner);
+    const i32 group = owner_state.deferred_slot_1;
+    const u32 source_slot = owner_state.batch1_source_slot;
+    const u32 *const rectangles = owner_state.batch1_rects;
     void *const source = ResolveLargeRenderOwnerSourceSurface(owner, group,
                                                                source_slot);
     if (source == 0)
@@ -332,10 +325,11 @@ void SubmitLargeRenderOwnerSecondDeferredBatch(void *owner)
 
 void ReleaseLargeRenderOwnerCachedSurfacePair(void *owner, u32 cache_slot)
 {
-    u8 *const bytes = static_cast<u8 *>(owner);
-    void **const primary_slots = reinterpret_cast<void **>(bytes + 0x3ad4e0);
-    void **const shadow_slots = reinterpret_cast<void **>(bytes + 0x3ad560);
-    void **const buffers = reinterpret_cast<void **>(bytes + 0x3ad5e0);
+    LargeRenderOwnerLayout &owner_state =
+        *static_cast<LargeRenderOwnerLayout *>(owner);
+    void **const primary_slots = owner_state.render_targets;
+    void **const shadow_slots = owner_state.shadow_surfaces;
+    void **const buffers = owner_state.cached_file_buffers;
     if (primary_slots[cache_slot] != 0) {
         ReleaseLargeRenderSurface(primary_slots[cache_slot]);
         primary_slots[cache_slot] = 0;
@@ -356,11 +350,12 @@ void UpdateLargeRenderOwnerCachedSurfaceRegion(void *owner, u32 cache_slot,
                                                i32 destination_x,
                                                i32 destination_y)
 {
-    u8 *const bytes = static_cast<u8 *>(owner);
-    void **const primary_slots = reinterpret_cast<void **>(bytes + 0x3ad4e0);
-    void **const shadow_slots = reinterpret_cast<void **>(bytes + 0x3ad560);
+    LargeRenderOwnerLayout &owner_state =
+        *static_cast<LargeRenderOwnerLayout *>(owner);
+    void **const primary_slots = owner_state.render_targets;
+    void **const shadow_slots = owner_state.shadow_surfaces;
     CachedRenderSurfaceDescriptor *const descriptors =
-        reinterpret_cast<CachedRenderSurfaceDescriptor *>(bytes + 0x3ad6e0);
+        owner_state.surface_descriptors;
     if (shadow_slots[cache_slot] == 0)
         return;
 
@@ -390,9 +385,10 @@ void UpdateLargeRenderOwnerCachedSurfaceRectangle(void *owner, u32 cache_slot,
                                                   i32 source_width,
                                                   i32 source_height)
 {
-    u8 *const bytes = static_cast<u8 *>(owner);
-    void **const shadow_slots = reinterpret_cast<void **>(bytes + 0x3ad560);
-    void **const primary_slots = reinterpret_cast<void **>(bytes + 0x3ad4e0);
+    LargeRenderOwnerLayout &owner_state =
+        *static_cast<LargeRenderOwnerLayout *>(owner);
+    void **const shadow_slots = owner_state.shadow_surfaces;
+    void **const primary_slots = owner_state.render_targets;
     if (shadow_slots[cache_slot] == 0)
         return;
 
@@ -415,13 +411,14 @@ void UpdateLargeRenderOwnerCachedSurfaceRectangle(void *owner, u32 cache_slot,
 
 void SubmitLargeRenderOwnerFirstDeferredBatch(void *owner)
 {
-    u8 *const bytes = static_cast<u8 *>(owner);
-    const u32 cache_slot = *reinterpret_cast<const u32 *>(bytes);
-    const u32 *const rectangles = reinterpret_cast<const u32 *>(bytes + 0x2c);
-    void **const primary_slots = reinterpret_cast<void **>(bytes + 0x3ad4e0);
-    void **const shadow_slots = reinterpret_cast<void **>(bytes + 0x3ad560);
+    LargeRenderOwnerLayout &owner_state =
+        *static_cast<LargeRenderOwnerLayout *>(owner);
+    const u32 cache_slot = static_cast<u32>(owner_state.deferred_slot_0);
+    const u32 *const rectangles = owner_state.batch0_rects;
+    void **const primary_slots = owner_state.render_targets;
+    void **const shadow_slots = owner_state.shadow_surfaces;
     CachedRenderSurfaceDescriptor *const descriptors =
-        reinterpret_cast<CachedRenderSurfaceDescriptor *>(bytes + 0x3ad6e0);
+        owner_state.surface_descriptors;
 
     FlushRenderOwnerPendingVertices(reinterpret_cast<RenderOwnerPartial *>(owner));
     if (primary_slots[cache_slot] != 0)

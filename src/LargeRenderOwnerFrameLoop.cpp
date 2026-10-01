@@ -2,6 +2,7 @@
 
 #include "AsciiAnimationVm.hpp"
 #include "AsciiRenderModeDispatcher.hpp"
+#include "LargeRenderOwnerLayout.hpp"
 #include "MainChainRender.hpp"
 #include "TimelineRenderObjectSetup.hpp"
 
@@ -9,52 +10,19 @@ namespace th10 {
 
 namespace {
 
-struct OwnerLink {
-    void *self_node;
-    OwnerLink *next;
-    OwnerLink *previous;
-};
+// The pooled/bucket records are the canonical VmRecord layout; the local
+// view names map onto: owner_link@0x4, child_head/first_child@0x10/0x14,
+// chain_next@0x1c, render_kind@0x20, vertex_buffer@0x358, flags@0x35c,
+// frame_callback@0x398, render_callback@0x39c.
+typedef VmRecord OwnerNode;
 
-struct OwnerNode {
-    u8 unknown_0000[4];
-    OwnerLink owner_link;
-    OwnerLink *child_link_head;
-    OwnerLink *child_link_tail;
-    u8 unknown_0018[4];
-    OwnerNode *chain_next;
-    u32 kind;
-    u8 unknown_0024[0x334];
-    void *owned_0358;
-    u32 flags_035c;
-    u8 unknown_0360[0x38];
-    void *pre_update_hook;
-    void *pre_draw_hook;
-};
+inline OwnerLink *NodeLink(OwnerNode *node)
+{
+    return reinterpret_cast<OwnerLink *>(&node->link_self);
+}
 
-typedef char AssertOwnerNodeKindOffset[offsetof(OwnerNode, kind) == 0x20 ? 1 : -1];
-typedef char AssertOwnerNodeChainOffset[offsetof(OwnerNode, chain_next) == 0x1c ? 1 : -1];
-typedef char AssertOwnerNodeFlagsOffset[offsetof(OwnerNode, flags_035c) == 0x35c ? 1 : -1];
-typedef char AssertOwnerNodePreUpdateOffset[
-    offsetof(OwnerNode, pre_update_hook) == 0x398 ? 1 : -1];
-typedef char AssertOwnerNodePreDrawOffset[
-    offsetof(OwnerNode, pre_draw_hook) == 0x39c ? 1 : -1];
-
-struct LargeRenderOwnerLayout {
-    u8 unknown_0000[0x64];
-    u32 frame_counter;
-    u8 unknown_0068[0x72da6c];
-    OwnerLink *first_list_a;
-    OwnerLink *last_list_a;
-    OwnerLink *first_list_b;
-    OwnerLink *last_list_b;
-    OwnerNode kind_buckets[0x13];
-};
-
-typedef char AssertLargeRenderOwnerFrameCounterOffset[
-    offsetof(LargeRenderOwnerLayout, frame_counter) == 0x64 ? 1 : -1];
-typedef char AssertLargeRenderOwnerKindBucketsOffset[
-    offsetof(LargeRenderOwnerLayout, kind_buckets) == 0x72dae4 ? 1 : -1];
-
+// The shared layout hosts the 19 kind-bucket sentinels in late_nodes[0..0x12]
+// (the chain head is each sentinel's chain_next at +0x1c).
 extern void ReleaseLargeRenderOwnerBuffer(void *pointer);
 extern void FreeLargeRenderOwnerNode(void *node);
 extern D3D9Device *g_MainChainD3D9Device;
@@ -90,14 +58,14 @@ void UnlinkOwnerLink(LargeRenderOwnerLayout *owner, OwnerLink *link)
 
 void UnlinkChildLinks(OwnerNode *node)
 {
-    OwnerLink *const head = node->child_link_head;
-    OwnerLink *const tail = node->child_link_tail;
+    OwnerLink *const head = static_cast<OwnerLink *>(node->child_head);
+    OwnerLink *const tail = static_cast<OwnerLink *>(node->first_child);
     if (head != 0)
         head->next = tail;
     if (tail != 0)
         tail->previous = head;
-    node->child_link_head = 0;
-    node->child_link_tail = 0;
+    node->child_head = 0;
+    node->first_child = 0;
 }
 
 bool OwnerNodeIsPooled(LargeRenderOwnerLayout *owner, OwnerNode *node)
@@ -116,14 +84,14 @@ u32 PooledNodeIndex(LargeRenderOwnerLayout *owner, OwnerNode *node)
 
 void ReleaseOwnerNodeOwnedBuffer(OwnerNode *node)
 {
-    if (node->owned_0358 != 0)
-        ReleaseLargeRenderOwnerBuffer(node->owned_0358);
-    node->owned_0358 = 0;
+    if (node->vertex_buffer != 0)
+        ReleaseLargeRenderOwnerBuffer(node->vertex_buffer);
+    node->vertex_buffer = 0;
 }
 
 void DestroyOwnerNodeInternal(LargeRenderOwnerLayout *owner, OwnerNode *node)
 {
-    UnlinkOwnerLink(owner, &node->owner_link);
+    UnlinkOwnerLink(owner, NodeLink(node));
     UnlinkChildLinks(node);
     ReleaseOwnerNodeOwnedBuffer(node);
 
@@ -142,22 +110,22 @@ void DestroyOwnerNodeInternal(LargeRenderOwnerLayout *owner, OwnerNode *node)
 void ResetKindBucketHeads(LargeRenderOwnerLayout *owner, OwnerNode **heads)
 {
     for (u32 index = 0; index != 0x13; ++index) {
-        heads[index] = &owner->kind_buckets[index];
-        owner->kind_buckets[index].chain_next = 0;
+        heads[index] = &owner->late_nodes[index];
+        owner->late_nodes[index].chain_next = 0;
     }
 }
 
 void ProcessOwnerListNode(LargeRenderOwnerLayout *owner, OwnerNode *node,
                           OwnerNode **heads)
 {
-    if ((node->flags_035c & 0x04000000U) != 0) {
+    if ((node->flags & 0x04000000U) != 0) {
         DestroyOwnerNodeInternal(owner, node);
         return;
     }
 
-    if (node->pre_update_hook != 0) {
+    if (node->frame_callback != 0) {
         typedef void (TH10_FASTCALL *PreUpdateFn)(void *);
-        reinterpret_cast<PreUpdateFn>(node->pre_update_hook)(node);
+        reinterpret_cast<PreUpdateFn>(node->frame_callback)(node);
     }
 
     if (FinalizeTimelineRenderObjectSetup(node) != 0) {
@@ -165,9 +133,9 @@ void ProcessOwnerListNode(LargeRenderOwnerLayout *owner, OwnerNode *node,
         return;
     }
 
-    OwnerNode *const previous_head = heads[node->kind];
+    OwnerNode *const previous_head = heads[node->render_kind];
     previous_head->chain_next = node;
-    heads[node->kind] = node;
+    heads[node->render_kind] = node;
     node->chain_next = 0;
 }
 
@@ -206,15 +174,15 @@ i32 UpdateLargeRenderOwnerListB(void *opaque_owner)
     for (OwnerLink *link = owner->first_list_b; link != 0; link = link->next) {
         OwnerNode *const node = static_cast<OwnerNode *>(link->self_node);
 
-        if ((node->flags_035c & 0x04000000U) != 0) {
+        if ((node->flags & 0x04000000U) != 0) {
             DestroyOwnerNodeInternal(owner, node);
             ++owner->frame_counter;
             continue;
         }
 
-        if (node->pre_update_hook != 0) {
+        if (node->frame_callback != 0) {
             typedef void (TH10_FASTCALL *PreUpdateFn)(void *);
-            reinterpret_cast<PreUpdateFn>(node->pre_update_hook)(node);
+            reinterpret_cast<PreUpdateFn>(node->frame_callback)(node);
         }
 
         if (FinalizeTimelineRenderObjectSetup(node) != 0) {
@@ -236,15 +204,16 @@ i32 DrawLargeRenderOwnerKindChain(void *opaque_owner, u32 kind)
     LargeRenderOwnerLayout *const owner =
         static_cast<LargeRenderOwnerLayout *>(opaque_owner);
     u8 *const owner_bytes = reinterpret_cast<u8 *>(owner);
-    for (OwnerNode *node = *reinterpret_cast<OwnerNode **>(
-             owner_bytes + 0x72db00 + kind * 0x3ac);
-         node != 0; node = node->chain_next) {
-        if ((node->flags_035c & 0x04000000U) != 0)
+    for (OwnerNode *node = static_cast<OwnerNode *>(
+             *reinterpret_cast<void **>(owner_bytes + 0x72db00 +
+                                        kind * 0x3ac));
+         node != 0; node = static_cast<OwnerNode *>(node->chain_next)) {
+        if ((node->flags & 0x04000000U) != 0)
             continue;
 
-        if (node->pre_draw_hook != 0) {
+        if (node->render_callback != 0) {
             typedef void (TH10_FASTCALL *PreDrawFn)(void *);
-            reinterpret_cast<PreDrawFn>(node->pre_draw_hook)(node);
+            reinterpret_cast<PreDrawFn>(node->render_callback)(node);
         }
         DispatchAsciiAnimationVmRenderMode(node, owner);
     }

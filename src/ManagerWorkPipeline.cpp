@@ -15,6 +15,7 @@
 
 #include "Th10Types.hpp"
 #include "Th10Platform.hpp"
+#include "LargeRenderOwnerLayout.hpp"
 #include "MainChainRender.hpp"
 #include "ManagerWork.hpp"
 #include "MainChainRuntime.hpp"
@@ -151,9 +152,10 @@ i32 AdvanceManagerWorkParseStackAbi(i32 selector, void *work_context)
 // advances the parse of marked ones. Returns -1 when work advanced.
 i32 PollManagerWorkQueuesStackAbi(void *owner)
 {
-    u8 *base = static_cast<u8 *>(owner) + 0x3ad06cU;
-    for (u32 index = 0; index < 0x21U; ++index, base += 4U) {
-        u8 *work = *reinterpret_cast<u8 **>(base);
+    LargeRenderOwnerLayout &owner_state =
+        *static_cast<LargeRenderOwnerLayout *>(owner);
+    for (u32 index = 0; index < 0x21U; ++index) {
+        u8 *work = static_cast<u8 *>(owner_state.work_slots[index]);
         if (work == 0)
             continue;
         if (ReadU32At(work, 0x128U) != 0U) {
@@ -161,13 +163,13 @@ i32 PollManagerWorkQueuesStackAbi(void *owner)
             ReleaseManagerWorkContents(
                 reinterpret_cast<ManagerWorkPartial *>(work));
             free(work);
-            *reinterpret_cast<void **>(base) = 0;
+            owner_state.work_slots[index] = 0;
             continue;
         }
         if (ReadU32At(work, 0x124U) == 0U)
             continue;
         return (AdvanceManagerWorkParseStackAbi(
-                    0, *reinterpret_cast<void *const *>(base)) != 0) - 1;
+                    0, owner_state.work_slots[index]) != 0) - 1;
     }
     return 0;
 }
@@ -197,8 +199,9 @@ void StoreWorkImageMaterialEaxEdxEbxAbi(u32 slot_index, void *work,
 i32 LoadOwnerCachedSurfaceEdxCcxAbi(u32 slot_index, void *owner,
                                     const char *name)
 {
-    u8 *base = static_cast<u8 *>(owner);
-    if (ReadU32At(base, 3855584U + 4U * slot_index) != 0U) {
+    LargeRenderOwnerLayout &owner_state =
+        *static_cast<LargeRenderOwnerLayout *>(owner);
+    if (owner_state.render_targets[slot_index] != 0) {
         extern void ReleaseLargeRenderOwnerCachedSurfacePair(void *owner,
             u32 cache_slot);
         ReleaseLargeRenderOwnerCachedSurfacePair(owner, slot_index);
@@ -212,9 +215,8 @@ i32 LoadOwnerCachedSurfaceEdxCcxAbi(u32 slot_index, void *owner,
         PrintErrorEdiAbi("%s", name);
         return -1;
     }
-    WriteU32At(base, 3855840U + 4U * slot_index,
-               reinterpret_cast<u32>(data));
-    WriteU32At(base, 3855968U + 4U * slot_index, size);
+    owner_state.cached_file_buffers[slot_index] = data;
+    owner_state.cached_file_sizes[slot_index] = size;
     return 0;
 }
 
@@ -225,16 +227,16 @@ i32 LoadOwnerCachedSurfaceEdxCcxAbi(u32 slot_index, void *owner,
 i32 CopyWorkSurfacePairEcxAbi(u32 src_slot, void *owner, u32 dst_slot,
                               u32 src_context, u32 dst_context)
 {
-    const u32 src_work = ReadU32At(owner, 0x3ad06cU + 4U * src_context);
-    const u32 src_table = ReadU32At(reinterpret_cast<const void *>(src_work),
-                                    0x120U);
+    LargeRenderOwnerLayout &owner_state =
+        *static_cast<LargeRenderOwnerLayout *>(owner);
+    void *const src_work = owner_state.work_slots[src_context];
+    const u32 src_table = ReadU32At(src_work, 0x120U);
     const u32 src_texture = ReadU32At(reinterpret_cast<const void *>(src_table),
                                       16U * src_slot);
     if (src_texture == 0U)
         return 0;
-    const u32 dst_work = ReadU32At(owner, 0x3ad06cU + 4U * dst_context);
-    const u32 dst_table = ReadU32At(reinterpret_cast<const void *>(dst_work),
-                                    0x120U);
+    void *const dst_work = owner_state.work_slots[dst_context];
+    const u32 dst_table = ReadU32At(dst_work, 0x120U);
     const u32 dst_texture = ReadU32At(reinterpret_cast<const void *>(dst_table),
                                       16U * dst_slot);
     if (dst_texture == 0U)

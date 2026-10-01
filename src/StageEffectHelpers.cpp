@@ -3,6 +3,7 @@
 #include "AsciiAnimationVm.hpp"
 #include "EntityHelpers.hpp"
 #include "BgmRuntime.hpp"
+#include "LargeRenderOwnerLayout.hpp"
 #include "PlayerShotData.hpp"
 #include "VmRecord.hpp"
 
@@ -115,21 +116,21 @@ void StartBgmTrack(const char *path, i32 param)
 // at manager+0x732454 wrapping past zero to 1.
 void AttachEffectVmToListB(u32 *out_id, void *vm_memory, void *manager_memory)
 {
-    u8 *const manager = static_cast<u8 *>(manager_memory);
+    LargeRenderOwnerLayout &owner =
+        *static_cast<LargeRenderOwnerLayout *>(manager_memory);
     VmRecord &vm = *reinterpret_cast<VmRecord *>(vm_memory);
     vm.link_self = vm_memory;
     vm.link_next = 0;
     vm.link_prev = 0;
-    u32 **const head = reinterpret_cast<u32 **>(manager + 0x72dadc);
-    u32 **const tail = reinterpret_cast<u32 **>(manager + 0x72dae0);
-    if (*head == 0) {
-        *head = reinterpret_cast<u32 *>(&vm.link_self);
+    if (owner.first_list_b == 0) {
+        owner.first_list_b =
+            reinterpret_cast<OwnerLink *>(&vm.link_self);
     } else {
         // Stored list nodes are the records' intrusive {link_self,
         // link_next, link_prev} trio at record+4.
-        u8 *const last_node = reinterpret_cast<u8 *>(*tail);
+        OwnerLink *const tail = owner.last_list_b;
         VmRecord &last_vm =
-            *reinterpret_cast<VmRecord *>(last_node - 0x04);
+            *reinterpret_cast<VmRecord *>(reinterpret_cast<u8 *>(tail) - 0x04);
         u8 *const last_next_node = static_cast<u8 *>(last_vm.link_next);
         if (last_next_node != 0) {
             vm.link_next = last_next_node;
@@ -139,13 +140,12 @@ void AttachEffectVmToListB(u32 *out_id, void *vm_memory, void *manager_memory)
         last_vm.link_next = &vm.link_self;
         vm.link_prev = &last_vm.link_self;
     }
-    *tail = reinterpret_cast<u32 *>(&vm.link_self);
-    u32 *const counter = reinterpret_cast<u32 *>(manager + 0x732454);
-    *counter += 1;
-    if (*counter == 0)
-        *counter = 1;
-    vm.entity_id = static_cast<i32>(*counter);
-    *out_id = *counter;
+    owner.last_list_b = reinterpret_cast<OwnerLink *>(&vm.link_self);
+    owner.node_id_counter += 1;
+    if (owner.node_id_counter == 0)
+        owner.node_id_counter = 1;
+    vm.entity_id = static_cast<i32>(owner.node_id_counter);
+    *out_id = static_cast<u32>(owner.node_id_counter);
 }
 
 // TH10 0x00448b40. List-B front-insertion twin of 0x448ac0: the new node
@@ -153,29 +153,28 @@ void AttachEffectVmToListB(u32 *out_id, void *vm_memory, void *manager_memory)
 // the list was empty.
 void AttachEffectVmToListBFront(u32 *out_id, void *vm, void *manager_memory)
 {
-    u8 *const manager = static_cast<u8 *>(manager_memory);
+    LargeRenderOwnerLayout &owner =
+        *static_cast<LargeRenderOwnerLayout *>(manager_memory);
     u8 *const vm_bytes = static_cast<u8 *>(vm);
     VmRecord &vm_rec = *reinterpret_cast<VmRecord *>(vm_bytes);
     vm_rec.link_self = vm_bytes;
     vm_rec.link_next = 0;
     vm_rec.link_prev = 0;
-    u32 **const head = reinterpret_cast<u32 **>(manager + 0x72dadc);
-    u32 **const tail = reinterpret_cast<u32 **>(manager + 0x72dae0);
-    if (*head == 0) {
-        *tail = reinterpret_cast<u32 *>(&vm_rec.link_self);
+    if (owner.first_list_b == 0) {
+        owner.last_list_b =
+            reinterpret_cast<OwnerLink *>(&vm_rec.link_self);
     } else {
-        vm_rec.link_next = *head;
-        u8 *const head_node = reinterpret_cast<u8 *>(*head);
-        reinterpret_cast<VmRecord *>(head_node - 0x04)->link_prev =
-            &vm_rec.link_self;
+        vm_rec.link_next = owner.first_list_b;
+        OwnerLink *const head = owner.first_list_b;
+        reinterpret_cast<VmRecord *>(reinterpret_cast<u8 *>(head) - 0x04)
+            ->link_prev = &vm_rec.link_self;
     }
-    *head = reinterpret_cast<u32 *>(&vm_rec.link_self);
-    u32 *const counter = reinterpret_cast<u32 *>(manager + 0x732454);
-    *counter += 1;
-    if (*counter == 0)
-        *counter = 1;
-    vm_rec.entity_id = static_cast<i32>(*counter);
-    *out_id = *counter;
+    owner.first_list_b = reinterpret_cast<OwnerLink *>(&vm_rec.link_self);
+    owner.node_id_counter += 1;
+    if (owner.node_id_counter == 0)
+        owner.node_id_counter = 1;
+    vm_rec.entity_id = static_cast<i32>(owner.node_id_counter);
+    *out_id = static_cast<u32>(owner.node_id_counter);
 }
 
 // TH10 0x00424480. Copies rounded parameters from the found entity's

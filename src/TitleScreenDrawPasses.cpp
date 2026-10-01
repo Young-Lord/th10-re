@@ -12,6 +12,7 @@
 #include "AsciiOwnerTraversal.hpp"
 #include "AsciiRenderModeDispatcher.hpp"
 #include "LargeRenderOwnerFrameLoop.hpp"
+#include "LargeRenderOwnerLayout.hpp"
 #include "MainChainContext.hpp"
 #include "MainChainRender.hpp"
 #include "PlayerTimerHelpers.hpp"
@@ -131,8 +132,10 @@ void SyncFogEnable(u32 wanted)
 // packed color, defaults restored to 0 / 0x80808080 between passes).
 void PublishOwnerModulation(u32 enabled, u32 color)
 {
-    g_MainChainRenderOwner->field_73245c = enabled;
-    g_MainChainRenderOwner->field_732458 = color;
+    LargeRenderOwnerLayout &owner =
+        *reinterpret_cast<LargeRenderOwnerLayout *>(g_MainChainRenderOwner);
+    owner.custom_color_gate = enabled;
+    owner.clear_color = color;
 }
 
 struct ScreenRect {

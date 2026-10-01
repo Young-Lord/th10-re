@@ -14,6 +14,7 @@
 // which is preserved literally.
 #include "EndingOverlayQuad.hpp"
 
+#include "LargeRenderOwnerLayout.hpp"
 #include "MainChainRender.hpp"
 #include "Th10Platform.hpp"
 
@@ -129,13 +130,17 @@ void DrawEndingOverlayQuadStackAbi(const void *record, u32 arg1, u32 arg2,
     (void)reinterpret_cast<D3DDrawPrimitiveUPFn>(GetD3DSlot(device, 83))(
         device, 5, 2, vertices, 0x14);
 
-    // Reset the render-owner draw caches (native order preserved).
-    StoreU32At(g_MainChainRenderOwner, 0x3ada6aU, 0xffU);
-    StoreU32At(g_MainChainRenderOwner, 0x3ada70U, 0U);
-    StoreU32At(g_MainChainRenderOwner, 0x3ada64U, 0U);
-    StoreU32At(g_MainChainRenderOwner, 0x3ada69U, 0xffU);
-    StoreU32At(g_MainChainRenderOwner, 0x3ada68U, 3U);
-    StoreU32At(g_MainChainRenderOwner, 0x3ada6bU, 0xffU);
+    // Reset the render-owner draw caches (native order preserved). The
+    // native issues dword stores even for the byte-granular cache fields,
+    // so the adjacent cache bytes are zeroed exactly as the original does.
+    LargeRenderOwnerLayout &owner =
+        *static_cast<LargeRenderOwnerLayout *>(g_MainChainRenderOwner);
+    *reinterpret_cast<u32 *>(&owner.fvf_active_cache) = 0xffU;
+    owner.glyph_texture_cache = 0;
+    owner.bound_texture = 0;
+    *reinterpret_cast<u32 *>(&owner.state_cache_3ada69) = 0xffU;
+    *reinterpret_cast<u32 *>(&owner.blend_mode_cache) = 3U;
+    *reinterpret_cast<u32 *>(&owner.state_cache_3ada6b) = 0xffU;
 
     // Native quirk: this stage-state call pushes only the stage argument.
     (void)reinterpret_cast<D3DSetTextureStageStageOnlyFn>(GetD3DSlot(

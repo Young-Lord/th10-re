@@ -21,6 +21,7 @@
 
 #include "Th10Platform.hpp"
 #include "Th10Types.hpp"
+#include "LargeRenderOwnerLayout.hpp"
 
 namespace th10 {
 
@@ -81,20 +82,19 @@ float LoadFloatAt(u32 address)
 // equals `id`; returns the entity or null.
 u8 *FindRenderEntity(u32 id)
 {
-    u8 *const owner = g_RenderOwner910;
-    u32 node = LoadU32At(reinterpret_cast<u32>(owner) + 0x72dad4U);
-    while (node != 0U) {
-        u8 *const entity = *reinterpret_cast<u8 **>(node);
+    LargeRenderOwnerLayout &owner =
+        *reinterpret_cast<LargeRenderOwnerLayout *>(g_RenderOwner910);
+    for (OwnerLink *node = owner.first_list_a; node != 0U;
+         node = node->next) {
+        u8 *const entity = static_cast<u8 *>(node->self_node);
         if (*reinterpret_cast<const u32 *>(entity) == id)
             return entity;
-        node = LoadU32At(node + 4U);
     }
-    node = LoadU32At(reinterpret_cast<u32>(owner) + 0x72dadcU);
-    while (node != 0U) {
-        u8 *const entity = *reinterpret_cast<u8 **>(node);
+    for (OwnerLink *node = owner.first_list_b; node != 0U;
+         node = node->next) {
+        u8 *const entity = static_cast<u8 *>(node->self_node);
         if (*reinterpret_cast<const u32 *>(entity) == id)
             return entity;
-        node = LoadU32At(node + 4U);
     }
     return 0;
 }

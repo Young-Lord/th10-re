@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "EntityHelpers.hpp"
+#include "LargeRenderOwnerLayout.hpp"
 #include "ManagerWork.hpp"
 #include "StageEffectHelpers.hpp"
 #include "TimelineRenderObjectSetup.hpp"
@@ -12,12 +13,6 @@ namespace th10 {
 
 namespace {
 
-struct OwnerLink {
-    void *self_node;
-    OwnerLink *next;
-    OwnerLink *previous;
-};
-
 char g_TimelineDecryptScratch[256]; // TH10 DAT_00497d40
 
 extern void *g_MainChainRenderOwner;
@@ -25,50 +20,54 @@ extern float g_MainChainStartupScale; // TH10 DAT_00476f78, alias g_AsciiOverlay
 extern void ResetPooledRenderOwnerNodeEsiEdiAbi(void *owner, void *node);
 extern void *AllocateAsciiManagerMemory(u32 bytes);
 
+// Typed view over the 0x732460-byte render owner (TH10 DAT_00491c10);
+// every accessor is a named field of LargeRenderOwnerLayout.
 struct RenderOwnerAccess {
-    explicit RenderOwnerAccess(const void *owner) : base(static_cast<const u8 *>(owner)) {}
+    explicit RenderOwnerAccess(const void *owner)
+        : base(static_cast<LargeRenderOwnerLayout *>(
+              const_cast<void *>(owner))) {}
 
     OwnerLink *first_list_a() const
     {
-        return *reinterpret_cast<OwnerLink *const *>(base + 0x72dad4);
+        return base->first_list_a;
     }
 
     OwnerLink *second_list_head() const
     {
-        return *reinterpret_cast<OwnerLink *const *>(base + 0x72dadc);
+        return base->first_list_b;
     }
 
     OwnerLink **last_list_a() const
     {
-        return reinterpret_cast<OwnerLink **>(const_cast<u8 *>(base) + 0x72dad8);
+        return &base->last_list_a;
     }
 
     u32 *pool_cursor() const
     {
-        return reinterpret_cast<u32 *>(const_cast<u8 *>(base) + 0x3ad068);
+        return &base->pool_cursor;
     }
 
     u8 *pool_active(u32 index) const
     {
-        return const_cast<u8 *>(base) + 0x3ac068 + index;
+        return &base->pooled_node_active[index];
     }
 
     u8 *pool_node(u32 index) const
     {
-        return const_cast<u8 *>(base) + 0x68 + index * 0x3ac;
+        return reinterpret_cast<u8 *>(&base->pooled_nodes[index]);
     }
 
     i32 *next_handle() const
     {
-        return reinterpret_cast<i32 *>(const_cast<u8 *>(base) + 0x732454);
+        return &base->node_id_counter;
     }
 
     i32 *live_object_count() const
     {
-        return reinterpret_cast<i32 *>(const_cast<u8 *>(base) + 0x4c);
+        return &base->live_object_count;
     }
 
-    const u8 *base;
+    LargeRenderOwnerLayout *base;
 };
 
 void *NodeFromLink(OwnerLink *link)
@@ -187,7 +186,7 @@ void RegisterRenderOwnerNode(void *owner, void *node)
     vm.link_next = 0;
     vm.link_prev = 0;
     if (access.first_list_a() == 0) {
-        *reinterpret_cast<OwnerLink **>(const_cast<u8 *>(access.base) + 0x72dad4) =
+        access.base->first_list_a =
             reinterpret_cast<OwnerLink *>(&vm.link_self);
     } else {
         OwnerLink *const tail = *access.last_list_a();

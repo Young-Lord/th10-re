@@ -3,59 +3,21 @@
 #include <string.h>
 
 #include "LargeRenderOwnerFrameLoop.hpp"
+#include "LargeRenderOwnerLayout.hpp"
 #include "CallbackScheduler.hpp"
 
 namespace th10 {
 
 namespace {
 
-struct OwnerLink {
-    void *self_node;
-    OwnerLink *next;
-    OwnerLink *previous;
-};
+// The pooled records are the canonical VmRecord layout; +0x358 is the owned
+// vertex-buffer pointer and +0x4 is the intrusive OwnerLink.
+typedef VmRecord OwnerNode;
 
-struct OwnerNode {
-    u8 unknown_0000[4];
-    OwnerLink link;
-    u8 unknown_0010[0x348];
-    void *owned_0358;
-    u8 unknown_035c[0x50];
-};
-
-typedef char AssertOwnerNodeSize[sizeof(OwnerNode) == 0x3ac ? 1 : -1];
-typedef char AssertOwnerNodeLinkOffset[
-    offsetof(OwnerNode, link) == 0x4 ? 1 : -1];
-typedef char AssertOwnerNodeBufferOffset[
-    offsetof(OwnerNode, owned_0358) == 0x358 ? 1 : -1];
-
-struct LargeRenderOwnerLayout {
-    u8 unknown_0000[0x68];
-    OwnerNode pooled_nodes[0x1000];
-    u8 pooled_node_active[0x1000];
-    u8 unknown_3ad068[0x420];
-    void *owned_3ad488;
-    u8 unknown_3ad48c[0x380648];
-    OwnerLink *first_list_a;
-    OwnerLink *last_list_a;
-    OwnerLink *first_list_b;
-    OwnerLink *last_list_b;
-    OwnerNode late_nodes[0x14];
-    u8 unknown_732454[0xc];
-};
-
-typedef char AssertLargeRenderOwnerSize[
-    sizeof(LargeRenderOwnerLayout) == 0x732460 ? 1 : -1];
-typedef char AssertLargeRenderOwnerPoolOffset[
-    offsetof(LargeRenderOwnerLayout, pooled_nodes) == 0x68 ? 1 : -1];
-typedef char AssertLargeRenderOwnerActiveOffset[
-    offsetof(LargeRenderOwnerLayout, pooled_node_active) == 0x3ac068 ? 1 : -1];
-typedef char AssertLargeRenderOwnerBufferOffset[
-    offsetof(LargeRenderOwnerLayout, owned_3ad488) == 0x3ad488 ? 1 : -1];
-typedef char AssertLargeRenderOwnerListAOffset[
-    offsetof(LargeRenderOwnerLayout, first_list_a) == 0x72dad4 ? 1 : -1];
-typedef char AssertLargeRenderOwnerLateNodesOffset[
-    offsetof(LargeRenderOwnerLayout, late_nodes) == 0x72dae4 ? 1 : -1];
+inline OwnerLink *NodeLink(OwnerNode *node)
+{
+    return reinterpret_cast<OwnerLink *>(&node->link_self);
+}
 
 struct ResetSensitiveRenderTargetSlots {
     u8 unknown_0000[0x3ad4e0];
@@ -70,7 +32,7 @@ extern void ReleaseLargeRenderOwnerBuffer(void *pointer); // TH10 0x00452422
 extern void FreeLargeRenderOwnerNode(void *node); // TH10 0x004524a1
 extern void ReleaseLargeRenderOwnerComObject(void *object); // IUnknown::Release
 extern void ResetPooledRenderOwnerNodeEsiEdiAbi(
-    LargeRenderOwnerLayout *owner, OwnerNode *node); // TH10 0x00401de0
+    LargeRenderOwnerLayout *owner, VmRecord *node); // TH10 0x00401de0
 extern CallbackScheduler *g_CallbackScheduler; // TH10 DAT_00491be4
 extern D3D9Device *g_MainChainD3D9Device; // TH10 DAT_00491c30
 extern ChainCallback GetLargeRenderOwnerCallback(u32 index);
@@ -84,14 +46,14 @@ const i32 kLargeRenderCallbackPriorities[20] = {
 
 void ReleaseNodeBuffer(OwnerNode *node)
 {
-    if (node->owned_0358 != 0)
-        ReleaseLargeRenderOwnerBuffer(node->owned_0358);
-    node->owned_0358 = 0;
+    if (node->vertex_buffer != 0)
+        ReleaseLargeRenderOwnerBuffer(node->vertex_buffer);
+    node->vertex_buffer = 0;
 }
 
 void DestroyOwnerNode(LargeRenderOwnerLayout *owner, OwnerNode *node)
 {
-    OwnerLink *const link = &node->link;
+    OwnerLink *const link = NodeLink(node);
     if (link == owner->last_list_a)
         owner->last_list_a = link->previous;
     if (link == owner->first_list_a)

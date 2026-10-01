@@ -3,6 +3,7 @@
 #include <math.h>
 
 #include "AsciiRenderModeDispatcher.hpp"
+#include "LargeRenderOwnerLayout.hpp"
 #include "MainChainRender.hpp"
 #include "MainChainRuntime.hpp"
 #include "VmRecord.hpp"
@@ -151,8 +152,9 @@ i32 RenderAsciiSceneChannel(void *scene_memory, i32 channel)
     UpdateMainChainCameraWorkEdiAbi(&g_AsciiCameraWork);
     SetD3D9Viewport(g_MainChainD3DDevice, &g_AsciiCameraWork.viewport);
     g_MainChainActiveView = 0;
-    u8 *const render_owner = static_cast<u8 *>(g_MainChainRenderOwner);
-    render_owner[0x3ada6c] = 1;
+    LargeRenderOwnerLayout &render_owner =
+        *static_cast<LargeRenderOwnerLayout *>(g_MainChainRenderOwner);
+    render_owner.ascii_scene_active = 1;
 
     const OuterTraversalRecord *outer =
         *reinterpret_cast<const OuterTraversalRecord *const *>(scene + 0x18);

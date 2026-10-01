@@ -111,7 +111,7 @@ struct VmRecord {
     void *child_head;           // +0x010 child-list sentinel (self pointer)
     void *first_child;          // +0x014
     void *parent_link;          // +0x018 container field (0 => propagate)
-    u8 gap001c[4];              // +0x01c
+    void *chain_next;           // +0x01c (kind-bucket chain next; 0 = none)
     u32 render_kind;            // +0x020 (setup opcode 0x44 / render mode 15)
     float rotation_x;             // +0x024
     float rotation_y;             // +0x028

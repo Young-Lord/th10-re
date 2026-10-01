@@ -1,6 +1,7 @@
 #include "EntityHelpers.hpp"
 
 #include "AsciiAnimationVm.hpp"
+#include "LargeRenderOwnerLayout.hpp"
 #include "PlayerFrameworkHelpers.hpp"
 #include "VmRecord.hpp"
 #include <string.h>
@@ -82,16 +83,15 @@ void SetEntityStateWordEaxEsiAbi(u32 *id_slot, i32 value)
 // fallback does not set the used flag but still advances the cursor.
 void *AllocatePoolVmEsiAbi(void *manager_memory)
 {
-    u8 *const manager = static_cast<u8 *>(manager_memory);
-    u32 *const cursor = reinterpret_cast<u32 *>(manager + 0x3ad068);
-    u8 *const used_flags = manager + 0x3ac068;
-    u32 index = *cursor % 4096U;
-    u8 *vm = manager + 0x68 + index * 0x3ac;
-    if (used_flags[index] != 0) {
+    LargeRenderOwnerLayout &owner =
+        *static_cast<LargeRenderOwnerLayout *>(manager_memory);
+    u32 index = owner.pool_cursor % 4096U;
+    u8 *vm = reinterpret_cast<u8 *>(&owner.pooled_nodes[index]);
+    if (owner.pooled_node_active[index] != 0) {
         index = (index + 1) % 4096U;
-        *cursor = index;
-        vm = manager + 0x68 + index * 0x3ac;
-        if (used_flags[index] != 0) {
+        owner.pool_cursor = index;
+        vm = reinterpret_cast<u8 *>(&owner.pooled_nodes[index]);
+        if (owner.pooled_node_active[index] != 0) {
             // Heap fallback: blank-construct then reset. The original
             // calls the reset even for a null allocation.
             u8 *AllocateHeapBlock(u32 bytes); // 0x452493
@@ -108,12 +108,12 @@ void *AllocatePoolVmEsiAbi(void *manager_memory)
                 rec.sprite_entry_id = 0xffffU;
             }
             ResetAsciiAnimationVmRecord(vm);
-            *cursor = (*cursor + 1) % 4096U;
+            owner.pool_cursor = (owner.pool_cursor + 1) % 4096U;
             return vm;
         }
     }
-    used_flags[index] = 1;
-    *cursor = (*cursor + 1) % 4096U;
+    owner.pooled_node_active[index] = 1;
+    owner.pool_cursor = (owner.pool_cursor + 1) % 4096U;
     return vm;
 }
 
@@ -142,35 +142,33 @@ void AssignPoolVmScriptEcxEaxAbi(void *vm_memory, i32 script_id)
 // id counter at manager+0x732454 skips zero by wrapping to 1.
 void LinkEntityAndAssignIdEaxEsiAbi(u32 *out_id, void *entity_memory)
 {
-    u8 *const manager = static_cast<u8 *>(g_MainChainRenderOwner);
+    LargeRenderOwnerLayout &owner =
+        *static_cast<LargeRenderOwnerLayout *>(g_MainChainRenderOwner);
     u8 *const entity = static_cast<u8 *>(entity_memory);
-    u32 *const node = reinterpret_cast<u32 *>(entity + 4);
-    node[0] = reinterpret_cast<u32>(entity);
-    node[1] = 0;
-    node[2] = 0;
-    u32 **const head = reinterpret_cast<u32 **>(manager + 0x72dad4);
-    u32 **const tail = reinterpret_cast<u32 **>(manager + 0x72dad8);
-    if (*head == 0) {
-        *head = node;
+    OwnerLink *const node = reinterpret_cast<OwnerLink *>(entity + 4);
+    node->self_node = entity;
+    node->next = 0;
+    node->previous = 0;
+    if (owner.first_list_a == 0) {
+        owner.first_list_a = node;
     } else {
-        u32 *const last = *tail;
-        u32 *const last_next = reinterpret_cast<u32 *>(last[1]);
+        OwnerLink *const last = owner.last_list_a;
+        OwnerLink *const last_next = last->next;
         if (last_next != 0) {
-            node[1] = reinterpret_cast<u32>(last_next);
-            last_next[2] = reinterpret_cast<u32>(node);
+            node->next = last_next;
+            last_next->previous = node;
         }
-        last[1] = reinterpret_cast<u32>(node);
-        node[2] = reinterpret_cast<u32>(last);
+        last->next = node;
+        node->previous = last;
     }
-    *tail = node;
+    owner.last_list_a = node;
 
-    u32 *const counter = reinterpret_cast<u32 *>(manager + 0x732454);
-    *counter += 1;
-    if (*counter == 0)
-        *counter = 1;
+    owner.node_id_counter += 1;
+    if (owner.node_id_counter == 0)
+        owner.node_id_counter = 1;
     reinterpret_cast<VmRecord *>(entity)->entity_id =
-        static_cast<i32>(*counter);
-    *out_id = *counter;
+        static_cast<i32>(owner.node_id_counter);
+    *out_id = static_cast<u32>(owner.node_id_counter);
 }
 
 // TH10 0x00448a50. List-A front-insertion twin of 0x4489d0: same node
@@ -178,29 +176,27 @@ void LinkEntityAndAssignIdEaxEsiAbi(u32 *out_id, void *entity_memory)
 // the tail (+0x72dad8) is only touched when the list was empty.
 void LinkEntityFrontAndAssignIdEaxEsiAbi(u32 *out_id, void *entity_memory)
 {
-    u8 *const manager = static_cast<u8 *>(g_MainChainRenderOwner);
+    LargeRenderOwnerLayout &owner =
+        *static_cast<LargeRenderOwnerLayout *>(g_MainChainRenderOwner);
     u8 *const entity = static_cast<u8 *>(entity_memory);
-    u32 *const node = reinterpret_cast<u32 *>(entity + 4);
-    node[0] = reinterpret_cast<u32>(entity);
-    node[1] = 0;
-    node[2] = 0;
-    u32 **const head = reinterpret_cast<u32 **>(manager + 0x72dad4);
-    u32 **const tail = reinterpret_cast<u32 **>(manager + 0x72dad8);
-    if (*head == 0) {
-        *tail = node;
+    OwnerLink *const node = reinterpret_cast<OwnerLink *>(entity + 4);
+    node->self_node = entity;
+    node->next = 0;
+    node->previous = 0;
+    if (owner.first_list_a == 0) {
+        owner.last_list_a = node;
     } else {
-        node[1] = reinterpret_cast<u32>(*head);
-        (*head)[2] = reinterpret_cast<u32>(node);
+        node->next = owner.first_list_a;
+        owner.first_list_a->previous = node;
     }
-    *head = node;
+    owner.first_list_a = node;
 
-    u32 *const counter = reinterpret_cast<u32 *>(manager + 0x732454);
-    *counter += 1;
-    if (*counter == 0)
-        *counter = 1;
+    owner.node_id_counter += 1;
+    if (owner.node_id_counter == 0)
+        owner.node_id_counter = 1;
     reinterpret_cast<VmRecord *>(entity)->entity_id =
-        static_cast<i32>(*counter);
-    *out_id = *counter;
+        static_cast<i32>(owner.node_id_counter);
+    *out_id = static_cast<u32>(owner.node_id_counter);
 }
 
 // TH10 0x004491c0. Walks the active list then the secondary list, matching
@@ -209,16 +205,15 @@ u8 *FindEntityEdxStackAbi(void *manager_memory, u32 id)
 {
     if (id == 0)
         return 0;
-    const u8 *const manager = static_cast<const u8 *>(manager_memory);
-    const u32 *const list_heads[2] = {
-        *reinterpret_cast<u32 *const *>(manager + 0x72dad4),
-        *reinterpret_cast<u32 *const *>(manager + 0x72dadc)
-    };
+    const LargeRenderOwnerLayout &owner =
+        *static_cast<const LargeRenderOwnerLayout *>(manager_memory);
+    const OwnerLink *const list_heads[2] = {owner.first_list_a,
+                                            owner.first_list_b};
     for (u32 list_index = 0; list_index != 2; ++list_index) {
-        const u32 *node = list_heads[list_index];
-        for (; node != 0; node = reinterpret_cast<const u32 *>(node[1])) {
-            u8 *const entity = reinterpret_cast<u8 *>(node[0]);
-            if (entity != 0 && reinterpret_cast<VmRecord *>(entity)
+        for (const OwnerLink *node = list_heads[list_index]; node != 0;
+             node = node->next) {
+            u8 *const entity = static_cast<u8 *>(node->self_node);
+            if (entity != 0 && reinterpret_cast<const VmRecord *>(entity)
                                    ->entity_id == id)
                 return entity;
         }
@@ -323,14 +318,16 @@ i32 IsOutsidePlayfieldBox(const float position[2], float half_x,
 // TH10 0x004493e0. Native EAX = manager, EDX = resource pointer.
 void *ReleaseEntitiesUsingResourceEaxEdxAbi(void *manager, u32 resource)
 {
-    u8 *const base = static_cast<u8 *>(manager);
-    const u32 list_heads[2] = {0x72dad4U, 0x72dadcU};
+    LargeRenderOwnerLayout &owner =
+        *static_cast<LargeRenderOwnerLayout *>(manager);
+    OwnerLink *const list_heads[2] = {owner.first_list_a,
+                                      owner.first_list_b};
     void *last_node = 0;
     for (u32 i = 0; i < 2U; ++i) {
-        u32 *node = *reinterpret_cast<u32 **>(base + list_heads[i]);
+        OwnerLink *node = list_heads[i];
         while (node != 0) {
-            u32 *const next = reinterpret_cast<u32 *>(node[1]);
-            u8 *const entity = reinterpret_cast<u8 *>(node[0]);
+            OwnerLink *const next = node->next;
+            u8 *const entity = static_cast<u8 *>(node->self_node);
             VmRecord &vm = *reinterpret_cast<VmRecord *>(entity);
             if (vm.bound_resource == reinterpret_cast<void *>(resource)) {
                 vm.flags |= 0x4000000U;

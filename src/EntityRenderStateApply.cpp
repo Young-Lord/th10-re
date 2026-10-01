@@ -11,6 +11,7 @@
 
 #include "EntityRenderStateApply.hpp"
 
+#include "LargeRenderOwnerLayout.hpp"
 #include "MainChainRender.hpp"
 #include "Th10Platform.hpp"
 #include "VmRecord.hpp"
@@ -23,11 +24,6 @@ typedef i32 (TH10_STDCALL *D3DSetRenderStateFn)(D3D9Device *, u32, u32);
 typedef i32 (TH10_STDCALL *D3DSetSamplerStateFn)(D3D9Device *, u32, u32, u32);
 
 extern D3D9Device *g_MainChainD3D9Device; // TH10 DAT_00491c30
-
-u32 ReadU32At(const void *address)
-{
-    return *reinterpret_cast<const u32 *>(address);
-}
 
 // The modulation multipliers at owner+0x732458..+0x73245b are 0..256 fixed
 // point applied per byte with a >>7 shift and an explicit 0xff clamp. The
@@ -64,6 +60,8 @@ void SetDeviceSamplerState(u32 sampler, u32 type, u32 value)
 void ApplyEntityRenderStateEaxEbxAbi(void *owner /* EAX */,
                                      const void *entity /* EBX */)
 {
+    LargeRenderOwnerLayout &owner_state =
+        *static_cast<LargeRenderOwnerLayout *>(owner);
     u8 *const owner_bytes = static_cast<u8 *>(owner);
     const VmRecord &vm = *reinterpret_cast<const VmRecord *>(entity);
 
@@ -75,10 +73,10 @@ void ApplyEntityRenderStateEaxEbxAbi(void *owner /* EAX */,
     // cache still advances.
     const u8 blend = static_cast<u8>((vm.flags >> 4)
         & 3U);
-    if (owner_bytes[0x3ada68U] != blend) {
+    if (owner_state.blend_mode_cache != blend) {
         FlushRenderOwnerPendingVertices(reinterpret_cast<RenderOwnerPartial *>(
             owner));
-        owner_bytes[0x3ada68U] = blend;
+        owner_state.blend_mode_cache = blend;
         if (blend != 3U) {
             SetDeviceRenderState(0x14U, blend == 0U ? 6U : 2U);
         }
@@ -91,13 +89,13 @@ void ApplyEntityRenderStateEaxEbxAbi(void *owner /* EAX */,
     u32 color = (vm.flags & 0x8000U) != 0U
         ? vm.secondary_color
         : vm.primary_color;
-    if (ReadU32At(owner_bytes + 0x73245cU) != 0U)
+    if (owner_state.custom_color_gate != 0U)
         color = ModulateColorBytes(color, owner_bytes);
 
-    if (ReadU32At(owner_bytes + 0x3ada60U) != color) {
+    if (owner_state.modulation_color != color) {
         FlushRenderOwnerPendingVertices(reinterpret_cast<RenderOwnerPartial *>(
             owner));
-        *reinterpret_cast<u32 *>(owner_bytes + 0x3ada60U) = color;
+        owner_state.modulation_color = color;
         SetDeviceRenderState(0x3cU, color); // D3DRS_TEXTUREFACTOR (60)
     }
 
@@ -106,17 +104,17 @@ void ApplyEntityRenderStateEaxEbxAbi(void *owner /* EAX */,
     // D3DSAMP_MAGFILTER (5) and D3DSAMP_MINFILTER (6) of sampler 0 through
     // the vtable +0x114 entry.
     const u8 sampler = static_cast<u8>(vm.flags >> 31);
-    if (owner_bytes[0x3ada6eU] != sampler) {
+    if (owner_state.sampler_filter_cache != sampler) {
         FlushRenderOwnerPendingVertices(reinterpret_cast<RenderOwnerPartial *>(
             owner));
-        owner_bytes[0x3ada6eU] = sampler;
+        owner_state.sampler_filter_cache = sampler;
         const u32 filter = sampler == 0U ? 2U : 1U;
         SetDeviceSamplerState(0U, 5U, filter);
         SetDeviceSamplerState(0U, 6U, filter);
     }
 
     // Owner state version bump; the native increments unconditionally.
-    ++*reinterpret_cast<u32 *>(owner_bytes + 0x54U);
+    ++owner_state.render_mode_counter;
 }
 
 } // namespace th10

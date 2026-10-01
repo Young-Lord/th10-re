@@ -6,6 +6,7 @@
 
 #include "RenderOwnerDrawHelpers.hpp"
 #include "Th10Platform.hpp"
+#include "LargeRenderOwnerLayout.hpp"
 #include "MainChainRender.hpp"
 #include "MainChainRuntime.hpp"
 #include "PlayerShotData.hpp"
@@ -213,13 +214,14 @@ u32 ScaleBrightnessClamp255Abi(u8 multiplier, u8 value)
 // sampler-state call result (or the sign bit when no change was needed).
 u32 ApplyOwnerRenderModesEaxEdiAbi(void *owner, void *entity)
 {
-    u8 *const owner_bytes = static_cast<u8 *>(owner);
+    LargeRenderOwnerLayout &owner_state =
+        *static_cast<LargeRenderOwnerLayout *>(owner);
     const u32 state_word = ReadU32At(entity, 0x35cU);
 
     const u32 blend = (state_word >> 4) & 3U;
-    if (owner_bytes[0x3ada68U] != static_cast<u8>(blend)) {
+    if (owner_state.blend_mode_cache != static_cast<u8>(blend)) {
         FlushOwnerVertices(owner);
-        owner_bytes[0x3ada68U] = static_cast<u8>(blend);
+        owner_state.blend_mode_cache = static_cast<u8>(blend);
         if (blend == 0U) {
             (void)reinterpret_cast<i32 (TH10_STDCALL *)(D3D9Device *, u32,
                 u32)>(GetD3DSlot(g_MainChainD3DDevice, 0xe4 / 4))(
@@ -233,9 +235,9 @@ u32 ApplyOwnerRenderModesEaxEdiAbi(void *owner, void *entity)
 
     const u32 negative = state_word >> 31;
     u32 result = negative;
-    if (owner_bytes[0x3ada6eU] != static_cast<u8>(negative)) {
+    if (owner_state.sampler_filter_cache != static_cast<u8>(negative)) {
         FlushOwnerVertices(owner);
-        owner_bytes[0x3ada6eU] = static_cast<u8>(negative);
+        owner_state.sampler_filter_cache = static_cast<u8>(negative);
         typedef i32 (TH10_STDCALL *SetSamplerFn)(D3D9Device *, u32, u32,
                                                  u32);
         const SetSamplerFn set_sampler =
@@ -247,7 +249,7 @@ u32 ApplyOwnerRenderModesEaxEdiAbi(void *owner, void *entity)
                                               filter));
     }
 
-    WriteU32At(owner, 0x54U, ReadU32At(owner, 0x54U) + 1U);
+    owner_state.render_mode_counter = owner_state.render_mode_counter + 1U;
     return result;
 }
 
@@ -256,8 +258,10 @@ u32 ApplyOwnerRenderModesEaxEdiAbi(void *owner, void *entity)
 // the address right behind the head.
 void InitializeOwnerVertexFreeListEaxAbi(void *owner)
 {
+    LargeRenderOwnerLayout &owner_state =
+        *static_cast<LargeRenderOwnerLayout *>(owner);
     u8 *const base = static_cast<u8 *>(owner);
-    WriteU32At(base, 964274U * 4U, 0U);
+    owner_state.pending_quad_count = 0U;
     const u32 node_value = reinterpret_cast<u32>(base) + 964275U * 4U;
     WriteU32At(base, 1881779U * 4U, node_value);
     WriteU32At(base, 1881780U * 4U, node_value);
@@ -366,15 +370,16 @@ i32 BuildVerticalRibbonVerticesEaxCcxAbi(i32 count, void *entity,
 i32 DrawRibbonStripIndexedEcxAbi(void *render_object, void *owner,
                                  u32 vertex_word_a, u32 vertex_word_b)
 {
-    u8 *const own = static_cast<u8 *>(owner);
-    if (ReadU32At(own, 0x3adac8U) != 0U)
+    LargeRenderOwnerLayout &owner_state =
+        *static_cast<LargeRenderOwnerLayout *>(owner);
+    if (owner_state.pending_quad_count != 0U)
         FlushOwnerVertices(owner);
 
-    if (own[0x3ada6aU] != 3U) {
+    if (owner_state.fvf_active_cache != 3U) {
         (void)reinterpret_cast<i32 (TH10_STDCALL *)(D3D9Device *, u32)>(
             GetD3DSlot(g_MainChainD3DDevice, 0x164 / 4))(
             g_MainChainD3DDevice, 0x144U);
-        own[0x3ada6aU] = 3U;
+        owner_state.fvf_active_cache = 3U;
     }
 
     (void)ApplyOwnerRenderModesEaxEdiAbi(owner, render_object);
@@ -382,8 +387,8 @@ i32 DrawRibbonStripIndexedEcxAbi(void *render_object, void *owner,
     const u32 texture_work = ReadU32At(render_object, 0x394U);
     const u32 texture = ReadU32At(
         reinterpret_cast<const void *>(texture_work), 4U);
-    if (ReadU32At(own, 0x3ada64U) != texture) {
-        WriteU32At(own, 0x3ada64U, texture);
+    if (reinterpret_cast<u32>(owner_state.bound_texture) != texture) {
+        owner_state.bound_texture = reinterpret_cast<void *>(texture);
         (void)reinterpret_cast<i32 (TH10_STDCALL *)(D3D9Device *, u32,
             u32)>(GetD3DSlot(g_MainChainD3DDevice, 0x104 / 4))(
             g_MainChainD3DDevice, 0U, texture);

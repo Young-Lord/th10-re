@@ -511,3 +511,16 @@ ABI 语法经验：__usercall 必须带返回位置注解（@<eax>），否则�
 - 刻意保留的裸访问类别：子 dword 颜色字节（0x2ff/0x303）、u32 位模式写入 float 字段（0x3c/0x40/0x2c/0x34/0x38，字段赋值会改变语义）、数组驱动的批量清零/旗标循环、块指针参数化的插值器内部、以及上下文不足以归属对象类型的访问。
 
 剩余裸偏移热点（下一批候选）：RenderOwner 侧 +0x3ada60 族与 +0x72dad4 族（源码已有 LargeRenderOwnerLayout 骨架但未统一引用）、GameManager/管理器槽位、player 对象。
+
+## RenderOwner 侧字段化（第四轮，2026-10-01）
+
+新建 src/LargeRenderOwnerLayout.hpp（0x732460 全字段 + 26 个 offset 断言，MSVC 编译期验证；与 IDB struct LargeRenderOwnerLayout 逐字段一致），统一了 LargeRenderOwner.cpp 与 LargeRenderOwnerFrameLoop.cpp 各自的匿名局部定义。
+
+- 约 190 处 owner 裸偏移改为具名字段访问，30 个 cpp：渲染适配器族（MainChainRenderAdapters/RenderOwnerDrawHelpers/RenderOwnerSurfaceLoading/RenderOwnerClearColor/ManagerWorkPipeline）、帧与生命周期（MainApplicationFrame/MainChainShutdown/GameModeTeardown/TitleGameManagerLifecycle）、ASCII 侧 10 文件（Mode8/Mode9/GlyphSubmission/Projected 等）、舞台/实体/玩家 11 文件（EntityHelpers 池分配与链表、EntityRenderStateApply 渲染状态缓存、各 FindEntityById 调用方）。
+- 新发现并修正：顶点竞技场实为整 0x380000 字节（0x3adacc..0x72dacc），0x72dacc/0x72dad0 提为具名字段 vertex_write_cursor/draw_source（源码+IDB 同步）。
+- 新命名：VmRecord+0x1c 由 gap 更名为 chain_next（kind 桶链指针，FrameLoop 视图证据）。
+- 布局统一红利：19 个 kind 桶哨兵即 late_nodes[0..0x12]，其链头是 chain_next@0x1c；两个 cpp 的重复 OwnerLink 定义删除。
+- 刻意保留：竞技场内部自由链哨兵（0x72d54c/0x72d550）、clear_color 的逐字节调制读取（reinterpret_cast<u8*> 于字段地址上，语义等价）、dword 宽度写入 u8 缓存字段的 EndingOverlayQuad 用字段地址 u32 存储保宽度。
+- 全量编译 exit 0（228 obj）。
+
+剩余裸偏移热点：GameManager/各管理器槽位对象（0x6fc/0x3c8 族）、player 对象族、HUD owner（DAT_0047770c，0x89ac+ 布局）。

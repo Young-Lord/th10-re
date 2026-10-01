@@ -3,6 +3,7 @@
 #include "CallbackScheduler.hpp"
 #include "EntityHelpers.hpp"
 #include "GlobalLifecycleManager.hpp"
+#include "LargeRenderOwnerLayout.hpp"
 #include "ManagerReleaseWrappers.hpp"
 #include "ScoreSave.hpp"
 #include "ThreadControl.hpp"
@@ -239,9 +240,10 @@ void DestroySpellBulletBaseInPlace(void *object)
 // TH10 0x0041f930. Releases the two coordinated render-owner slots.
 void ReleaseGlobalLifecycleCoordinatedSlots()
 {
-    u8 *const owner = static_cast<u8 *>(g_MainChainRenderOwner);
-    ReleaseRenderOwnerSlotWord(reinterpret_cast<u32 *>(owner + 0x3ad084U));
-    ReleaseRenderOwnerSlotWord(reinterpret_cast<u32 *>(owner + 0x3ad088U));
+    LargeRenderOwnerLayout &owner =
+        *static_cast<LargeRenderOwnerLayout *>(g_MainChainRenderOwner);
+    ReleaseRenderOwnerSlotWord(reinterpret_cast<u32 *>(&owner.work_slots[6]));
+    ReleaseRenderOwnerSlotWord(reinterpret_cast<u32 *>(&owner.work_slots[7]));
 }
 
 // TH10 0x00401260. Base-object in-place destructor of the DAT_004776e0
@@ -256,10 +258,11 @@ void DestroyAsciiManagerHostInPlace(void *host)
     RemoveSchedulerRecordSynchronized(base, 0x10U);
     RemoveSchedulerRecordSynchronized(base, 0x89a8U);
 
-    u8 *const owner = static_cast<u8 *>(g_MainChainRenderOwner);
-    ReleaseRenderOwnerSlotWord(reinterpret_cast<u32 *>(owner + 0x3ad074U));
-    ReleaseRenderOwnerSlotWord(reinterpret_cast<u32 *>(owner + 0x3ad06cU));
-    ReleaseRenderOwnerSlotWord(reinterpret_cast<u32 *>(owner + 0x3ad078U));
+    LargeRenderOwnerLayout &owner =
+        *static_cast<LargeRenderOwnerLayout *>(g_MainChainRenderOwner);
+    ReleaseRenderOwnerSlotWord(reinterpret_cast<u32 *>(&owner.work_slots[2]));
+    ReleaseRenderOwnerSlotWord(reinterpret_cast<u32 *>(&owner.work_slots[0]));
+    ReleaseRenderOwnerSlotWord(reinterpret_cast<u32 *>(&owner.work_slots[3]));
 
     // +0x718 buffer: the native reads it, clears the published host global
     // DAT_004776e0, frees the buffer through the CRT free, and clears the
@@ -299,8 +302,9 @@ void DestroyGlobalLifecycleManagerInPlace(void *manager)
     // score-save record flush/release.
     ReleaseGlobalLifecycleCoordinatedSlots();
 
-    ReleaseRenderOwnerSlotWord(reinterpret_cast<u32 *>(
-        static_cast<u8 *>(g_MainChainRenderOwner) + 0x3ad070U));
+    LargeRenderOwnerLayout &owner =
+        *static_cast<LargeRenderOwnerLayout *>(g_MainChainRenderOwner);
+    ReleaseRenderOwnerSlotWord(reinterpret_cast<u32 *>(&owner.work_slots[1]));
 
     g_GlobalLifecycleManager = 0; // DAT_00477820
     if (g_AsciiManagerHost != 0) {
@@ -308,8 +312,7 @@ void DestroyGlobalLifecycleManagerInPlace(void *manager)
         FreeMainChainObject(g_AsciiManagerHost);
     }
 
-    ReleaseRenderOwnerSlotWord(reinterpret_cast<u32 *>(
-        static_cast<u8 *>(g_MainChainRenderOwner) + 0x3ad06cU));
+    ReleaseRenderOwnerSlotWord(reinterpret_cast<u32 *>(&owner.work_slots[0]));
 
     // Flush scoreth10.dat state and release the score-save record: the
     // native hands DAT_0047783c to 0x0042b1e0 in EBX, then frees the two

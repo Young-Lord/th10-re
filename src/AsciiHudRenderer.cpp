@@ -1,6 +1,7 @@
 #include "AsciiHudRenderer.hpp"
 
 #include "AsciiRenderModeDispatcher.hpp"
+#include "LargeRenderOwnerLayout.hpp"
 #include "MainChainRender.hpp"
 #include "Th10Platform.hpp"
 
@@ -93,13 +94,14 @@ void DrawImmediateAsciiColoredRectangle(const float rectangle[4], u32 color)
     (void)reinterpret_cast<D3DDrawPrimitiveUPFn>(GetD3DSlot(
         device, 83))(device, 5, 2, vertices, sizeof(ImmediateColorVertex));
 
-    u8 *const owner = reinterpret_cast<u8 *>(g_MainChainRenderOwner);
-    owner[0x3ada6a] = 0xff;
-    *reinterpret_cast<u32 *>(owner + 0x3ada70) = 0;
-    *reinterpret_cast<u32 *>(owner + 0x3ada64) = 0;
-    owner[0x3ada69] = 0xff;
-    owner[0x3ada68] = 3;
-    owner[0x3ada6b] = 0xff;
+    LargeRenderOwnerLayout &owner =
+        *reinterpret_cast<LargeRenderOwnerLayout *>(g_MainChainRenderOwner);
+    owner.fvf_active_cache = 0xff;
+    owner.glyph_texture_cache = 0;
+    owner.bound_texture = 0;
+    owner.state_cache_3ada69 = 0xff;
+    owner.blend_mode_cache = 3;
+    owner.state_cache_3ada6b = 0xff;
     (void)reinterpret_cast<D3DSetTextureStageStateFn>(GetD3DSlot(
         device, 67))(device, 0, 4, 4);
     (void)reinterpret_cast<D3DSetTextureStageStateFn>(GetD3DSlot(

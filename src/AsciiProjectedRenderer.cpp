@@ -3,6 +3,7 @@
 #include <math.h>
 #include <string.h>
 
+#include "LargeRenderOwnerLayout.hpp"
 #include "MainChainRender.hpp"
 #include "VmRecord.hpp"
 
@@ -65,12 +66,15 @@ u32 ReadU32(const u8 *bytes, u32 offset)
     return *reinterpret_cast<const u32 *>(bytes + offset);
 }
 
-u32 ModulateColor(u32 color, const u8 *owner)
+u32 ModulateColor(u32 color, const LargeRenderOwnerLayout &owner)
 {
+    // Byte-wise reads of the +0x732458 packed clear/modulation color.
+    const u8 *const clear_color_bytes =
+        reinterpret_cast<const u8 *>(&owner.clear_color);
     u32 output = 0;
     for (u32 index = 0; index != 4; ++index) {
         u32 channel = ((color >> (index * 8)) & 0xffU) *
-            owner[0x732458 + index] >> 7;
+            clear_color_bytes[index] >> 7;
         if (channel > 0xffU)
             channel = 0xffU;
         output |= channel << (index * 8);
@@ -191,6 +195,7 @@ i32 BuildPerspectiveAsciiGlyphQuad(void *vm_memory)
 // TH10 0x00444240 semantic body. Every D3DX result is intentionally ignored.
 u32 BuildAndProjectMode7AsciiGlyphQuad(void *vm_memory, void *owner)
 {
+    LargeRenderOwnerLayout &owner_ref = *static_cast<LargeRenderOwnerLayout *>(owner);
     VmRecord &vm_record = *reinterpret_cast<VmRecord *>(vm_memory);
     u32 flags = vm_record.flags;
     if ((flags & 0x4000U) == 0 && (flags & 0x0cU) != 0) {
@@ -238,7 +243,7 @@ u32 BuildAndProjectMode7AsciiGlyphQuad(void *vm_memory, void *owner)
     };
     for (u32 index = 0; index != 4; ++index)
         ProjectQuadVertex(&g_AsciiGlyphScratchQuad[index], &local[index], &world);
-    memcpy(static_cast<u8 *>(owner) + 0x3ad0f0, &world, sizeof(world));
+    memcpy(owner_ref.world_matrix, &world, sizeof(world));
     return 0;
 }
 
@@ -258,7 +263,8 @@ i32 DrawAsciiAnimationVmPerspectiveFadedMode6(void *vm_memory, void *owner)
 {
     const u8 *const vm = static_cast<const u8 *>(vm_memory);
     const VmRecord &vm_record = *reinterpret_cast<const VmRecord *>(vm);
-    const u8 *const owner_bytes = static_cast<const u8 *>(owner);
+    const LargeRenderOwnerLayout &owner_ref =
+        *static_cast<const LargeRenderOwnerLayout *>(owner);
     if (BuildPerspectiveAsciiGlyphQuad(vm_memory) != 0)
         return -1;
 
@@ -271,8 +277,8 @@ i32 DrawAsciiAnimationVmPerspectiveFadedMode6(void *vm_memory, void *owner)
     const u32 flags = vm_record.flags;
     u32 color = (flags & 0x8000U) != 0 ? vm_record.secondary_color :
         vm_record.primary_color;
-    if (*reinterpret_cast<const u32 *>(owner_bytes + 0x73245c) != 0)
-        color = ModulateColor(color, owner_bytes);
+    if (owner_ref.custom_color_gate != 0)
+        color = ModulateColor(color, owner_ref);
     if (distance > g_AsciiFogNearDistance) {
         const float fade = (g_AsciiFogNearDistance - distance) /
             (g_AsciiFogNearDistance - g_AsciiFogCutoffDistance);
@@ -302,16 +308,17 @@ u32 DrawAsciiAnimationVmProjectedFoggedMode7(void *owner, void *vm_memory)
 {
     const VmRecord &vm_record =
         *reinterpret_cast<const VmRecord *>(vm_memory);
-    const u8 *const owner_bytes = static_cast<const u8 *>(owner);
+    const LargeRenderOwnerLayout &owner_ref =
+        *static_cast<const LargeRenderOwnerLayout *>(owner);
     (void)BuildAndProjectMode7AsciiGlyphQuad(vm_memory, owner);
     const u32 source_color = (vm_record.flags & 0x8000U) != 0 ?
         vm_record.secondary_color : vm_record.primary_color;
     for (u32 index = 0; index != 4; ++index) {
         D3DVector4 transformed;
         (void)D3dxVec3Transform(&transformed,
-            reinterpret_cast<const D3DVector3 *>(owner_bytes + 0x3ada78 +
-                                                 index * 0x14),
-            reinterpret_cast<const D3DMatrix *>(owner_bytes + 0x3ad0f0));
+            reinterpret_cast<const D3DVector3 *>(
+                &owner_ref.default_constants[index * 5]),
+            reinterpret_cast<const D3DMatrix *>(owner_ref.world_matrix));
         const float dx = transformed.x - g_AsciiFogPosition.x;
         const float dy = transformed.y - g_AsciiFogPosition.y;
         const float dz = transformed.z - g_AsciiFogPosition.z;

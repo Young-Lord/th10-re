@@ -1,6 +1,7 @@
 #include "PlayerOptionRecords.hpp"
 
 #include "EntityHelpers.hpp"
+#include "LargeRenderOwnerLayout.hpp"
 #include "PlayerOptionCallbacks.hpp"
 
 #include <cmath>
@@ -37,15 +38,14 @@ bool FindEntityById(u32 id, u8 **entity_out)
 {
     if (id == 0)
         return false;
-    u8 *const manager = static_cast<u8 *>(g_MainChainRenderOwner);
-    const u32 *const list_heads[2] = {
-        *reinterpret_cast<u32 *const *>(manager + 0x72dad4),
-        *reinterpret_cast<u32 *const *>(manager + 0x72dadc)
-    };
+    const LargeRenderOwnerLayout &owner =
+        *static_cast<const LargeRenderOwnerLayout *>(g_MainChainRenderOwner);
+    const OwnerLink *const list_heads[2] = {owner.first_list_a,
+                                            owner.first_list_b};
     for (u32 list_index = 0; list_index != 2; ++list_index) {
-        const u32 *node = list_heads[list_index];
-        for (; node != 0; node = reinterpret_cast<const u32 *>(node[1])) {
-            u8 *const entity = reinterpret_cast<u8 *>(node[0]);
+        for (const OwnerLink *node = list_heads[list_index]; node != 0;
+             node = node->next) {
+            u8 *const entity = static_cast<u8 *>(node->self_node);
             if (entity != 0 &&
                 *reinterpret_cast<const u32 *>(entity) == id) {
                 *entity_out = entity;

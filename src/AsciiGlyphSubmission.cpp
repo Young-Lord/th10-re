@@ -1,5 +1,6 @@
 #include <math.h>
 
+#include "LargeRenderOwnerLayout.hpp"
 #include "MainChainRender.hpp"
 #include "Th10Platform.hpp"
 #include "VmRecord.hpp"
@@ -52,12 +53,15 @@ float RoundGlyphCoordinate(float value)
     return (static_cast<i32>(lower) & 1) == 0 ? lower : lower + 1.0f;
 }
 
-u32 ModulateColor(u32 color, const u8 *owner)
+u32 ModulateColor(u32 color, const LargeRenderOwnerLayout &owner)
 {
-    const u32 blue = MultiplyColorChannel(color, owner[0x732458]);
-    const u32 green = MultiplyColorChannel(color >> 8, owner[0x732459]);
-    const u32 red = MultiplyColorChannel(color >> 16, owner[0x73245a]);
-    const u32 alpha = MultiplyColorChannel(color >> 24, owner[0x73245b]);
+    // Byte-wise reads of the +0x732458 packed clear/modulation color.
+    const u8 *const clear_color_bytes =
+        reinterpret_cast<const u8 *>(&owner.clear_color);
+    const u32 blue = MultiplyColorChannel(color, clear_color_bytes[0]);
+    const u32 green = MultiplyColorChannel(color >> 8, clear_color_bytes[1]);
+    const u32 red = MultiplyColorChannel(color >> 16, clear_color_bytes[2]);
+    const u32 alpha = MultiplyColorChannel(color >> 24, clear_color_bytes[3]);
     return blue | (green << 8) | (red << 16) | (alpha << 24);
 }
 
@@ -69,12 +73,12 @@ void FlushGlyphOwnerVertices(void *owner)
 void UpdateGlyphRenderStates(void *vm, void *owner)
 {
     const VmRecord &vm_record = *reinterpret_cast<const VmRecord *>(vm);
-    u8 *const owner_bytes = static_cast<u8 *>(owner);
+    LargeRenderOwnerLayout &owner_ref = *static_cast<LargeRenderOwnerLayout *>(owner);
     const u32 flags = vm_record.flags;
     const u8 blend_mode = static_cast<u8>((flags >> 4) & 3);
-    if (owner_bytes[0x3ada68] != blend_mode) {
+    if (owner_ref.blend_mode_cache != blend_mode) {
         FlushGlyphOwnerVertices(owner);
-        owner_bytes[0x3ada68] = blend_mode;
+        owner_ref.blend_mode_cache = blend_mode;
         if (blend_mode == 0) {
             (void)reinterpret_cast<D3DSetRenderStateFn>(GetD3DSlot(
                 g_MainChainD3D9Device, 57))(g_MainChainD3D9Device, 0x14, 6);
@@ -85,16 +89,16 @@ void UpdateGlyphRenderStates(void *vm, void *owner)
     }
 
     const u8 sampler_mode = static_cast<u8>(flags >> 31);
-    if (owner_bytes[0x3ada6e] != sampler_mode) {
+    if (owner_ref.sampler_filter_cache != sampler_mode) {
         FlushGlyphOwnerVertices(owner);
-        owner_bytes[0x3ada6e] = sampler_mode;
+        owner_ref.sampler_filter_cache = sampler_mode;
         const u32 value = sampler_mode == 0 ? 2 : 1;
         (void)reinterpret_cast<D3DSetSamplerStateFn>(GetD3DSlot(
             g_MainChainD3D9Device, 69))(g_MainChainD3D9Device, 0, 5, value);
         (void)reinterpret_cast<D3DSetSamplerStateFn>(GetD3DSlot(
             g_MainChainD3D9Device, 69))(g_MainChainD3D9Device, 0, 6, value);
     }
-    ++*reinterpret_cast<u32 *>(owner_bytes + 0x54);
+    ++owner_ref.render_mode_counter;
 }
 
 bool IntersectsActiveViewport()
@@ -125,18 +129,17 @@ bool IntersectsActiveViewport()
 
 void AppendAsciiGlyphScratchQuadAsTriangles(void *owner)
 {
-    u8 *const owner_bytes = static_cast<u8 *>(owner);
-    AsciiGlyphVertex *const destination = *reinterpret_cast<AsciiGlyphVertex **>(
-        owner_bytes + 0x72dacc);
+    LargeRenderOwnerLayout &owner_ref = *static_cast<LargeRenderOwnerLayout *>(owner);
+    AsciiGlyphVertex *const destination =
+        static_cast<AsciiGlyphVertex *>(owner_ref.vertex_write_cursor);
     destination[0] = g_AsciiGlyphScratchQuad[0];
     destination[1] = g_AsciiGlyphScratchQuad[1];
     destination[2] = g_AsciiGlyphScratchQuad[2];
     destination[3] = g_AsciiGlyphScratchQuad[1];
     destination[4] = g_AsciiGlyphScratchQuad[2];
     destination[5] = g_AsciiGlyphScratchQuad[3];
-    *reinterpret_cast<AsciiGlyphVertex **>(owner_bytes + 0x72dacc) =
-        destination + 6;
-    ++*reinterpret_cast<u32 *>(owner_bytes + 0x3adac8);
+    owner_ref.vertex_write_cursor = destination + 6;
+    ++owner_ref.pending_quad_count;
 }
 
 } // namespace
@@ -146,9 +149,11 @@ void AppendAsciiGlyphScratchQuadAsTriangles(void *owner)
 void SubmitAsciiGlyphScratchQuad(void *vm, void *owner, u32 flags)
 {
     const VmRecord &vm_record = *reinterpret_cast<const VmRecord *>(vm);
-    u8 *const owner_bytes = static_cast<u8 *>(owner);
-    const float offset_x = *reinterpret_cast<const float *>(owner_bytes + 0x5c);
-    const float offset_y = *reinterpret_cast<const float *>(owner_bytes + 0x60);
+    LargeRenderOwnerLayout &owner_ref = *static_cast<LargeRenderOwnerLayout *>(owner);
+    const float offset_x =
+        *reinterpret_cast<const float *>(&owner_ref.camera_value_005c);
+    const float offset_y =
+        *reinterpret_cast<const float *>(&owner_ref.camera_value_0060);
     for (u32 index = 0; index != 4; ++index) {
         g_AsciiGlyphScratchQuad[index].x += offset_x;
         g_AsciiGlyphScratchQuad[index].y += offset_y;
@@ -183,22 +188,22 @@ void SubmitAsciiGlyphScratchQuad(void *vm, void *owner, u32 flags)
         return;
 
     void *const texture = *reinterpret_cast<void *const *>(glyph + 4);
-    if (*reinterpret_cast<void **>(owner_bytes + 0x3ada64) != texture) {
-        *reinterpret_cast<void **>(owner_bytes + 0x3ada64) = texture;
+    if (owner_ref.bound_texture != texture) {
+        owner_ref.bound_texture = texture;
         FlushGlyphOwnerVertices(owner);
         (void)reinterpret_cast<D3DSetTextureFn>(GetD3DSlot(
             g_MainChainD3D9Device, 65))(g_MainChainD3D9Device, 0, texture);
     }
-    if (owner_bytes[0x3ada6a] != 1) {
+    if (owner_ref.fvf_active_cache != 1) {
         FlushGlyphOwnerVertices(owner);
-        owner_bytes[0x3ada6a] = 1;
+        owner_ref.fvf_active_cache = 1;
     }
     if ((flags & 2) == 0) {
         const u32 vm_flags = vm_record.flags;
         u32 color = (vm_flags & 0x8000U) != 0 ? vm_record.secondary_color :
             vm_record.primary_color;
-        if (*reinterpret_cast<const u32 *>(owner_bytes + 0x73245c) != 0)
-            color = ModulateColor(color, owner_bytes);
+        if (owner_ref.custom_color_gate != 0)
+            color = ModulateColor(color, owner_ref);
         for (u32 index = 0; index != 4; ++index)
             g_AsciiGlyphScratchQuad[index].color = color;
     }
