@@ -232,3 +232,164 @@
 | 0x497d8c | g_TitleOriginGuard |  |
 | 0x497d90 | g_KeyboardStatePrevious |  |
 | 0x497e90 | g_KeyboardStateCurrent |  |
+
+## 常量账本
+
+### 浮点常量（38 个，均已 set_type(float/double) 并按源码注释命名）
+
+| 地址 | 名称 | 值 | 备注 |
+|---|---|---|---|
+| 0x470afc | kTimerStep | 1.0f |  |
+| 0x470b04 | kBenchXHigh | 0.0f |  |
+| 0x470b08 | kTwo (别名) | FloatFromBits(1073741824U) | 保留 g_AsciiBarHeight（语义更强）；kTwo=2.0f 为局部别名 |
+| 0x470b0c | kHalf | FloatFromBits(1056964608U) |  |
+| 0x470b14 | kTwoPi | 6.2831855f |  |
+| 0x470b18 | kPi | 3.14159265f |  |
+| 0x470b3c | kBossOffHigh | 192.0f |  |
+| 0x470b40 | kBossOffLow | -192.0f |  |
+| 0x470b48 | kSpawnOffsetY (别名) | 16.0f | 保留 g_AsciiObjectScrollY；kSpawnOffsetY=16.0f 为局部别名 |
+| 0x470b4c | kBossBaseX (别名) | 224.0f | 保留 g_AsciiObjectScrollX；kBossBaseX=224.0f 为局部别名 |
+| 0x470b50 | kClampLow | -990.0f |  |
+| 0x470b5c | kBenchXLow | -64.0f |  |
+| 0x470b60 | kMinusOne | -1.0f |  |
+| 0x470b64 | kTimerHigh | 1.01f |  |
+| 0x470b68 | kTimerLow | 0.99f |  |
+| 0x470bc8 | kBenchYLow | 64.0f |  |
+| 0x470bdc | kEnterY | 416.0f |  |
+| 0x470be0 | kTerminalX | FloatFromBits(1139539968U) |  |
+| 0x470bf4 | kPhaseBLine | FloatFromBits(1124073472U) |  |
+| 0x470c28 | kBenchYHigh | 80.0f |  |
+| 0x470c38 | kAccelStep | FloatFromBits(1045220557U) |  |
+| 0x470c40 | kAnchorScale | 4.0f |  |
+| 0x470c80 | kPhaseALine | FloatFromBits(1119879168U) |  |
+| 0x470c84 | kFollowScale | FloatFromBits(1028443341U) |  |
+| 0x470cc4 | kRetargetScale | FloatFromBits(1051372203U) |  |
+| 0x470cc8 | kFallbackYLow | -999.0f |  |
+| 0x470ccc | kClampHigh | 990.0f |  |
+| 0x470cd0 | kBonusScale | FloatFromBits(995595318U) |  |
+| 0x470cd4 | kBonusLineY | FloatFromBits(1125122048U) |  |
+| 0x470cd8 | kAccelGate | FloatFromBits(1094713344U) |  |
+| 0x470cdc | kGravityStep | FloatFromBits(1022739087U) |  |
+| 0x470ce0 | kBonusBias | FloatFromBits(1167867904U) |  |
+| 0x470ce8 | kBossAlphaScale | -2.984375f |  |
+| 0x470cf0 | kBossNearX | 64.0 |  |
+| 0x470cf8 | kHpFillStep | 0.025f |  |
+| 0x470d00 | kLeaveX | -112.0 |  |
+| 0x470d08 | kLeaveY | 400.0f |  |
+| 0x470d10 | kEnterX | -128.0 |  |
+
+### 字符串账本（游戏专用串，共 175 条，全量见 find_regex 结果；按用途分组）
+
+- **归档/脚本**: th10.dat (0x46e000), thbgm.dat (0x46dbe0), scoreth10.dat (0x46e848), th10.cfg (0x46f770), ../../bgm/thbgm.fmt (0x46dc14), ../../data/*.ecl (0x46cea8)
+- **关卡资源表** (0x46e9b0-0x46ecdc): stage00-07 每关五元组 stageNN.ecl / stageNN.std / stgenmNN.anm / stNNlogo.anm / bgm/th10_NN.wav（含 13/15/16/17 等散布副本）
+- **玩家/标题**: pl00.anm (0x46e42c), pl01.anm (0x46e420), title.anm (0x46f0ac), title_v.anm (0x46f0a0), capture/text/ascii/bullet/front/sig.anm
+- **音效** (0x46fe80-0x4700b4): se_*.wav 34 个（se_pldead00/se_ok00/se_cancel00/se_graze/se_extend/se_cardget 等）
+- **replay/score 格式**: th10_%.2d.rpy (0x46e0c8), th10_ud????.rpy (0x46efec), th10_%.4x%c.ver (0x46dff0), replay/%s (0x46e644), 排名行格式 (0x46e0e8, 0x46ee50)
+- **ZUN 调试断言串**（揭示原始内部名，与本项目模块命名互证）: PlayerInf, ReplayInf, ScoreInf, SmollScoreInf, StageFileHeaderInf, ReplayStageDataHeaderInf, ReplayFrameDataInf, ScoreFileHeaderInf, ScoreChunkInf；路径前缀 c:\cygwin\home\zun\prog\th10\src\...
+- **BGM 状态日志** (0x46faa4-0x46fd24): "Sound : Play Stage"/"Streming BGM *"/"error : bgmfile is not find %s"
+
+## 冲突仲裁（75 个多义地址）
+
+原则：同一 dword 在不同模块以不同角色访问时，主名取「跨模块语义」；每个地址保留别名清单。
+对 37 个核心地址逐一点取了 xref 引用函数做证据；其余以源码模块上下文为准。
+
+| 地址 | 主名（IDB 现名） | 别名 | 证据/裁决 |
+|---|---|---|---|
+| 0x474788 | g_StageRecordTable | g_TitleTransitionRecords | xref: SelectStageConfigTable/SelectStageRecordSlot/RunManagerStateBody9/C —— 是关卡配置表而非标题过渡记录 |
+| 0x474c40 | g_ScoreBlock | g_MainChainFrameStateBlock, g_MaximumScore, g_HighScoreValue, g_StageFramePeak | xref 52 处：ECL setup/敌死序列/结果屏 —— 分数/状态快照块 |
+| 0x474c44 | g_CurrentRunScore | g_SceneSubTimer, g_CurrentRunScoreValue, g_CurrentScore, g_StageFrameCount | 源码模块上下文 |
+| 0x474c48 | g_PlayerPowerGauge | g_PlayerLivesCounter, g_PlayerPowerGaugeDword, g_PlayerPowerGaugeWord, g_SceneWord48 | 源码模块上下文 |
+| 0x474c4c | g_PlayerPowerPool | g_ScoreBonusBaseDword, g_ScorePool | xref 16 处：符卡练习/脚本名请求/子弹管理 |
+| 0x474c50 | g_BossDefeatedFlag | g_SceneSelector50 | xref 2 处：ECL setup、SetupGameSceneFromTitle |
+| 0x474c68 | g_PlayerCharacter | g_StageTextSprites, g_SceneStageIndexA, g_PlayerCharacterDamage, g_RunChara, g_PopupStepSelector | 源码模块上下文 |
+| 0x474c6c | g_PlayerShotType | g_RunCharaSlot, g_SceneStageIndexB | 源码模块上下文 |
+| 0x474c70 | g_PlayerLivesRemaining | g_PracticeStartIndex | xref 20 处：HUD 重置/结果屏/开场 —— 残机数 |
+| 0x474c74 | g_CurrentDifficulty | g_TimelinePhase, g_StageScoreSelector, g_PlayerDifficulty, g_RunShot | xref 79 处：Timeline gate/ECL —— 难度选择 |
+| 0x474c7c | g_ActiveTextLayer | g_LastTitleTransitionIndex, g_StageSelectorIndex, g_PlayerShotMode, g_StageIndex, g_SceneModeSelector, g_RunStage | 源码模块上下文 |
+| 0x474c80 | g_TitleTransitionIndex | g_StageSelectorCurrent, g_SceneModeSelectorMirror, g_StageIndexMirror | 源码模块上下文 |
+| 0x474c84 | g_TextStyleFlag | g_StageSubState, g_SceneFlag84, g_ResultScriptSlotCount | xref 16 处：符卡练习/HUD/结果屏槽位 |
+| 0x474c88 | g_TextStyleDefault | g_PlayerContinueMode, g_SceneFlag88 | xref 6 处：标题 calc —— 继续模式/文本样式 |
+| 0x474c8c | g_TextStyleAlt | g_SceneFlag8c, g_ResultScriptSlotCache | 源码模块上下文 |
+| 0x474c98 | g_ScorePenaltyCounter | g_ResultScore, g_RunRankValue, g_SceneRankValue | 源码模块上下文 |
+| 0x474c9c | g_ExtendRequirementIndex | g_ResultPower, g_ScenePlayCountSeed | xref: UpdateInGameScoreDisplay 用作 dword_474474/474488 延命表下标且奖命后自增 |
+| 0x474ca0 | g_GlobalModeFlags | g_GameModeFlags, g_GameRunFlags, g_ManagerModeFlags, g_StagePauseGate, g_ScoreNameStage | xref 52 处：标题销毁/HUD —— 全局模式标志 |
+| 0x474ca4 | g_DemoWaitCounter | g_ResultPiv | 源码模块上下文 |
+| 0x474cac | g_CurrentStageIndex | g_PracticeStartRequest, g_ClearFlagScan | 源码模块上下文 |
+| 0x474e36 | g_ManagerSubGateFlags | g_MainChainPresentDiagnosticOptions, g_StagePauseTrigger, g_ScoreNameTrigger | xref 82 处：ECL 选择菜单为主 |
+| 0x474e5c | g_InputMask | g_SceneGateFlags, g_InputMaskWord | xref 20 处：ECL 菜单/结果屏/子弹管理 —— 输入掩码 |
+| 0x474e88 | g_MainChainInputBindings | g_TitleGeometryDefaults | 源码模块上下文 |
+| 0x474f70 | g_EndingMidiErrorConsole | g_MainChainErrorBuffer, g_MainChainErrorReceiver | 源码模块上下文 |
+| 0x476f78 | g_FrameTimeScale | g_MainChainStartupScale, g_AsciiOverlayInitialRate, g_SceneFadeScale | xref 168 处，值 0.5f —— 帧时间比例 |
+| 0x4776e0 | g_AsciiManagerHost | g_AsciiManager, g_LoadingScreenContext | xref 108 处：AsciiManager 构造/析构为主 |
+| 0x4776e8 | g_TitleScreenStateSecondary | g_SpellBannerFlagOwner | 源码模块上下文 |
+| 0x4776ec | g_GameContext | g_GameContextObject, g_StageNode | 源码模块上下文 |
+| 0x4776f0 | g_EffectManagerRoot | g_EnemyArrayBase, g_SceneCommandManager, g_StageRecordHolder | xref 48 处：特效管理器根生命周期 |
+| 0x4776f4 | g_SpellBulletBase | g_StageState, g_SpellBulletGate | xref 22 处：场景触发/炸弹伤害常量 |
+| 0x477700 | g_TransitionObject | g_TimelineGateState | 源码模块上下文 |
+| 0x477704 | g_AsciiHudConditionalState | g_AsciiHudConditionalStateDamage, g_BossBattleState | 源码模块上下文 |
+| 0x477708 | g_RegistrationDrawOwner | g_SlowRateStats, g_SceneTimeSource | xref: CreateRegistrationDrawOwner/DestroyRegistrationDrawOwner —— 原 g_SlowRateStats 判定错误 |
+| 0x47770c | g_AsciiHudOwner | g_AsciiHudOverlayState | xref 57 处：HUD/符卡故事状态 |
+| 0x477710 | g_SceneSingletons | g_SceneNameBuffer | 源码模块上下文 |
+| 0x477810 | g_TitleScreen | g_SoundGateOwner, g_GameModeRecord, g_ManagerObject810, g_MainChainContext | 源码模块上下文 |
+| 0x477814 | g_TextLayerManagerSlot | g_PublishedHintState, g_TitleStateLists | xref 6 处：标题状态列表 + 提示状态 |
+| 0x477818 | g_BulletManagerSlot | g_ExplosionManager, g_EffectPoolManager | xref 25 处：开场扫描/清弹/舞台宿主 |
+| 0x47781c | g_BulletListRoot | g_BulletListRootSlot, g_StageObjectManager | 源码模块上下文 |
+| 0x477820 | g_GlobalLifecycleManager | g_StageEntityRecord | 源码模块上下文 |
+| 0x477830 | g_GameStateManager | g_ScoreRecordOwner | xref 10 处：游戏状态管理器对象 |
+| 0x477834 | g_OptionPositionBase | g_ScreenTargetBlock, g_OptionPositionManager, g_PlayerStateBlock834, g_PlayerStateBlock, g_PlayerRecord | xref 71 处：场景触发/选项位置 —— 玩家记录块 |
+| 0x477838 | g_GameModeObject | g_UnknownMainChainObject | 源码模块上下文 |
+| 0x47783c | g_SpellPracticeRecords | g_TimelineAudioFlags, g_TitleScoreSaveRecord, g_ScoreSaveState | 源码模块上下文 |
+| 0x477840 | g_MainChainObject840 | g_PointItemDigitState, g_TextEffectOwnerSlot | xref 15 处：标题/子弹/舞台宿主 |
+| 0x477848 | g_PublishedModeRecord | g_TitleTransitionRecord, g_ModeRecordTablePointer | xref 26 处：场景脚本资源/关卡表 |
+| 0x4918a4 | g_AsciiOverlayUpdateSuspended | g_MainChainManagerGate, g_SceneWord4918a4 | 源码模块上下文 |
+| 0x4918b0 | g_TimelinePrngStateB | g_MainChainStartupTickLow0, g_GeneratedRandomState, g_AsciiOverlayRandomState, g_ScorePrngState | 源码模块上下文 |
+| 0x491be4 | g_CallbackScheduler | g_SchedulerHeap, g_SchedulerRoot | xref 135 处：回调调度器 |
+| 0x491c00 | g_UnknownTransitionStatus | g_MainChainManagerFlow | 源码模块上下文 |
+| 0x491c10 | g_MainChainRenderOwner | g_ManagerWorkOwner, g_RenderOwner, g_EntityPoolManager, g_RenderOwner910, g_StageScriptWorkSlot | 源码模块上下文 |
+| 0x491c14 | g_GameScheduler | g_TimeWords | 源码模块上下文 |
+| 0x491c28 | g_MainChainContext | g_MainChainContextSlot, g_GameManagerSlot | xref 24 处：主链上下文（结构体断言证实） |
+| 0x491c30 | g_MainChainD3D9Device | g_D3D9ClearDevice, g_ManagerWorkD3DDevice, g_MainChainD3DDevice, g_TitleOwnerHookTarget | xref 216 处：D3D9 设备 |
+| 0x491c40 | g_TipEntityManager | g_EntityManager | 源码模块上下文 |
+| 0x491cf4 | g_MainChainInitialViewport | g_AsciiOverlayViewport | 源码模块上下文 |
+| 0x491d48 | g_MainChainConfiguration | g_MainChainConfigBytes, g_TitleStateDefaults | xref: LoadMainChainConfiguration 5 处访问 |
+| 0x491d6a | g_ExtraSaveSelector | g_HintFileGate | xref 12 处：提示回调安装/释放 + ManagerBody4 |
+| 0x491d78 | g_MainChainRuntimeOptions | g_ManagerWorkFormatRemapFlag, g_SoundStopFlags, g_GlyphFormatGateByte, g_BgmModeFlags, g_ReplayOverwriteGate, g_TextureQualityGate | 源码模块上下文 |
+| 0x491d7c | g_AsciiCameraWork | g_AsciiFogPosition | 源码模块上下文 |
+| 0x491e64 | g_AsciiOverlayRenderOffsetX | g_MainChainDrawFinalizeField0 | xref 10 处：标题绘制 pass/DrawFinalize/overlay |
+| 0x491e68 | g_AsciiOverlayRenderOffsetY | g_MainChainDrawFinalizeField1 | xref 9 处：同上（Y） |
+| 0x491fac | g_MainChainActiveCameraWork | g_MainChainFrameViewportBlock | 源码模块上下文 |
+| 0x491fb0 | g_AsciiActiveViewIsDefault | g_MainChainActiveView | 源码模块上下文 |
+| 0x491fb8 | g_MainChainSharedStatus | g_PostGameOverState, g_SharedStatusGate | xref 24 处：共享状态门 |
+| 0x491fe8 | g_GlobalMidiOutput | g_MainChainMidiOutput | xref 4 处：WinMain/窗口过程 —— MIDI 输出 |
+| 0x491ff4 | g_MainChainRuntimeFlags | g_ReplayModeFlags, g_InputModeFlags, g_StagePausePending, g_ScoreNamePending, g_MainChainInputStateWord | 源码模块上下文 |
+| 0x49231e | g_ResourceLoaderNesting | g_ResourceLoaderActivityDepth | 源码模块上下文 |
+| 0x492378 | g_AsciiFogEnableCache | g_MainChainPresentColor | xref 18 处：标题绘制 pass —— 雾开关缓存 |
+| 0x4924f0 | g_MainChainWindow | g_MainChainFrameState | 源码模块上下文 |
+| 0x492508 | g_MainChainPerformanceFrequency | g_MainChainPerformanceFrequencyLo | 源码模块上下文 |
+| 0x49251c | g_ScreenSaverWasActive | g_MainChainScreenSaverWasActive | 源码模块上下文 |
+| 0x492520 | g_LowPowerWasActive | g_MainChainLowPowerWasActive | xref 3 处：WinMain/系统设置 —— 低电量标志 |
+| 0x492524 | g_PowerOffWasActive | g_MainChainPowerOffWasActive | xref 3 处：同上 —— 断电标志 |
+| 0x492590 | g_TransitionRoot | g_SoundGateContext | 源码模块上下文 |
+
+## IDB 命名待补（item 非独立头，共 15 个）
+
+这些地址的类型已正确设置，但字节位于相邻更大 item 内部，rename 工具按名寻址失败。
+语义名以本账本为准，源码 extern 注释一致。后续可用 IDA 手工拆分 item 后命名。
+
+- 0x474cb4 = g_CurrentStageSceneId
+- 0x474cc0 = g_PracticeStageValue2
+- 0x474cc8 = g_PracticeStageValue
+- 0x474cd0 = g_ReplayPathFlags
+- 0x474e38 = g_ManagerConfirmFlagsSecond
+- 0x47773c = g_HudFragmentSlotOwner
+- 0x477748 = g_SceneConfigTablePointer
+- 0x477783 = g_BgmQueueFlagsBase
+- 0x477784 = g_StageRecordSlot
+- 0x491c40 = g_TipEntityManager
+- 0x492274 = g_CallbackSchedulerLock
+- 0x4924f0 = g_MainChainWindow
+- 0x49250c = g_MainChainPerformanceFrequencyHi
+- 0x49251c = g_ScreenSaverWasActive
+- 0x4977b0 = g_MainChainSoundWorkerId
+
+- 0x447708 原登记 g_RegistrationDrawOwner 判定为**错误标注**：该地址位于 .text 内（函数 PollManagerWorkQueuesStackAbi 之后）；真正的 g_RegistrationDrawOwner = 0x477708（本轮已改判并写入 IDB）。
