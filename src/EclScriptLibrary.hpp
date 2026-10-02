@@ -22,7 +22,9 @@ void *CreateEclScriptObjectEaxStackAbi(const u32 *descriptor,
 void *ConstructEclScriptObjectEsiStackAbi(void *record, i32 ctor_arg);
 
 // TH10 0x0040dc80 (implemented in this module). Native ABI: one stack
-// argument (ret 4) = the +0x1044 sub-record of an ECL script object; all
+// argument (ret 4) = the +0x103c sub-record of an ECL script object (both
+// native callers push record+0x103c: `lea ecx,[ebp+103Ch]` at 0x40d0b3 and
+// `add eax,103Ch` at 0x40d771); all
 // field offsets are relative to that sub-record. Runs the per-frame ECL
 // enemy update: re-arms the run gate (flag bit 0x400 at +0x1444), refreshes
 // the working block from the +0x2c base block, ticks the four vec2 angle/

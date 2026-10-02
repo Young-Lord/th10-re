@@ -5,6 +5,7 @@
 #include <math.h>
 
 #include "EntityHelpers.hpp"
+#include "EffectManagerRoot.hpp"
 #include "GameManagerState.hpp"
 #include "PlayerShotData.hpp"
 #include "PlayerStageHelpers.hpp"
@@ -49,13 +50,17 @@ extern void SpawnSceneTriggerPacketEaxStackAbi(void *packet,
 extern void EnqueueSoundEffectEbxStackAbi(u32 sound_id, void *sound_manager,
                                           float value);
 
-// Scene trigger object field offsets (record is >= 0x4320 bytes).
-const u32 kOffLink = 0x004U;          // dword overwritten by opcode 0x1000
-const u32 kOffAttachedVm = 0x008U;    // VM record bound by opcode 0x4000
-const u32 kOffPosition = 0x3b4U;      // float3 world position
+// Scene trigger object field offsets. The instruction-queue interpreter
+// (0x406d90) runs on the 0x7f0-byte EffectTriggerRecord pool record (all
+// of its offsets land below 0x7f0); the expire-effect paths (0x426cf0 /
+// 0x4267f0) run on the larger >= 0x4320-byte stage object that shares the
+// low-offset layout (its +0x430c script timer reaches past the pool
+// record). Modeled pool-record fields (activation_gate_0004, the +8 VM,
+// the +0x3b4 position, the +0x3e4 angle) go through the typed view in the
+// queue interpreter; the big-object paths and every unmodeled region stay
+// raw.
 const u32 kOffScreen = 0x3c0U;        // float3 screen anchor
 const u32 kOffFallbackY = 0x3d8U;     // float fallback for opcode 64/128 y
-const u32 kOffFallbackAngle = 0x3e4U; // float fallback for the angle fields
 const u32 kOffExtentX = 0x41cU;       // float
 const u32 kOffExtentY = 0x420U;       // float (also written by 0x1000000)
 const u32 kOffField434 = 0x434U;      // int (opcode 0x2000)
@@ -122,16 +127,15 @@ void LazyInitTimerBlock(u8 *object, u32 offset)
 // flt_470b50/flt_470ccc): values <= -990.0f take the stored +0x3e4
 // fallback, NaN and values in (-990, 990) keep the argument, and values
 // >= 990.0f resolve to the live angle-to-target.
-float ResolveAngleArg(float arg, const u8 *object)
+float ResolveAngleArg(float arg, const EffectTriggerRecord &rec)
 {
     if (arg > kClampLow || arg != arg) {
         if (arg < kClampHigh || arg != arg)
             return arg;
-        return AngleToScreenTargetEaxEcxAbi(
-            reinterpret_cast<const float *>(object + kOffPosition),
-            g_ScreenTargetBlock);
+        return AngleToScreenTargetEaxEcxAbi(&rec.position_x_03b4,
+                                            g_ScreenTargetBlock);
     }
-    return LoadFloat(object, kOffFallbackAngle);
+    return rec.raw_angle_03e4;
 }
 
 } // namespace
@@ -158,10 +162,12 @@ void SetPolarVelocityThisAbi(float out_xy[2], float angle, float speed)
     out_xy[1] = static_cast<float>(sin(static_cast<double>(angle))) * speed;
 }
 
-// TH10 0x00406d90. Native ECX = object.
+// TH10 0x00406d90. Native ECX = object (a 0x7f0-byte EffectTriggerRecord
+// pool record).
 void RunSceneTriggerInstructionQueueEcxAbi(void *object)
 {
     u8 *const obj = static_cast<u8 *>(object);
+    EffectTriggerRecord &rec = *static_cast<EffectTriggerRecord *>(object);
 
     i32 index = LoadI32(obj, kOffIndex);
     if (index >= kQueueCapacity)
@@ -208,7 +214,7 @@ void RunSceneTriggerInstructionQueueEcxAbi(void *object)
             *flags32 |= 0x10U;
             StoreU32(obj, 0x65cU, a0);
             StoreFloat(obj, 0x660U, ResolveAngleArg(
-                *reinterpret_cast<const float *>(&a1), obj));
+                *reinterpret_cast<const float *>(&a1), rec));
             TickPlayerTimerEaxStackAbi(obj + 0x648U, 0);
             StoreU32(obj, 0x670U, a2);
             SetPolarVelocityThisAbi(
@@ -238,7 +244,7 @@ void RunSceneTriggerInstructionQueueEcxAbi(void *object)
         case 128U: {
             *flags32 |= opcode;
             StoreFloat(obj, 0x6c8U, ResolveAngleArg(
-                *reinterpret_cast<const float *>(&a0), obj));
+                *reinterpret_cast<const float *>(&a0), rec));
             // y falls back to +0x3d8 for anything not strictly above
             // -999.0f (NaN included — the fcomp parity chain sends it to
             // the fallback). Gate constant: flt_470cc8 = -999.0f.
@@ -267,8 +273,8 @@ void RunSceneTriggerInstructionQueueEcxAbi(void *object)
             break;
 
         case 0x1000U:
-            // Native writes through the object link dword (+4) verbatim.
-            StoreU32(obj, kOffLink, a2);
+            // Native writes through the +4 activation-gate dword verbatim.
+            rec.activation_gate_0004 = a2;
             break;
 
         case 0x2000U:
@@ -279,14 +285,12 @@ void RunSceneTriggerInstructionQueueEcxAbi(void *object)
             continue;
 
         case 0x4000U: {
-            // VM bind: script = table[a2] + a3 on the object's attached VM.
+            // VM bind: script = table[a2] + a3 on the record's attached VM.
             const i32 script = static_cast<i32>(g_TriggerVmScriptTable[a2])
                 + static_cast<i32>(a3);
-            void *vm_manager =
-                *reinterpret_cast<void **>(
-                    static_cast<u8 *>(g_SceneCommandManager) + 0x3e0b50U);
-            InitializePlayerMainVmEsiStackAbi(obj + kOffAttachedVm,
-                                              vm_manager, script);
+            void *vm_manager = static_cast<EffectManagerRoot *>(
+                g_SceneCommandManager)->bullet_resource_3e0b50;
+            InitializePlayerMainVmEsiStackAbi(&rec.vm, vm_manager, script);
             break;
         }
 
@@ -302,7 +306,7 @@ void RunSceneTriggerInstructionQueueEcxAbi(void *object)
         case 0x20000U:
             // Positional sound keyed on the object's world x.
             EnqueueSoundEffectEbxStackAbi(a2, g_SoundGateContext,
-                                          LoadFloat(obj, kOffPosition));
+                                          rec.position_x_03b4);
             break;
 
         case 0x100000U:
@@ -329,9 +333,14 @@ void RunSceneTriggerInstructionQueueEcxAbi(void *object)
                     static_cast<i32>(static_cast<i32>(byte9 << 24) >> 24));
                 *reinterpret_cast<u16 *>(packet + 0x02U) = signed_word;
             }
-            StoreU32(packet, 0x04U, LoadU32(obj, kOffPosition));
-            StoreU32(packet, 0x08U, LoadU32(obj, kOffPosition + 4U));
-            StoreU32(packet, 0x0cU, LoadU32(obj, kOffPosition + 8U));
+            // Position dwords are bit-copies in the native; read them
+            // through the typed fields.
+            StoreU32(packet, 0x04U,
+                     *reinterpret_cast<u32 *>(&rec.position_x_03b4));
+            StoreU32(packet, 0x08U,
+                     *reinterpret_cast<u32 *>(&rec.position_y_03b8));
+            StoreU32(packet, 0x0cU,
+                     *reinterpret_cast<u32 *>(&rec.position_z_03bc));
             StoreU32(packet, 0x10U, next->arg0);
             StoreU32(packet, 0x14U, next->arg1);
             StoreU32(packet, 0x18U, cur->arg0);
@@ -415,9 +424,8 @@ void FireSceneTriggerExpireEffect(void *object)
     spawn[1] = LoadFloat(obj, kOffScreen + 4U) + kSpawnOffsetY;
     spawn[2] = LoadFloat(obj, kOffScreen + 8U);
 
-    void *const vm_manager =
-        *reinterpret_cast<void **>(
-            static_cast<u8 *>(g_SceneCommandManager) + 0x3e0b50U);
+    void *const vm_manager = static_cast<EffectManagerRoot *>(
+        g_SceneCommandManager)->bullet_resource_3e0b50;
 
     // Flash VM: script 0x162.
     u8 *vm = static_cast<u8 *>(AllocatePoolVmEsiAbi(vm_manager));

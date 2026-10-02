@@ -3,33 +3,13 @@
 #include "AsciiAnimationVm.hpp"
 #include "EntityHelpers.hpp"
 #include "GameManagerObject.hpp"
+#include "VmRecord.hpp"
 
 namespace th10 {
 
 namespace {
 
 extern void *g_MainChainRenderOwner; // TH10 DAT_00491c10
-
-u32 LoadU32(const u8 *address)
-{
-    return static_cast<u32>(address[0]) | (static_cast<u32>(address[1]) << 8)
-         | (static_cast<u32>(address[2]) << 16)
-         | (static_cast<u32>(address[3]) << 24);
-}
-
-void StoreU32(u8 *address, u32 value)
-{
-    address[0] = static_cast<u8>(value);
-    address[1] = static_cast<u8>(value >> 8);
-    address[2] = static_cast<u8>(value >> 16);
-    address[3] = static_cast<u8>(value >> 24);
-}
-
-u16 LoadU16(const u8 *address)
-{
-    return static_cast<u16>(static_cast<u16>(address[0])
-                            | (static_cast<u16>(address[1]) << 8));
-}
 
 // Digit entry index base shared by every glyph VM init below ('3' + value,
 // matching the native +0x33 constant).
@@ -65,8 +45,9 @@ u32 ResolveChildIdByKind(u8 *parent, u16 kind)
     u32 *node = reinterpret_cast<u32 *>(parent + 0x10);
     while (node != 0) {
         u8 *child = *reinterpret_cast<u8 **>(node);
-        if (LoadU16(child + 0x38aU) == kind) {
-            return LoadU32(child);
+        VmRecord &child_vm = *reinterpret_cast<VmRecord *>(child);
+        if (child_vm.bound_script_id == kind) {
+            return static_cast<u32>(child_vm.entity_id);
         }
         node = *reinterpret_cast<u32 **>(node + 4U);
     }
@@ -99,7 +80,7 @@ void *UpdateResultScreenStatDigitsEaxAbi(void *state)
             const i32 digit = k_blocks[i].tens ? value / 10 : value % 10;
             result = reinterpret_cast<void *>(InitializeAsciiAnimationVmEntry(
                 child, static_cast<u32>(digit + k_digit_entry_base),
-                *reinterpret_cast<void **>(child + 0x308U)));
+                reinterpret_cast<VmRecord *>(child)->bound_resource));
         } else {
             result = child;
         }

@@ -7,6 +7,7 @@
 
 #include "Th10Types.hpp"
 #include "GameContext.hpp"
+#include "EffectManagerRoot.hpp"
 #include "EntityHelpers.hpp"
 #include "PlayerRecord.hpp"
 #include "PlayerTimerHelpers.hpp"
@@ -139,29 +140,34 @@ i32 SubmitSceneTriggerPopupEntranceEsiAbi(void *popup) {
 // TH10 0x00405be0. Native EAX = trigger record. Zeroes the +0x446 state
 // word, lazily initializes the two timer records at +0x3f8 and +0x40c
 // (sentinel int 0xfff0bdc1 = -999999, zero counters, default rate
-// pointer 0x476f78, flag bit 0), then hard-resets both timer ints to -1
-// and their counters to zero.
+// pointer &flt_476f78, flag bit 0), then hard-resets both timer ints to
+// -1 and their counters to zero.
 void ResetSceneTriggerFrameTimersEaxAbi(void *record) {
     u8 *bytes = static_cast<u8 *>(record);
-    *reinterpret_cast<u16 *>(bytes + 0x446) = 0;
+    EffectTriggerRecord &rec = *static_cast<EffectTriggerRecord *>(record);
+    rec.kind_0446 = 0U;
 
-    if ((*reinterpret_cast<u32 *>(bytes + 0x408) & 1) == 0) {
-        *reinterpret_cast<u32 *>(bytes + 0x3fc) = 0;
-        *reinterpret_cast<u32 *>(bytes + 0x3f8) = 0xfff0bdc1U;
-        *reinterpret_cast<u32 *>(bytes + 0x400) = 0;
-        *reinterpret_cast<u32 *>(bytes + 0x404) = 0x476f78U;
-        *reinterpret_cast<u32 *>(bytes + 0x408) |= 1;
+    if ((rec.flags_0408 & 1U) == 0U) {
+        rec.frame_count_03fc = 0U;
+        *reinterpret_cast<u32 *>(&rec.frame_mirror_03f8) = 0xfff0bdc1U;
+        rec.frame_accum_0400 = 0.0f;
+        // +0x404 holds the rate POINTER; native stores &flt_476f78
+        // (TH10 0x405c0d).
+        *reinterpret_cast<u32 *>(&rec.rate_ptr_0404) = 0x476f78U;
+        rec.flags_0408 |= 1U;
     }
-    *reinterpret_cast<u32 *>(bytes + 0x3fc) = 0;
-    *reinterpret_cast<u32 *>(bytes + 0x400) = 0;
-    *reinterpret_cast<u32 *>(bytes + 0x3f8) = 0xffffffffU;
+    rec.frame_count_03fc = 0U;
+    rec.frame_accum_0400 = 0.0f;
+    *reinterpret_cast<u32 *>(&rec.frame_mirror_03f8) = 0xffffffffU;
 
-    if ((*reinterpret_cast<u32 *>(bytes + 0x41c) & 1) == 0) {
+    // Second timer block +0x40c..+0x41b is an unmodeled region — kept raw
+    // (its +0x41c flag word is flags_041c).
+    if ((rec.flags_041c & 1U) == 0U) {
         *reinterpret_cast<u32 *>(bytes + 0x410) = 0;
         *reinterpret_cast<u32 *>(bytes + 0x40c) = 0xfff0bdc1U;
         *reinterpret_cast<u32 *>(bytes + 0x414) = 0;
         *reinterpret_cast<u32 *>(bytes + 0x418) = 0x476f78U;
-        *reinterpret_cast<u32 *>(bytes + 0x41c) |= 1;
+        rec.flags_041c |= 1U;
     }
     *reinterpret_cast<u32 *>(bytes + 0x410) = 0;
     *reinterpret_cast<u32 *>(bytes + 0x414) = 0;

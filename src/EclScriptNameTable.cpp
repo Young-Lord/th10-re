@@ -18,6 +18,7 @@
 //   then the string bytes, NUL terminated
 #include <string.h>
 
+#include "ConditionalStateObject.hpp"
 #include "Th10Platform.hpp"
 #include "Th10Types.hpp"
 
@@ -50,14 +51,6 @@ u32 LoadU32(const u8 *base, u32 offset)
     return static_cast<u32>(base[offset]) | (static_cast<u32>(base[offset + 1]) << 8)
          | (static_cast<u32>(base[offset + 2]) << 16)
          | (static_cast<u32>(base[offset + 3]) << 24);
-}
-
-void StoreU32(u8 *base, u32 offset, u32 value)
-{
-    base[offset] = static_cast<u8>(value);
-    base[offset + 1U] = static_cast<u8>(value >> 8);
-    base[offset + 2U] = static_cast<u8>(value >> 16);
-    base[offset + 3U] = static_cast<u8>(value >> 24);
 }
 
 // Big-endian dword (the SCPT name offsets are stored big-endian).
@@ -98,8 +91,12 @@ i32 CompareStrings(const char *left, const char *right)
 i32 RegisterScriptFileNamesThisStackAbi(void *registry_raw, void *file_raw)
 {
     u8 *const registry = static_cast<u8 *>(registry_raw);
-    const u32 slot_index = LoadU32(registry, 4U);
+    ConditionalNameRegistry &reg =
+        *reinterpret_cast<ConditionalNameRegistry *>(registry);
+    const u32 slot_index = reg.loaded_script_count_0004;
 
+    // The native indexes the file-slot table unboundedly with slot_index
+    // (count comes from the file — native quirk), so these stay raw.
     *reinterpret_cast<u32 *>(registry + 0x0cU + slot_index * 4U)
         = reinterpret_cast<u32>(file_raw);
     const u8 *file = *reinterpret_cast<u8 *const *>(
@@ -113,8 +110,8 @@ i32 RegisterScriptFileNamesThisStackAbi(void *registry_raw, void *file_raw)
 
     const u16 name_count = LoadU16(file, 6U);
     const u16 string_count = LoadU16(file, 0x10U);
-    const u32 new_total = LoadU32(registry, 8U) + string_count;
-    StoreU32(registry, 8U, new_total);
+    const u32 new_total = reg.name_entry_count_0008 + string_count;
+    reg.name_entry_count_0008 = new_total;
 
     // Name-offset table and the string data that follows it.
     const u8 *const offset_table = file + 0x24U;
@@ -124,8 +121,8 @@ i32 RegisterScriptFileNamesThisStackAbi(void *registry_raw, void *file_raw)
 
     u32 *const fresh = static_cast<u32 *>(
         MallocHeap452706(new_total * 8U));
-    u32 *const previous = *reinterpret_cast<u32 **>(registry + 0x8cU);
-    *reinterpret_cast<u32 **>(registry + 0x8cU) = fresh;
+    u32 *const previous = static_cast<u32 *>(reg.name_table_008c);
+    reg.name_table_008c = fresh;
 
     if (previous == 0) {
         // First registration: entries are appended in file order.
@@ -173,12 +170,12 @@ i32 RegisterScriptFileNamesThisStackAbi(void *registry_raw, void *file_raw)
 
     // Advance the file-slot count, then hand the name-offset table of the
     // just-validated block to the registry's virtual slot-1 callback.
-    StoreU32(registry, 4U, slot_index + 1U);
+    reg.loaded_script_count_0004 = slot_index + 1U;
     const u8 *const stored = *reinterpret_cast<u8 *const *>(
         registry + 0x0cU + slot_index * 4U);
     if (LoadU16(stored, 6U) != 0U) {
         const NameRegistryVtable *const vtable
-            = *reinterpret_cast<NameRegistryVtable *const *>(registry);
+            = static_cast<const NameRegistryVtable *>(reg.vtable_0000);
         vtable->on_file_registered(registry, stored + 0x24U);
     }
 

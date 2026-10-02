@@ -599,3 +599,29 @@ ABI 语法经验：__usercall 必须带返回位置注解（@<eax>），否则�
 - 剩余热点:DAT_004776fc 0x18 对象、DAT_004776f0 0x68 池持有者、散点
   LoadU32At/LoadFloat gap、SpriteViewDebugText 经参数访问的 host 裸偏移
   (可换 StageHostObject 参数类型)。
+
+## 第 9 轮:MainChainObject6fc / EffectManagerRoot 字段化 + bug 清洗(2026-10-03)
+
+- 结构体:MainChainObject6fc 0x18(DAT_004776fc;bullet.anm 资源@0x10、两个
+  常备禁用调度节点@0x8/0xc;源码零偏差纯改写)、EffectManagerRoot 0x3e0b54
+  (DAT_004776f0;2001×0x7f0 记录数组@+0x60 恰好止于 +0x3e0b50、
+  触发组 head/tail×6@+0x14/+0x2c、+0x3e0b50 共享 spawn 资源;装载器向
+  records[2000].kind_0446 写哨兵 u16 5 = 别名 quirk 保留 raw)、
+  EffectTriggerRecord 0x7f0(内嵌 VmRecord@+0x8;kind@0x446、rate_ptr_0404
+  为指针、group_next@0x44c)。IDB 已声明三个类型并绑定两个全局。
+  另:SpriteViewDebugText.cpp host 参数改用 StageHostObject 类型视图。
+  证据:docs/evidence/effect-manager-root-and-object6fc.md。
+- bug 修复(均先对原生复核):①k_effect_position 0x3b0→0x3ac;②绑定脚本
+  比较改 init_id+1(0x158/0x161);③淡出分支补 base_pos_y=24.0f;④VM 初始化
+  上下文误传 bullet manager → root+0x3e0b50;⑤+0x404 按指针解引用;⑥绑定
+  清理 +0x4c→+0x44c;⑦角度步长 1.0f→π/2;⑧标志掩码 ~2→~1(0x405d00 簇);
+  ⑨kFrameWindowLow 0.98→0.99;⑩StageObjectUpdateA 第一处出界探测应传
+  物体位置(+0x24)而非尖端(0x41d5b7);⑪0x3ACCB0 笔误→0x3AD090
+  (work_slots[9..12],0x409f9e);⑫0x99/1.01 混合比较为原生忠实;⑬π/2、
+  0.6 注释纠正;⑭"+0x1044"文档→+0x103c;⑮PlayerProximityFade 归属确认为
+  渲染 owner 节点池 VmRecord。
+- 改写:约 220 处,19 文件。全量构建 exit 0(232 obj)。
+- gap 清单(未来轮次,按规模):ECL script 对象 0x2518(~350 处)、stage 对象
+  A/B 0xd58/0xd74(0x47781c)、bullet record 0x3f0×2198(0x477818)、spell/
+  bullet base 0x4776f4、frame-state 0x474c40 族、score-save 0x47783c、hint
+  tip 0x88、MIDI/replay-reuse/0x477838 等。

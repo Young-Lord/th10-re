@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "GameManagerState.hpp"
+#include "GameStateManagerObject.hpp"
 #include "ScoreFileFormats.hpp"
 #include "Th10Types.hpp"
 #include "SaveRunHighScoreEntry.hpp"
@@ -36,32 +37,17 @@ const u32 kNormalModeRecordTable = 0x4748d8U;
 
 // ------------------------------------------------------------ accessors
 
-inline u32 LoadU32At(const void *base, u32 offset)
-{
-    return *reinterpret_cast<const u32 *>(
-        static_cast<const u8 *>(base) + offset);
-}
-
-inline i32 LoadI32At(const void *base, u32 offset)
-{
-    return static_cast<i32>(LoadU32At(base, offset));
-}
-
-inline void StoreU32At(void *base, u32 offset, u32 value)
-{
-    *reinterpret_cast<u32 *>(static_cast<u8 *>(base) + offset) = value;
-}
-
 } // namespace
 
 // TH10 0x00423570 (native stdcall `ret 4`).
 void SaveRunHighScoreEntry(void *record_arg)
 {
     u8 *const record = static_cast<u8 *>(record_arg);
+    GameStateManager &gsm = *reinterpret_cast<GameStateManager *>(record);
 
     // Extra-stage swap: file the score under stage 8 with the alternate
     // published mode record while the selector reads 7 with the extra flag.
-    if (g_SceneModeSelector == 7U && LoadU32At(record, 0x1e4) != 0U) {
+    if (g_SceneModeSelector == 7U && gsm.spell_practice_flag_01e4 != 0) {
         g_PublishedModeRecord =
             reinterpret_cast<void *>(kExtraModeRecordTable);
         g_SceneModeSelector = 8U;
@@ -76,7 +62,7 @@ void SaveRunHighScoreEntry(void *record_arg)
     // Native restore guard: it re-checks the selector against 7, which the
     // swap above has already set to 8, so this branch never fires after the
     // swap (preserved verbatim).
-    if (g_SceneModeSelector == 7U && LoadU32At(record, 0x1e4) != 0U) {
+    if (g_SceneModeSelector == 7U && gsm.spell_practice_flag_01e4 != 0) {
         g_PublishedModeRecord =
             reinterpret_cast<void *>(kNormalModeRecordTable);
         g_SceneModeSelector = 7U;
@@ -85,44 +71,44 @@ void SaveRunHighScoreEntry(void *record_arg)
 
     if (rank < 0) {
         // The run did not place: keep the replay-save menu closed.
-        StoreU32At(record, 0x1e8, 1U);
+        gsm.replay_gate_01e8 = 1;
         return;
     }
 
     // Rank accepted: cursor A becomes the replay slot selector (max 25).
-    StoreU32At(record, 0x2c, 0x19U);
-    StoreU32At(record, 0xf4, 1U);
+    gsm.cursor_a.maximum = 0x19;
+    gsm.cursor_a.wrap_flag = 1U;
     i32 clamped_rank = rank;
     {
-        const i32 max = LoadI32At(record, 0x2c);
+        const i32 max = gsm.cursor_a.maximum;
         if (max != 0 && clamped_rank >= max) {
             clamped_rank = max - 1;
         }
     }
-    StoreU32At(record, 0x24, static_cast<u32>(clamped_rank));
+    gsm.cursor_a.value = clamped_rank;
 
     // Cursor B: clamp the current value against its pre-existing maximum,
     // then refresh that maximum with the charset length.
     {
-        const i32 old_max = LoadI32At(record, 0x104);
+        const i32 old_max = gsm.cursor_b.maximum;
         if (old_max < 0) {
-            StoreU32At(record, 0xfc, static_cast<u32>(old_max - 1));
+            gsm.cursor_b.value = old_max - 1;
         } else {
-            StoreU32At(record, 0xfc, 0U);
+            gsm.cursor_b.value = 0;
         }
     }
-    StoreU32At(record, 0x104, static_cast<u32>(strlen(g_MenuCharset)));
-    StoreU32At(record, 0x1cc, 1U);
+    gsm.cursor_b.maximum = static_cast<i32>(strlen(g_MenuCharset));
+    gsm.cursor_b.wrap_flag = 1U;
 
     // Copy the saved replay name over the record's name buffer; when it
     // differs from the nine-space sentinel, shift cursor B by -1 (native
     // polarity: `je` skips the 0x0044bea0 shift only on equality).
-    char *const name = reinterpret_cast<char *>(record + 0x2b4);
+    char *const name = gsm.replay_name_02b4;
     const char *const saved_name = reinterpret_cast<const char *>(
         static_cast<u8 *>(g_ScoreSaveState) + 0x1d878U);
     strcpy(name, saved_name);
     if (memcmp(name, kNineSpaces, 9U) != 0) {
-        (void)ShiftManagerSelector(record + 0xfc, -1);
+        (void)ShiftManagerSelector(&gsm.cursor_b, -1);
     }
 
     // Trim trailing spaces inside the fixed 8-character window (the native
@@ -131,8 +117,8 @@ void SaveRunHighScoreEntry(void *record_arg)
     while (length > 0 && name[length - 1] == ' ') {
         --length;
     }
-    StoreU32At(record, 0x1e0, static_cast<u32>(length));
-    StoreU32At(record, 0x1e8, 0U);
+    gsm.name_length_01e0 = length;
+    gsm.replay_gate_01e8 = 0;
 }
 
 } // namespace th10

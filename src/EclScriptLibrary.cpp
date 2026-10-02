@@ -80,8 +80,9 @@ void StoreI32(u8 *record, u32 offset, i32 value)
     StoreU32(record, offset, static_cast<u32>(value));
 }
 
-// ECL script object field offsets are relative to the +0x1044 sub-record
-// passed to RunEclScriptSetupStackAbi; this helper dereferences a pointer
+// ECL script object field offsets are relative to the +0x103c sub-record
+// passed to RunEclScriptSetupStackAbi (native callers push record+0x103c:
+// 0x40d0b3 and 0x40d771); this helper dereferences a pointer
 // field of that sub-record.
 void StoreU16(u8 *record, u32 offset, u16 value)
 {
@@ -290,8 +291,9 @@ void *CreateEclScriptObjectEaxStackAbi(const u32 *descriptor,
 }
 
 // FUNCTION: TH10 0x0040dc80
-// Native ABI: one stack argument (ret 4) = the +0x1044 sub-record of an ECL
-// script object. All offsets below are relative to that sub-record ("rec").
+// Native ABI: one stack argument (ret 4) = the +0x103c sub-record of an ECL
+// script object (both native callers push record+0x103c: 0x40d0b3 and
+// 0x40d771). All offsets below are relative to that sub-record ("rec").
 // Motion blocks follow the shared {pos xyz @0, vel xyz @0xc, radius @0x18,
 // angle @0x1c, flags @0x28} layout used by IntegrateSubEffectPositionEsiAbi.
 i32 RunEclScriptSetupStackAbi(void *sub_record)

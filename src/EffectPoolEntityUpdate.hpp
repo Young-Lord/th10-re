@@ -10,7 +10,8 @@ namespace th10 {
 // +224/+16 playfield offset into its animation VM record, fades the
 // alpha byte at vm+0x2ff when the scripted y drops below 8.0 (clamping
 // the VM y to 24.0), re-spawns the VM (0x0043e5a0) when the script word
-// at vm+0x384 no longer matches effect script id + 0x157/+0x161, and
+// at vm+0x384 no longer matches effect script id + 1 (bound id 0x158 /
+// 0x161 vs the 0x157/0x160 init ids — the VM stores bind id + 1), and
 // finishes with the render-mode dispatch 0x004451c0 on the render owner.
 i32 TickEffectPoolSlots(void *pool);
 

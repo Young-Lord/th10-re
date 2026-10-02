@@ -7,9 +7,11 @@
 #include "BgmRuntime.hpp"
 #include "EntityHelpers.hpp"
 #include "GameManagerState.hpp"
+#include "GameStateManagerObject.hpp"
 #include "StageEffectHelpers.hpp"
 #include "Th10Types.hpp"
 #include "TitleScreenObject.hpp"
+#include "VmRecord.hpp"
 #include "PauseEnterSetup.hpp"
 
 namespace th10 {
@@ -26,50 +28,29 @@ extern float g_FrameTimeScale;       // TH10 DAT_00476f78
 
 const u32 kMenuSoundContext = 0x492590U; // BGM/sound command root
 
-// ------------------------------------------------------------ accessors
-
-inline u32 LoadU32At(const void *base, u32 offset)
-{
-    return *reinterpret_cast<const u32 *>(
-        static_cast<const u8 *>(base) + offset);
-}
-
-inline void StoreU32At(void *base, u32 offset, u32 value)
-{
-    *reinterpret_cast<u32 *>(static_cast<u8 *>(base) + offset) = value;
-}
-
-inline u32 FloatBits(float value)
-{
-    u32 bits = 0;
-    memcpy(&bits, &value, sizeof(bits));
-    return bits;
-}
-
 } // namespace
 
 // TH10 0x00422ab0 (native `ret 4`, record as the stack argument).
 void RunPauseEnterSetupStackAbi(void *record_arg)
 {
-    u8 *const record = static_cast<u8 *>(record_arg);
+    GameStateManager &mgr = *reinterpret_cast<GameStateManager *>(record_arg);
     TitleScreen &ts = *reinterpret_cast<TitleScreen *>(g_TitleScreen);
 
-    StoreU32At(record, 0x04, 1U); // mode = 1
+    mgr.mode_0004 = 1; // mode = 1
 
     // Timer family init at +0x10..+0x20 (the reduced sequence shared with
     // 0x00423510: the NaN-sentinel branch stores are immediately overwritten
     // by the unconditional tail, order preserved).
-    if ((LoadU32At(record, 0x20) & 1U) == 0U) {
-        StoreU32At(record, 0x14, 0U);
-        StoreU32At(record, 0x10, 0xFFF0BDC1U); // NaN sentinel
-        StoreU32At(record, 0x18, 0U);
-        StoreU32At(record, 0x1c,
-                   reinterpret_cast<u32>(&g_FrameTimeScale));
-        StoreU32At(record, 0x20, LoadU32At(record, 0x20) | 1U);
+    if ((mgr.frame_timer.flags & 1U) == 0U) {
+        mgr.frame_timer.count = 0;
+        *reinterpret_cast<u32 *>(&mgr.frame_timer.prev) = 0xFFF0BDC1U; // NaN sentinel
+        mgr.frame_timer.accum = 0;
+        mgr.frame_timer.rate = &g_FrameTimeScale;
+        mgr.frame_timer.flags |= 1U;
     }
-    StoreU32At(record, 0x14, 0U);
-    StoreU32At(record, 0x18, 0U);
-    StoreU32At(record, 0x10, 0xFFFFFFFFU);
+    mgr.frame_timer.count = 0;
+    mgr.frame_timer.accum = 0;
+    *reinterpret_cast<u32 *>(&mgr.frame_timer.prev) = 0xFFFFFFFFU; // stopped (-1)
 
     // Latch the pause bit into the game state object.
     ts.flags |= 0x10U;
@@ -78,12 +59,13 @@ void RunPauseEnterSetupStackAbi(void *record_arg)
     // Native binds the script with ECX = [DAT_004776e0]+0x8998; the semantic
     // 0x00449870 body feeds its bind context internally.
     u8 *vm = static_cast<u8 *>(AllocatePoolVmEsiAbi(g_MainChainRenderOwner));
-    StoreU32At(vm, 0x35c, LoadU32At(vm, 0x35c) | 0x40000000U);
-    StoreU32At(vm, 0x20, 0xfU);
+    VmRecord &menu_vm = *reinterpret_cast<VmRecord *>(vm);
+    menu_vm.flags |= 0x40000000U;
+    menu_vm.render_kind = 0xfU;
     AssignPoolVmScriptEcxEaxAbi(vm, 0);
     u32 menu_vm_id = 0;
     AttachEffectVmToListB(&menu_vm_id, vm, g_MainChainRenderOwner);
-    StoreU32At(record, 0x1d8, menu_vm_id); // handle B
+    mgr.handle_b_01d8 = menu_vm_id; // handle B
 
     // Full-screen pause overlay target (native ESI = 0x491c10 across the
     // call, ret 0x14; the result is ignored).
@@ -93,14 +75,14 @@ void RunPauseEnterSetupStackAbi(void *record_arg)
 
     // HUD watch VM (script 0x79) from the HUD owner's manager-work
     // (native ECX = [DAT_0047770c]+0x9ec8, mirrored into record+0x2c4).
-    u32 *const handle_a = reinterpret_cast<u32 *>(record + 0x1d4);
-    const u32 hud_work = reinterpret_cast<u32>(
+    u32 *const handle_a = &mgr.handle_a_01d4;
+    mgr.front_anm_work_02c4 =
         reinterpret_cast<AsciiHudOwner *>(g_AsciiHudOverlayState)
-            ->front_anm_work);
-    StoreU32At(record, 0x2c4, hud_work);
+            ->front_anm_work;
     vm = static_cast<u8 *>(AllocatePoolVmEsiAbi(g_MainChainRenderOwner));
-    StoreU32At(vm, 0x35c, LoadU32At(vm, 0x35c) | 0x40000000U);
-    StoreU32At(vm, 0x20, 0xfU);
+    VmRecord &watch_vm = *reinterpret_cast<VmRecord *>(vm);
+    watch_vm.flags |= 0x40000000U;
+    watch_vm.render_kind = 0xfU;
     AssignPoolVmScriptEcxEaxAbi(vm, 0x79);
     AttachEffectVmToListB(handle_a, vm, g_MainChainRenderOwner);
     FireEntityHandleEaxAbi(handle_a); // state word 3 (fire/consume)
@@ -126,7 +108,7 @@ void RunPauseEnterSetupStackAbi(void *record_arg)
 
     // Park the frame-time scale: record+0x2c0 = DAT_00476f78, then reset the
     // global to 1.0 (raw dword copies in the native).
-    StoreU32At(record, 0x2c0, FloatBits(g_FrameTimeScale));
+    mgr.saved_time_scale_02c0 = g_FrameTimeScale;
     g_FrameTimeScale = 1.0f;
 }
 

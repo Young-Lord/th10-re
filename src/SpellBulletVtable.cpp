@@ -267,8 +267,11 @@ i32 ClearStageRegionBulletsEbxStackAbi(void *manager, i32 explosion_flag)
         if (explosion_flag != 0) {
             SpawnExplosionParticleEaxEcxEfxAbi(
                 g_ExplosionManager, record + 0x3b4U, 8, 0xffffffffU,
-                FloatFromBits(0xbfc90fdbU), // -1.25f
-                FloatFromBits(0x3f19999aU)); // 0.8f
+                // Native pushes 0xBFC90FDB (-pi/2 = -1.5707964f) at
+                // 0x4083a3 and 0x3F19999A (0.6f) at 0x40839e; the values
+                // below match bit for bit.
+                FloatFromBits(0xbfc90fdbU), // -pi/2 (-1.5707964f)
+                FloatFromBits(0x3f19999aU)); // 0.6f
         }
 
         // The native passes the {max_x_bound, max_y_bound, max_z_bound}

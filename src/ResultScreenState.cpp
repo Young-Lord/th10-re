@@ -21,6 +21,7 @@
 #include "EntityHelpers.hpp"
 #include "GameManagerState.hpp"
 #include "TimelineRenderObjects.hpp"
+#include "VmRecord.hpp"
 
 namespace th10 {
 
@@ -39,27 +40,19 @@ void SetEntityFlagWord2ByHandleSlot(u32 *handle_slot)
     if (entity == 0) {
         return;
     }
-    *reinterpret_cast<u32 *>(entity + 0x35c) |= 2U;
-    if (*reinterpret_cast<u32 *>(entity + 0x18) != 0) {
+    VmRecord &vm = *reinterpret_cast<VmRecord *>(entity);
+    vm.flags |= 2U;
+    if (vm.parent_link != 0) {
         return;
     }
-    u32 node = *reinterpret_cast<u32 *>(entity + 0x14);
+    void *node = vm.first_child;
     while (node != 0) {
         u8 *child = reinterpret_cast<u8 *>(node);
-        *reinterpret_cast<u32 *>(child + 0x35c) |= 2U;
-        node = *reinterpret_cast<u32 *>(child + 4);
+        VmRecord &child_vm = *reinterpret_cast<VmRecord *>(child);
+        child_vm.flags |= 2U;
+        // The walk's next slot (node+4) is not a modeled chain field; kept raw.
+        node = *reinterpret_cast<void **>(child + 4);
     }
-}
-
-u32 LoadU32At(const void *base, u32 offset)
-{
-    return *reinterpret_cast<const u32 *>(
-        static_cast<const u8 *>(base) + offset);
-}
-
-void StoreU32At(void *base, u32 offset, u32 value)
-{
-    *reinterpret_cast<u32 *>(static_cast<u8 *>(base) + offset) = value;
 }
 
 // Mode 0 (0x4172f9): rebuild the whole result screen. The +0x9e14 banner is
@@ -90,8 +83,9 @@ void RunResultScreenScoreRebuild(u8 *owner, i32 bonus)
 
         u8 *const vm = static_cast<u8 *>(
             AllocatePoolVmEsiAbi(g_MainChainRenderOwner));
-        StoreU32At(vm, 0x20U, 0xfU); // kind 0xf
-        StoreU32At(vm, 0x35cU, LoadU32At(vm, 0x35cU) | 0x40000000U);
+        VmRecord &vm_rec = *reinterpret_cast<VmRecord *>(vm);
+        vm_rec.render_kind = 0xfU; // kind 0xf
+        vm_rec.flags |= 0x40000000U;
         // The native call also carries the +0x9ec8 bind context in ECX; that
         // manager-work bind tail lives inside the semantic body.
         AssignPoolVmScriptEcxEaxAbi(vm, static_cast<i32>(0x27U + digit));
@@ -107,7 +101,7 @@ void RunResultScreenScoreRebuild(u8 *owner, i32 bonus)
         if (entity != 0) {
             (void)InitializeAsciiAnimationVmEntry(
                 entity, static_cast<u32>(quotient + 8),
-                reinterpret_cast<void *>(LoadU32At(entity, 0x308U)));
+                reinterpret_cast<VmRecord *>(entity)->bound_resource);
         }
 
         if (quotient != 0) {

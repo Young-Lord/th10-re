@@ -5,6 +5,7 @@
 #include "SceneTriggerUpdate.hpp"
 
 #include "EclScriptLibrary.hpp"
+#include "EffectManagerRoot.hpp"
 #include "EntityHelpers.hpp"
 #include "PlayerShotData.hpp"
 #include "PlayerTimerHelpers.hpp"
@@ -149,39 +150,38 @@ void LazyInitPointerRateTimer(u8 *base, u32 offset)
 
 // TH10 0x406240. Native stdcall, one stack argument = the trigger object;
 // the outgoing argument slot doubles as the effect-id output for 0x448db0.
+// The object is a 0x7f0-byte EffectTriggerRecord pool record; modeled
+// fields go through the typed view, the +0x3c0 screen-anchor velocity
+// triple and the +0x43c opcode-flag dword sit in unmodeled regions and
+// stay raw.
 i32 UpdateSceneTriggerObjectStackAbi(void *object)
 {
     u8 *const obj = static_cast<u8 *>(object);
+    EffectTriggerRecord &rec = *static_cast<EffectTriggerRecord *>(object);
 
-    if ((LoadU32(obj, 0) & 8U) != 0U)
+    if ((rec.flags_0000 & 8U) != 0U)
         goto release;
 
-    if (LoadI16(obj, 0x446U) == 2) {
-        // Screen-space drift while entering; when the +0x314 gate opens,
-        // fall into the active-state body below.
-        StoreFloat(obj, 0x3b4U,
-                   LoadFloat(obj, 0x3b4U)
-                       + g_FrameTimeScale * LoadFloat(obj, 0x3c0U) * 0.5f);
-        StoreFloat(obj, 0x3b8U,
-                   LoadFloat(obj, 0x3b8U)
-                       + g_FrameTimeScale * LoadFloat(obj, 0x3c4U) * 0.5f);
-        StoreFloat(obj, 0x3bcU,
-                   LoadFloat(obj, 0x3bcU)
-                       + g_FrameTimeScale * LoadFloat(obj, 0x3c8U) * 0.5f);
-        if (LoadU32(obj, 0x314U) == 0U)
+    if (rec.kind_0446 == 2U) {
+        // Screen-space drift while entering; when the vm.reg_10000 gate
+        // (+0x314) opens, fall into the active-state body below.
+        rec.position_x_03b4 = rec.position_x_03b4
+            + g_FrameTimeScale * LoadFloat(obj, 0x3c0U) * 0.5f;
+        rec.position_y_03b8 = rec.position_y_03b8
+            + g_FrameTimeScale * LoadFloat(obj, 0x3c4U) * 0.5f;
+        rec.position_z_03bc = rec.position_z_03bc
+            + g_FrameTimeScale * LoadFloat(obj, 0x3c8U) * 0.5f;
+        if (rec.vm.reg_10000 == 0)
             goto tail;
-        StoreU16(obj, 0x446U, 1U);
-    } else if (LoadI16(obj, 0x446U) == 3) {
+        rec.kind_0446 = 1U;
+    } else if (rec.kind_0446 == 3U) {
         // Exiting: same integration, then straight to the tail.
-        StoreFloat(obj, 0x3b4U,
-                   LoadFloat(obj, 0x3b4U)
-                       + g_FrameTimeScale * LoadFloat(obj, 0x3c0U) * 0.5f);
-        StoreFloat(obj, 0x3b8U,
-                   LoadFloat(obj, 0x3b8U)
-                       + g_FrameTimeScale * LoadFloat(obj, 0x3c4U) * 0.5f);
-        StoreFloat(obj, 0x3bcU,
-                   LoadFloat(obj, 0x3bcU)
-                       + g_FrameTimeScale * LoadFloat(obj, 0x3c8U) * 0.5f);
+        rec.position_x_03b4 = rec.position_x_03b4
+            + g_FrameTimeScale * LoadFloat(obj, 0x3c0U) * 0.5f;
+        rec.position_y_03b8 = rec.position_y_03b8
+            + g_FrameTimeScale * LoadFloat(obj, 0x3c4U) * 0.5f;
+        rec.position_z_03bc = rec.position_z_03bc
+            + g_FrameTimeScale * LoadFloat(obj, 0x3c8U) * 0.5f;
         goto tail;
     }
 
@@ -219,39 +219,34 @@ i32 UpdateSceneTriggerObjectStackAbi(void *object)
     }
 
     // World-space drift (no screen scaling) after the queue run.
-    StoreFloat(obj, 0x3b4U,
-               LoadFloat(obj, 0x3b4U)
-                   + g_FrameTimeScale * LoadFloat(obj, 0x3c0U));
-    StoreFloat(obj, 0x3b8U,
-               LoadFloat(obj, 0x3b8U)
-                   + g_FrameTimeScale * LoadFloat(obj, 0x3c4U));
-    StoreFloat(obj, 0x3bcU,
-               LoadFloat(obj, 0x3bcU)
-                   + g_FrameTimeScale * LoadFloat(obj, 0x3c8U));
+    rec.position_x_03b4 = rec.position_x_03b4
+        + g_FrameTimeScale * LoadFloat(obj, 0x3c0U);
+    rec.position_y_03b8 = rec.position_y_03b8
+        + g_FrameTimeScale * LoadFloat(obj, 0x3c4U);
+    rec.position_z_03bc = rec.position_z_03bc
+        + g_FrameTimeScale * LoadFloat(obj, 0x3c8U);
 
-    if ((LoadU32(obj, 0) & 2U) != 0U) {
+    if ((rec.flags_0000 & 2U) != 0U) {
         // Timeout-region check against the screen target block.
         const i32 region = CheckEnemyTimeoutRegionEaxEdxEcxAbi(
-            reinterpret_cast<const float *>(obj + 0x3f0U),
+            &rec.radius_03f0,
             g_ScreenTargetBlock,
-            reinterpret_cast<const float *>(obj + 0x3b4U));
+            &rec.position_x_03b4);
         if (region == 1) {
             const i32 script = LoadI32(obj, 0x438U);
-            StoreU16(obj, 0x446U, 3U);
-            StoreU16(obj, 0x30cU, 1U);
+            rec.kind_0446 = 3U;
+            rec.vm.state_word = 1U;
             if (script >= 0)
                 SpawnStageEffectEdxEbxAbi(g_SceneCommandManager,
-                                          reinterpret_cast<const float *>(
-                                              obj + 0x3b4U),
+                                          &rec.position_x_03b4,
                                           script);
-        } else if (region == 2 && (LoadU32(obj, 0) & 4U) == 0U) {
-            StoreU32(obj, 0, LoadU32(obj, 0) | 4U);
+        } else if (region == 2 && (rec.flags_0000 & 4U) == 0U) {
+            rec.flags_0000 |= 4U;
             SpawnStageEffectEdxEbxAbi(g_SceneCommandManager,
-                                      reinterpret_cast<const float *>(
-                                          obj + 0x3b4U),
+                                      &rec.position_x_03b4,
                                       434);
             EnqueueSoundEffectEbxStackAbi(0x1cU, g_SoundGateContext,
-                                          LoadFloat(obj, 0x3b4U));
+                                          rec.position_x_03b4);
         }
     }
 
@@ -271,13 +266,13 @@ tail:
             goto release;
     }
 
-    if (LoadU32(obj, 4U) != 0U)
-        StoreU32(obj, 4U, LoadU32(obj, 4U) - 1U);
+    if (rec.activation_gate_0004 != 0U)
+        rec.activation_gate_0004 -= 1U;
     if (LoadI32(obj, 0x434U) > 0)
         StoreU32(obj, 0x434U,
                  static_cast<u32>(LoadI32(obj, 0x434U) - 1));
 
-    if (FinalizeTimelineRenderObjectSetup(obj + 8U) != 0)
+    if (FinalizeTimelineRenderObjectSetup(&rec.vm) != 0)
         goto release;
     return 0;
 
@@ -287,27 +282,31 @@ release:
 }
 
 // TH10 0x4067d0. Native stdcall ret 0x10 with the descriptor in EBX.
+// The manager is the effect manager root (DAT_004776f0); the record
+// cursor is the root's +0x10 pool-self pointer into the 0x7f0-byte
+// EffectTriggerRecord pool at +0x60. Modeled fields go through typed
+// views; descriptor parsing and unmodeled record regions stay raw.
 i32 SpawnSceneTriggerFromDescriptorEbxStackAbi(void *manager,
                                                void *descriptor, i32 column,
                                                i32 row, float arg_c)
 {
-    u8 *const mgr = static_cast<u8 *>(manager);
     u8 *const desc = static_cast<u8 *>(descriptor);
-    u8 *const pool_base = mgr + 0x60U;
+    EffectManagerRoot &mgr = *static_cast<EffectManagerRoot *>(manager);
 
     // ---- free-slot scan (budget 2000 probes; sentinel state 5 wraps) ----
-    u8 *rec = *reinterpret_cast<u8 **>(mgr + 0x10U);
+    EffectTriggerRecord *rec =
+        static_cast<EffectTriggerRecord *>(mgr.pool_self_0010);
     i32 scanned = 0;
     bool found = false;
-    if (LoadU16(rec, 0x446U) == 0U) {
+    if (rec->kind_0446 == 0U) {
         found = true;
     } else {
         while (!found) {
             for (u32 probe = 1U; probe <= 5U; ++probe) {
-                rec += 0x7f0U;
-                if (LoadU16(rec, 0x446U) == 5U)
-                    rec = pool_base;
-                if (LoadU16(rec, 0x446U) == 0U) {
+                ++rec;
+                if (rec->kind_0446 == 5U)
+                    rec = mgr.records;
+                if (rec->kind_0446 == 0U) {
                     scanned += static_cast<i32>(probe);
                     found = true;
                     break;
@@ -423,69 +422,78 @@ i32 SpawnSceneTriggerFromDescriptorEbxStackAbi(void *manager,
     }
 
     // ---- common record initialization ----
-    StoreU32(rec, 0, LoadU32(rec, 0) | 1U);
-    StoreU16(rec, 0x446U, 1U);
+    EffectTriggerRecord &r = *rec;
+    // Byte alias for the unmodeled record regions (+0x3c0 screen anchors,
+    // +0x40c second timer block, +0x434/+0x438/+0x43c opcode state,
+    // +0x454/+0x458, +0x464 queue, +0x7ea/+0x7ec, +0x3d8/+0x3f4).
+    u8 *const rec_bytes = reinterpret_cast<u8 *>(rec);
 
-    LazyInitPointerRateTimer(rec, 0x3f8U);
-    StoreU32(rec, 0x3fcU, 0U);
-    StoreU32(rec, 0x400U, 0U);
-    StoreU32(rec, 0x3f8U, static_cast<u32>(-1));
-    LazyInitPointerRateTimer(rec, 0x40cU);
-    StoreU32(rec, 0x410U, 0U);
-    StoreU32(rec, 0x414U, 0U);
-    StoreU32(rec, 0x40cU, static_cast<u32>(-1));
+    r.flags_0000 |= 1U;
+    r.kind_0446 = 1U;
 
-    StoreFloat(rec, 0x3d8U, pos_y);
-    StoreFloat(rec, 0x3e4U, WrapAngleSumStackAbi(pos_x, 0.0f));
+    // Lazy timer-block init stays raw: it seeds the &flt_476f78 rate
+    // pointer literal and covers both the modeled +0x3f8 block (flags word
+    // = flags_0408) and the unmodeled +0x40c block (flags word =
+    // flags_041c).
+    LazyInitPointerRateTimer(rec_bytes, 0x3f8U);
+    r.frame_count_03fc = 0U;
+    r.frame_accum_0400 = 0.0f;
+    *reinterpret_cast<u32 *>(&r.frame_mirror_03f8) = 0xffffffffU;
+    LazyInitPointerRateTimer(rec_bytes, 0x40cU);
+    StoreU32(rec_bytes, 0x410U, 0U);
+    StoreU32(rec_bytes, 0x414U, 0U);
+    StoreU32(rec_bytes, 0x40cU, 0xffffffffU);
 
-    StoreFloat(rec, 0x3b4U, LoadFloat(desc, 4U));
-    StoreFloat(rec, 0x3b8U, LoadFloat(desc, 8U));
-    StoreFloat(rec, 0x3bcU, LoadFloat(desc, 0xcU));
-    StoreFloat(rec, 0x3bcU, 0.1f);
-    SetPolarVelocityThisAbi(reinterpret_cast<float *>(rec + 0x3c0U), pos_x,
-                            pos_y);
+    StoreFloat(rec_bytes, 0x3d8U, pos_y);
+    r.raw_angle_03e4 = WrapAngleSumStackAbi(pos_x, 0.0f);
 
-    StoreU32(rec, 0x43cU, LoadU32(desc, 0x1fcU));
-    StoreU16(rec, 0x7ecU, LoadU16(desc, 2U));
-    StoreU16(rec, 0x7eaU, LoadU16(desc, 0U));
-    StoreU32(rec, 0, (LoadU32(rec, 0) & 0xfffffff3U) | 2U);
-    StoreU32(rec, 0x454U, 0U);
+    r.position_x_03b4 = LoadFloat(desc, 4U);
+    r.position_y_03b8 = LoadFloat(desc, 8U);
+    r.position_z_03bc = LoadFloat(desc, 0xcU);
+    r.position_z_03bc = 0.1f;
+    SetPolarVelocityThisAbi(reinterpret_cast<float *>(rec_bytes + 0x3c0U),
+                            pos_x, pos_y);
+
+    StoreU32(rec_bytes, 0x43cU, LoadU32(desc, 0x1fcU));
+    StoreU16(rec_bytes, 0x7ecU, LoadU16(desc, 2U));
+    StoreU16(rec_bytes, 0x7eaU, LoadU16(desc, 0U));
+    r.flags_0000 = (r.flags_0000 & 0xfffffff3U) | 2U;
+    StoreU32(rec_bytes, 0x454U, 0U);
 
     // VM bind: script = kind table + sub-kind offset on the +8 VM.
     const u32 kind = static_cast<u32>(LoadI16(desc, 0));
     const i32 script = static_cast<i32>(g_TriggerVmScriptTable[kind])
         + static_cast<i32>(LoadI16(desc, 2));
     InitializePlayerMainVmEsiStackAbi(
-        rec + 8U,
-        *reinterpret_cast<void **>(mgr + 0x3e0b50U), script);
+        &r.vm, mgr.bullet_resource_3e0b50, script);
 
     // Per-kind dispatch for the +0x438 dword.
     switch (g_KindTable4742C0[kind]) {
     case 0U:
-        StoreU32(rec, 0x438U,
+        StoreU32(rec_bytes, 0x438U,
                  static_cast<u32>(2 * LoadI16(desc, 2) + 0x11));
         break;
     case 1U:
-        StoreU32(rec, 0x438U,
+        StoreU32(rec_bytes, 0x438U,
                  g_KindTable47432C[static_cast<u32>(LoadI16(desc, 2))]);
         break;
     case 2U:
-        StoreU32(rec, 0x438U, static_cast<u32>(-1));
+        StoreU32(rec_bytes, 0x438U, static_cast<u32>(-1));
         break;
     case 3U:
-        StoreU32(rec, 0x438U, 0x1dU);
+        StoreU32(rec_bytes, 0x438U, 0x1dU);
         break;
     case 4U:
-        StoreU32(rec, 0x438U, 0x13U);
+        StoreU32(rec_bytes, 0x438U, 0x13U);
         break;
     default:
         break;
     }
-    StoreU32(rec, 0x460U, g_KindTable474250[kind]);
-    StoreU32(rec, 0x458U, LoadU32(desc, 0x204U));
-    StoreU32(rec, 0x434U, 10U);
-    StoreFloat(rec, 0x3f0U, g_KindFloat4741E0[kind]);
-    StoreFloat(rec, 0x3f4U, g_KindFloat4741E0[kind]);
+    r.group_index_0460 = g_KindTable474250[kind];
+    StoreU32(rec_bytes, 0x458U, LoadU32(desc, 0x204U));
+    StoreU32(rec_bytes, 0x434U, 10U);
+    r.radius_03f0 = g_KindFloat4741E0[kind];
+    StoreFloat(rec_bytes, 0x3f4U, g_KindFloat4741E0[kind]);
 
     // Anchor-mode bits from the descriptor flags (word +0x30c; state 2 for
     // any of the anchor bits, otherwise the state word stays 1).
@@ -493,45 +501,48 @@ i32 SpawnSceneTriggerFromDescriptorEbxStackAbi(void *manager,
     u16 anchor_word = 2U;
     if ((desc_flags & 2U) != 0U) {
         anchor_word = 7U;
-        StoreU16(rec, 0x446U, 2U);
+        r.kind_0446 = 2U;
     } else if ((desc_flags & 4U) != 0U) {
         anchor_word = 8U;
-        StoreU16(rec, 0x446U, 2U);
+        r.kind_0446 = 2U;
     } else if ((desc_flags & 8U) != 0U) {
         anchor_word = 9U;
-        StoreU16(rec, 0x446U, 2U);
+        r.kind_0446 = 2U;
     }
-    StoreU16(rec, 0x30cU, anchor_word);
+    r.vm.state_word = anchor_word;
     if (anchor_word != 2U) {
         // world -= anchor * flt_470c40 (4.0)
-        StoreFloat(rec, 0x3c0U, LoadFloat(rec, 0x3c0U) * kAnchorScale);
-        StoreFloat(rec, 0x3c4U, LoadFloat(rec, 0x3c4U) * kAnchorScale);
-        StoreFloat(rec, 0x3c8U, LoadFloat(rec, 0x3c8U) * kAnchorScale);
-        StoreFloat(rec, 0x3b4U,
-                   LoadFloat(rec, 0x3b4U) - LoadFloat(rec, 0x3c0U));
-        StoreFloat(rec, 0x3b8U,
-                   LoadFloat(rec, 0x3b8U) - LoadFloat(rec, 0x3c4U));
-        StoreFloat(rec, 0x3bcU,
-                   LoadFloat(rec, 0x3bcU) - LoadFloat(rec, 0x3c8U));
+        StoreFloat(rec_bytes, 0x3c0U,
+                   LoadFloat(rec_bytes, 0x3c0U) * kAnchorScale);
+        StoreFloat(rec_bytes, 0x3c4U,
+                   LoadFloat(rec_bytes, 0x3c4U) * kAnchorScale);
+        StoreFloat(rec_bytes, 0x3c8U,
+                   LoadFloat(rec_bytes, 0x3c8U) * kAnchorScale);
+        r.position_x_03b4 =
+            r.position_x_03b4 - LoadFloat(rec_bytes, 0x3c0U);
+        r.position_y_03b8 =
+            r.position_y_03b8 - LoadFloat(rec_bytes, 0x3c4U);
+        r.position_z_03bc =
+            r.position_z_03bc - LoadFloat(rec_bytes, 0x3c8U);
     }
 
     // Queue copy: the whole 18-entry instruction stream, then run it.
     for (u32 i = 0; i < 0x6cU; ++i)
-        StoreU32(rec, 0x464U + 4U * i, LoadU32(desc, 0x20U + 4U * i));
-    StoreU32(rec, 0x440U, desc_flags);
-    StoreU32(rec, 0x43cU, 0U);
-    StoreU32(rec, 0x45cU, LoadU32(desc, 0x208U));
+        StoreU32(rec_bytes, 0x464U + 4U * i, LoadU32(desc, 0x20U + 4U * i));
+    StoreU32(rec_bytes, 0x440U, desc_flags);
+    StoreU32(rec_bytes, 0x43cU, 0U);
+    StoreU32(rec_bytes, 0x45cU, LoadU32(desc, 0x208U));
 
     RunSceneTriggerInstructionQueueEcxAbi(rec);
-    (void)FinalizeTimelineRenderObjectSetup(rec + 8U);
+    (void)FinalizeTimelineRenderObjectSetup(&r.vm);
 
     // Advance the manager cursor; the state-5 sentinel wraps it to the
     // pool base.
-    rec += 0x7f0U;
-    if (LoadU16(rec, 0x446U) == 5U)
-        *reinterpret_cast<u8 **>(mgr + 0x10U) = pool_base;
+    ++rec;
+    if (rec->kind_0446 == 5U)
+        mgr.pool_self_0010 = mgr.records;
     else
-        *reinterpret_cast<u8 **>(mgr + 0x10U) = rec;
+        mgr.pool_self_0010 = rec;
     return 0;
 }
 

@@ -501,10 +501,13 @@ void TickTitleFrameStateEaxAbi(void *frame_state)
 // TH10 0x00409f90.
 void ReleaseAsciiHudConditionalState(void *state)
 {
-    // Release the four entity resource pools hanging off the render owner
-    // (slot table at 0x491c10 + 0x3accb0).
+    // Release the four entity resource pools hanging off the render owner.
+    // Native 0x409f9e is `lea esi,[ebx+3AD090h]`: the four dword handles at
+    // owner+0x3ad090..0x3ad09c, i.e. LargeRenderOwnerLayout::work_slots[9]
+    // ..work_slots[12] (0x3ad06c + 9*4) — NOT +0x3accb0, which would land
+    // inside pooled_node_active.
     u32 *const resource_slots = reinterpret_cast<u32 *>(
-        static_cast<u8 *>(g_MainChainRenderOwner) + 0x3ACCB0U);
+        static_cast<u8 *>(g_MainChainRenderOwner) + 0x3AD090U);
     for (u32 i = 0; i != 4U; ++i)
         ReleaseEntitiesUsingResourceEaxEdxAbi(g_MainChainRenderOwner,
                                               resource_slots[i]);

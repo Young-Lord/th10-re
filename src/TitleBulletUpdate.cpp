@@ -291,7 +291,10 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
                     - LoadFloatAt(bullet, kOffY);
                 float angle;
                 if (dx == kZero && dy == kZero)
-                    angle = FloatFromBits(0x3FC90FDBU); // pi
+                    // 0x3FC90FDB is pi/2 (1.5707963f), not pi; the native
+                    // materializes 1.5707964 at 0x41b21d for the both-zero
+                    // atan2 fallback (state-3 retarget, 0x41b1e7 block).
+                    angle = FloatFromBits(0x3FC90FDBU); // pi/2
                 else
                     angle = static_cast<float>(
                         std::atan2(static_cast<double>(dy),
@@ -521,8 +524,14 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
         TickBulletAnimationVmStackAbi(bullet);
 
         // Distance bookkeeping: counter copy, then either an integer frame
-        // advance (speed in the [kIntAdvanceLow, kIntAdvanceHigh] window)
-        // or a fractional advance re-deriving the counter from the float.
+        // advance or a fractional advance re-deriving the counter from the
+        // float. Native 0x41b810-0x41b82c: fcomp kIntAdvanceLow with
+        // `test ah,0x41; jnz` (speed <= 0.99f -> fractional), then fcomp
+        // kIntAdvanceHigh with `test ah,5; jp` (speed < 1.01f -> fractional),
+        // so the integer path runs iff speed > 0.99f && speed >= 1.01f.
+        // That mixed >=/> pair is faithful, not an inversion: the first
+        // compare is redundant (1.01f > 0.99f), and the effective threshold
+        // is speed >= 1.01f — this is not a [0.99, 1.01] window.
         StoreI32At(bullet, kOffCounter, LoadI32At(bullet, kOffDistanceI));
         {
             const float speed = LoadFloatAt(

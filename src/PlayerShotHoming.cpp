@@ -12,6 +12,7 @@
 #include <cmath>
 
 #include "PlayerMotionHelpers.hpp"
+#include "PlayerRecord.hpp"
 #include "PlayerShotHoming.hpp"
 
 namespace th10 {
@@ -24,20 +25,10 @@ inline u32 LoadU32At(const void *base, u32 offset)
         static_cast<const u8 *>(base) + offset);
 }
 
-inline void StoreU32At(void *base, u32 offset, u32 value)
-{
-    *reinterpret_cast<u32 *>(static_cast<u8 *>(base) + offset) = value;
-}
-
 inline float LoadF32At(const void *base, u32 offset)
 {
     return *reinterpret_cast<const float *>(
         static_cast<const u8 *>(base) + offset);
-}
-
-inline void StoreF32At(void *base, u32 offset, float value)
-{
-    *reinterpret_cast<float *>(static_cast<u8 *>(base) + offset) = value;
 }
 
 const float k_pi = 3.14159274f;        // 0x470b18
@@ -55,7 +46,6 @@ const u32 k_homing_age_gate = 0x78U;   // 120 frames
 const u32 k_target_flags_offset = 0x2480U;
 const u32 k_target_x_offset = 0x1068U;
 const u32 k_target_y_offset = 0x106cU;
-const u32 k_homing_target_offset = 0x3504U;
 
 bool IsFloatUnordered(float left, float right)
 {
@@ -78,62 +68,60 @@ float WrapAngleDeltaStackAbi(float a, float b)
 // TH10 0x00428ad0.
 void AcquireHomingTargetEcxEdxStackAbi(void *player, void *shot_record)
 {
-    u8 *const record = static_cast<u8 *>(shot_record);
-    StoreU32At(record, 0x4cU, 0U);
+    PlayerShotRecord &shot = *reinterpret_cast<PlayerShotRecord *>(shot_record);
+    PlayerRecord &player_rec = *reinterpret_cast<PlayerRecord *>(player);
+    shot.homing_target = 0;
 
-    void *const target = reinterpret_cast<void *>(
-        LoadU32At(player, k_homing_target_offset));
+    void *const target = player_rec.homing_target;
     if (target == 0)
         return;
 
-    StoreU32At(record, 0x4cU, reinterpret_cast<u32>(target));
+    shot.homing_target = target;
     const float target_x = LoadF32At(target, k_target_x_offset);
     // |x| > 224 ordered drops the target; a NaN comparison keeps it
     // (the native jne is taken on the unordered flags).
     if (target_x > k_target_limit_x || target_x < -k_target_limit_x)
-        StoreU32At(record, 0x4cU, 0U);
+        shot.homing_target = 0;
 }
 
 // TH10 0x00428b10.
 i32 TickHomingShotMovementEdxAbi(void *shot_record)
 {
-    u8 *const record = static_cast<u8 *>(shot_record);
+    PlayerShotRecord &shot = *reinterpret_cast<PlayerShotRecord *>(shot_record);
 
-    if (LoadU32At(record, 0x40U) == 2U)
+    if (shot.state == 2U)
         return 0;
 
     // Drop the target once its flag dword shows bits 0x1/0x10 or
     // 0xc0000 (dead / untouchable states).
-    u32 target = LoadU32At(record, 0x4cU);
+    void *target = shot.homing_target;
     if (target != 0U) {
-        const u32 flags = LoadU32At(reinterpret_cast<const void *>(target),
-                                    k_target_flags_offset);
+        const u32 flags = LoadU32At(target, k_target_flags_offset);
         if ((flags & 0x11U) != 0U || (flags & 0xc0000U) != 0U)
-            StoreU32At(record, 0x4cU, 0U);
+            shot.homing_target = 0;
     }
 
-    float speed = LoadF32At(record, 0x2cU);
-    target = LoadU32At(record, 0x4cU);
+    float speed = shot.speed;
+    target = shot.homing_target;
     if (target == 0U) {
         // No target: ramp the speed while it stays within the cap.
         const float ramped = speed + k_speed_ramp;
         speed = (ramped > k_speed_cap) ? k_speed_cap : ramped;
-        StoreF32At(record, 0x2cU, speed);
+        shot.speed = speed;
         return 0;
     }
 
     const u8 *const target_bytes = reinterpret_cast<const u8 *>(target);
     const float direction = static_cast<float>(std::atan2(
         static_cast<double>(LoadF32At(target_bytes, k_target_y_offset)
-                            - LoadF32At(record, 0x18U)),
+                            - shot.position[1]),
         static_cast<double>(LoadF32At(target_bytes, k_target_x_offset)
-                            - LoadF32At(record, 0x14U))));
-    const float delta = WrapAngleDeltaStackAbi(
-        direction, LoadF32At(record, 0x30U));
+                            - shot.position[0])));
+    const float delta = WrapAngleDeltaStackAbi(direction, shot.angle);
 
-    if (LoadU32At(record, 0x4U) >= k_homing_age_gate) {
+    if (static_cast<u32>(shot.timer_count) >= k_homing_age_gate) {
         // Post-lock acceleration, uncapped, no steering.
-        StoreF32At(record, 0x2cU, speed + k_speed_ramp_fast);
+        shot.speed = speed + k_speed_ramp_fast;
         return 0;
     }
 
@@ -156,10 +144,8 @@ i32 TickHomingShotMovementEdxAbi(void *shot_record)
             : k_slow_speed;
     }
 
-    StoreF32At(record, 0x30U,
-               WrapAngleToPi(LoadF32At(record, 0x30U)
-                             + k_turn_rate * delta));
-    StoreF32At(record, 0x2cU, speed);
+    shot.angle = WrapAngleToPi(shot.angle + k_turn_rate * delta);
+    shot.speed = speed;
     return 0;
 }
 

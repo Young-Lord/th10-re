@@ -3,6 +3,8 @@
 // configuration table.
 
 #include "Th10Types.hpp"
+#include "MainChainObject6fc.hpp"
+#include "VmRecord.hpp"
 #include "CallbackScheduler.hpp"
 #include "TimelineGateState.hpp"
 #include "EntityHelpers.hpp"
@@ -31,11 +33,12 @@ i32 TH10_FASTCALL AlwaysReadyThunk(void *);
 // TH10 0x0040ae50. Native EAX = the 0x18-byte object: zero all six
 // dwords, set flag bit 1 on the first, publish DAT_004776fc.
 void *InitMainChainObject6fcEaxAbi(void *object) {
+    MainChainObject6fc &obj = *static_cast<MainChainObject6fc *>(object);
     u32 *fields = static_cast<u32 *>(object);
     for (int i = 0; i < 6; ++i) {
         fields[i] = 0;
     }
-    fields[0] |= 2u;
+    obj.flags_0000 |= 2u;
     g_MainChainObject6fc = object;
     return object;
 }
@@ -47,11 +50,11 @@ void *InitMainChainObject6fcEaxAbi(void *object) {
 // ready) at priority 0x17 and draw 0x40b060 (always ready) at priority
 // 0x20; elements land at +8 / +0xc. Returns 0.
 i32 RegisterMainChainObject6fcRecordsEbxAbi(void *object) {
-    u8 *bytes = static_cast<u8 *>(object);
+    MainChainObject6fc &obj = *static_cast<MainChainObject6fc *>(object);
     ManagerWorkPartial *work = RequestManagerWork(
         reinterpret_cast<ManagerWorkOwnerPartial *>(g_MainChainRenderOwner),
         7, reinterpret_cast<const char *>(0x46cd88));
-    *reinterpret_cast<void **>(bytes + 0x10) = work;
+    obj.bullet_resource_0010 = work;
     if (work == 0) {
         AppendMainChainErrorText(reinterpret_cast<const char *>(0x46cf74));
         return -1;
@@ -63,13 +66,13 @@ i32 RegisterMainChainObject6fcRecordsEbxAbi(void *object) {
     calc->arg = object;
     CallbackSchedulerApi::AddToCalculationChain(g_CallbackScheduler, calc,
                                                 0x17);
-    *reinterpret_cast<ChainElem **>(bytes + 0x8) = calc;
+    obj.calc_element = calc;
 
     ChainElem *draw = CallbackSchedulerApi::Create(AlwaysReadyThunk);
     draw->flags &= ~ChainElemFlag_Enabled;
     draw->arg = object;
     CallbackSchedulerApi::AddToDrawChain(g_CallbackScheduler, draw, 0x20);
-    *reinterpret_cast<ChainElem **>(bytes + 0xc) = draw;
+    obj.draw_element = draw;
     return 0;
 }
 
@@ -79,14 +82,14 @@ i32 TH10_FASTCALL AlwaysReadyThunk(void *) { return 1; } // 0x40b050/60
 // object again through +8/+0xc). Under the scheduler lock, removes the
 // +8 and +0xc chain elements (0x449f60), then clears DAT_004776fc.
 void DestroyMainChainObject6fcInPlaceEaxAbi(void *object) {
-    u8 *bytes = static_cast<u8 *>(object);
-    ChainElem *calc = *reinterpret_cast<ChainElem **>(bytes + 0x8);
+    MainChainObject6fc &obj = *static_cast<MainChainObject6fc *>(object);
+    ChainElem *calc = obj.calc_element;
     if (calc != 0) {
         EnterSchedulerLockBoundary();
         CallbackSchedulerApi::RemoveSynchronized(g_CallbackScheduler, calc);
         LeaveSchedulerLockBoundary();
     }
-    ChainElem *draw = *reinterpret_cast<ChainElem **>(bytes + 0xc);
+    ChainElem *draw = obj.draw_element;
     if (draw != 0) {
         EnterSchedulerLockBoundary();
         CallbackSchedulerApi::RemoveSynchronized(g_CallbackScheduler, draw);
@@ -132,12 +135,11 @@ void *SpawnPresetObjectShared(u16 preset_id, u32 init_param,
     u8 *entry = reinterpret_cast<u8 *>(kPresetTableBase +
                                        preset_id * 0x10);
     const u32 id = *reinterpret_cast<u16 *>(entry);
-    void *vm = AllocatePoolVmEsiAbi(g_MainChainRenderOwner);
+    VmRecord *vm = static_cast<VmRecord *>(
+        AllocatePoolVmEsiAbi(g_MainChainRenderOwner));
     if (vm != 0) {
-        *reinterpret_cast<u32 *>(static_cast<u8 *>(vm) + 0x35c) |=
-            kPresetFlag;
-        *reinterpret_cast<u32 *>(static_cast<u8 *>(vm) + 0x20) =
-            kPresetKind;
+        vm->flags |= kPresetFlag;
+        vm->render_kind = kPresetKind;
     }
     ApplyTimelineRenderObjectPresetClone(
         reinterpret_cast<ManagerWorkPartial *>(g_MainChainRenderOwner),
@@ -221,12 +223,11 @@ void *SpawnPresetSceneObjectByHandleStackAbi(u32 *out_handle,
     (void)param;
     u8 *entry = reinterpret_cast<u8 *>(kPresetTableBase + clone_id * 0x10);
     const u32 id = *reinterpret_cast<u16 *>(entry);
-    void *vm = AllocatePoolVmEsiAbi(g_MainChainRenderOwner);
+    VmRecord *vm = static_cast<VmRecord *>(
+        AllocatePoolVmEsiAbi(g_MainChainRenderOwner));
     if (vm != 0) {
-        *reinterpret_cast<u32 *>(static_cast<u8 *>(vm) + 0x35c) |=
-            kPresetFlag;
-        *reinterpret_cast<u32 *>(static_cast<u8 *>(vm) + 0x20) =
-            kPresetKind;
+        vm->flags |= kPresetFlag;
+        vm->render_kind = kPresetKind;
     }
     ApplyTimelineRenderObjectPresetClone(
         reinterpret_cast<ManagerWorkPartial *>(g_MainChainRenderOwner),

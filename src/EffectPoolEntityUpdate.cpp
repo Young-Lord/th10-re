@@ -2,18 +2,25 @@
 // ticker (TH10 0x0041c330). Analysis was done offline with objdump; see
 // docs/evidence/effect-pool-entity-update.md.
 //
-// The effect manager published through DAT_004776f0 owns a 0x3f0-byte
-// slot array (first slot at +0x14, 0x896 slots). Each slot starts with a
-// 0x3ac-byte animation VM record followed by the effect payload. The
-// native small wrappers around 0x0041b8e0 (0x41ba00/0x41ba30) and around
-// 0x0041c330 (0x41c450/0x41c480/0x41c4e0) only gate on the DAT_00477810
-// +0x58 state flags (and 0x41c480 zeroes/restores the global frame-time
-// scale around the tick when bit 0x2 is set); they remain thunk
-// boundaries.
+// The 0x3f0-byte slot array walked here (first slot at +0x14, 0x896 slots)
+// belongs to the bullet manager DAT_00477818, NOT to the effect manager
+// root DAT_004776f0: the bullet manager in-place dtor 0x41adf0 runs the eh
+// vector destructor iterator over 2198 x 0x3f0 records starting at
+// manager+0x14. The effect manager root contributes only its +0x3e0b50
+// resource pointer (EffectManagerRoot::bullet_resource_3e0b50), which
+// 0x41b8e0 reads from DAT_004776f0 and passes as the VM-init context (3rd
+// argument of InitializeAsciiAnimationVmEntry 0x43e5a0; sites 0x41b998 /
+// 0x41b9c7). Each slot starts with a 0x3ac-byte animation VM record
+// followed by the effect payload. The native small wrappers around
+// 0x0041b8e0 (0x41ba00/0x41ba30) and around 0x0041c330
+// (0x41c450/0x41c480/0x41c4e0) only gate on the DAT_00477810 +0x58 state
+// flags (and 0x41c480 zeroes/restores the global frame-time scale around
+// the tick when bit 0x2 is set); they remain thunk boundaries.
 #include <cmath>
 
 #include "AsciiAnimationVm.hpp"
 #include "AsciiRenderModeDispatcher.hpp"
+#include "EffectManagerRoot.hpp"
 #include "EffectPoolEntityUpdate.hpp"
 #include "VmRecord.hpp"
 
@@ -22,6 +29,7 @@ namespace th10 {
 namespace {
 
 extern void *g_MainChainRenderOwner; // TH10 DAT_00491c10
+extern void *g_EffectManagerRoot;    // TH10 DAT_004776f0
 
 extern void FreeMainChainObject(void *object); // TH10 0x4524a1
 
@@ -73,17 +81,28 @@ const u32 k_vm_script_word = 0x384U; // bound script id word
 
 // Effect payload offsets after the 0x3ac-byte VM record.
 const u32 k_effect_script_id = 0x3e4U; // u32
-const u32 k_effect_position = 0x3b0U;  // {x, y, z} floats
+const u32 k_effect_position = 0x3acU;  // {x, y, z} floats — native republish
+                                       //   reads slot+0x3ac/+0x3b0/+0x3b4
+                                       //   (TH10 0x41b917/0x41b923/0x41b928)
 const u32 k_effect_live_flag = 0x3dcU; // u32
 
-const u32 k_script_id_base_lower = 0x157U; // y >= 8 slots
-const u32 k_script_id_base_upper = 0x161U; // faded bottom slots
+// VM-init script bases: entry 0x43e5a0 receives script_id + 0x157/0x160,
+// while the slot+0x384 bound-script word is compared against script_id +
+// 0x158/0x161 (init value + 1) in both branches (TH10 0x41b9b1/0x41b982).
+const u32 k_script_id_base_lower = 0x157U;  // y >= 8 slots (init argument)
+const u32 k_script_id_base_upper = 0x160U;  // faded bottom slots (init arg)
+const u32 k_script_id_bound_lower = 0x158U; // y >= 8 slots (compare base)
+const u32 k_script_id_bound_upper = 0x161U; // faded bottom slots (compare)
 
 } // namespace
 
-// TH10 0x0041b8e0.
+// TH10 0x0041b8e0. Native EAX = the bullet manager slot-array base; the
+// VM-init context is the effect manager root's +0x3e0b50 resource pointer,
+// which the native reads from DAT_004776f0 at each spawn site.
 i32 TickEffectPoolSlots(void *pool)
 {
+    EffectManagerRoot &root = *static_cast<EffectManagerRoot *>(
+        g_EffectManagerRoot);
     u8 *slot = static_cast<u8 *>(pool) + k_slot_base;
 
     for (u32 i = 0; i != k_slot_count; ++i) {
@@ -104,6 +123,9 @@ i32 TickEffectPoolSlots(void *pool)
                     + k_playfield_y_offset;
 
             if (scripted_y < k_bottom_fade_y) { // ordered less only
+                // TH10 0x41b93c: the VM base_pos_y (slot+0x338) is clamped
+                // to 24.0f before the fade alpha is computed.
+                vm.base_pos_y = 24.0f;
                 const float drop = scripted_y - k_bottom_fade_y;
                 u8 alpha;
                 if (drop < k_bottom_fade_span) { // C0 set (or unordered)
@@ -115,15 +137,17 @@ i32 TickEffectPoolSlots(void *pool)
                 *(slot + k_vm_alpha_byte) = alpha;
 
                 if (bound_script !=
-                    static_cast<i32>(script_id) + k_script_id_base_upper) {
+                    static_cast<i32>(script_id) + k_script_id_bound_upper) {
                     (void)InitializeAsciiAnimationVmEntry(
-                        slot, script_id + k_script_id_base_upper, pool);
+                        slot, script_id + k_script_id_base_upper,
+                        root.bullet_resource_3e0b50);
                 }
             } else {
                 if (bound_script !=
-                    static_cast<i32>(script_id) + k_script_id_base_lower) {
+                    static_cast<i32>(script_id) + k_script_id_bound_lower) {
                     (void)InitializeAsciiAnimationVmEntry(
-                        slot, script_id + k_script_id_base_lower, pool);
+                        slot, script_id + k_script_id_base_lower,
+                        root.bullet_resource_3e0b50);
                     *(slot + k_vm_alpha_byte) = 0xffU;
                 }
             }

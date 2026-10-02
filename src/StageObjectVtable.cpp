@@ -272,6 +272,11 @@ void TH10_STDCALL QueueEffectRingValueEcxStackAbi(i32 kind, i32 value)
         const i32 current = LoadI32At(mgr, 0x620U + 4U * slot);
         if (current < 0) {
             StoreI32At(mgr, 0x620U + 4U * slot, kind);
+            // Native 0x43dcf0 stores to mgr+0x408+4*kind with NO bounds
+            // clamp on `kind` (only the slot loop's <12 and the count's
+            // <128 are checked); the bgm_sound_default_frequencies[128]
+            // table at +0x408 is written past its end for kind >= 128.
+            // Preserved verbatim as a native quirk.
             StoreI32At(mgr, 0x408U + 4U * static_cast<u32>(kind), lookup);
             StoreI32At(mgr, 0x680U + 4U * (slot << 7), value);
             break;
@@ -668,7 +673,14 @@ i32 TH10_STDCALL StageObjectUpdateA(void *object)
         first_tip_z = tip[2];
 
         const float extent = LoadFloatAt(obj, kSobOffAlpha);
-        if (IsBoxOutsidePlayfieldEcxStackAbi(tip, extent, extent) != 0
+        // Native 0x41d5d8 first tests the object's current position
+        // (ECX = obj+0x24, loaded at 0x41d5b7) and only when that reports
+        // outside re-tests the tip (ECX = the stack tip at 0x41d5e5). Both
+        // calls pass the +0x44 alpha as both extents; deleting requires
+        // both probes to be outside.
+        if (IsBoxOutsidePlayfieldEcxStackAbi(
+                reinterpret_cast<const float *>(obj + kSobOffPos),
+                extent, extent) != 0
             && IsBoxOutsidePlayfieldEcxStackAbi(tip, extent, extent) != 0)
             return 1;
     }

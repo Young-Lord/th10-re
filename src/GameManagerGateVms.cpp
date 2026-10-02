@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "EntityHelpers.hpp"
+#include "LargeRenderOwnerLayout.hpp"
 #include "MainChainContext.hpp"
 #include "Th10Types.hpp"
 #include "GameManagerGateVms.hpp"
@@ -26,19 +27,6 @@ extern u32 g_ManagerBackgroundVmIdA; // TH10 DAT_00477824
 extern u32 g_ManagerBackgroundVmIdB; // TH10 DAT_00477828
 extern u32 g_ManagerBackgroundVmIdC; // TH10 DAT_0047782c
 extern u32 g_ManagerSlotAuxFlag;     // TH10 DAT_00491bec
-
-// ------------------------------------------------------------ accessors
-
-inline u32 LoadU32At(const void *base, u32 offset)
-{
-    return *reinterpret_cast<const u32 *>(
-        static_cast<const u8 *>(base) + offset);
-}
-
-inline void StoreU32At(void *base, u32 offset, u32 value)
-{
-    *reinterpret_cast<u32 *>(static_cast<u8 *>(base) + offset) = value;
-}
 
 // Writes the stop word at entity+0x304 and, when the entity's +0x18 count is
 // zero, repeats it over the +0x14 {entity, next} child chain (native inline
@@ -130,17 +118,18 @@ void SpawnGameManagerBackgroundVmsStackAbi(void *slot_arg,
     // Render-owner viewport-state init (both paths): while the owner's first
     // signed dword is negative (idle), mark it 8 and store the two 640x480
     // rects.
-    u8 *const owner = static_cast<u8 *>(g_MainChainRenderOwner);
-    if (static_cast<i32>(LoadU32At(owner, 0x0)) < 0) {
-        StoreU32At(owner, 0x00, 8U);
-        StoreU32At(owner, 0x2c, 0U);
-        StoreU32At(owner, 0x30, 0U);
-        StoreU32At(owner, 0x34, 0x280U); // 640
-        StoreU32At(owner, 0x38, 0x1e0U); // 480
-        StoreU32At(owner, 0x3c, 0U);
-        StoreU32At(owner, 0x40, 0U);
-        StoreU32At(owner, 0x44, 0x280U); // 640
-        StoreU32At(owner, 0x48, 0x1e0U); // 480
+    LargeRenderOwnerLayout &owner =
+        *reinterpret_cast<LargeRenderOwnerLayout *>(g_MainChainRenderOwner);
+    if (owner.deferred_slot_0 < 0) {
+        owner.deferred_slot_0 = 8;
+        owner.batch0_rects[0] = 0U;
+        owner.batch0_rects[1] = 0U;
+        owner.batch0_rects[2] = 0x280U; // 640
+        owner.batch0_rects[3] = 0x1e0U; // 480
+        owner.batch0_rects[4] = 0U;
+        owner.batch0_rects[5] = 0U;
+        owner.batch0_rects[6] = 0x280U; // 640
+        owner.batch0_rects[7] = 0x1e0U; // 480
     }
 }
 

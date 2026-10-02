@@ -15,8 +15,13 @@
 //   +0x10/+0x14    frame counters incremented on success
 //   +0x1c + shotmode*0xc  player-attached object passed to 0x419120
 //
-// Entity fields touched: +0x40/+0x50 size floats, +0x12c skip flag,
-// +0x310 scalar (i32; low byte drives the alpha), +0x2ff alpha byte.
+// The tracked entities are VmRecords (the render-owner node lists walked
+// at 0x4196c6/0x4196dd hold the owner's 0x3ac-byte node-pool records).
+// Entity fields touched: +0x40 scale_y and +0x50 height (the size floats
+// whose product *0.5 forms the half height), +0x12c alpha_anim_1.duration
+// (VmRecord +0x108 alpha block, duration at block+0x24; native 0x419718
+// tests it == 0 to gate the fade), +0x310 scalar (i32; low byte drives the
+// alpha), +0x2ff alpha byte.
 #include <cmath>
 
 #include "Th10Platform.hpp"
