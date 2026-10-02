@@ -24,6 +24,7 @@
 #include "AsciiAnimationVm.hpp"
 #include "AsciiHudOwner.hpp"
 #include "BgmRuntime.hpp"
+#include "ConditionalStateObject.hpp"
 #include "EntityHelpers.hpp"
 #include "LargeRenderOwnerLayout.hpp"
 #include "PlayerFrameworkHelpers.hpp"
@@ -738,11 +739,13 @@ void StartSpellCardPracticeEaxStackAbi(void *base, i32 spell_card_index,
                              0x1ab);
 
     // Rank dispatch (rank = DAT_00474c7c - 1, jump table at 0x409be4).
-    // Each rank initializes the base VM pair from DAT_00477704+0x38 and
+    // Each rank initializes the base VM pair from the battle resource at
+    // DAT_00477704+0x38 (resource_table entry 2, a modeled field) and
     // spawns its rank entity; rank 6 branches on DAT_00474c84 >= 24 and
     // its low branch skips the second VM entirely (native quirk).
-    void *const battle_resource = LoadPointerAt(
-        reinterpret_cast<u32>(LoadPointerAt(0x477704U)) + 0x38U);
+    ConditionalState &hud_cond =
+        *static_cast<ConditionalState *>(LoadPointerAt(0x477704U));
+    void *const battle_resource = hud_cond.resource_table[2]; // +0x38
     const i32 rank = static_cast<i32>(g_StageIndex) - 1;
     switch (rank) {
     case 0: {

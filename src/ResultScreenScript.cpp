@@ -6,6 +6,7 @@
 #include "BgmRuntime.hpp"
 #include "EntityHelpers.hpp"
 #include "GameManagerState.hpp"
+#include "GameStateManagerObject.hpp"
 #include "MainChainContext.hpp"
 #include "PlayerFrameworkHelpers.hpp"
 #include "PlayerStageHelpers.hpp"
@@ -727,19 +728,20 @@ i32 RecordSpellPracticeCaptureEdiAbi(void *spell_state)
         return static_cast<i32>(pending);
     }
 
-    u8 *const state = static_cast<u8 *>(spell_state);
-    StoreU32To(state + 4U, 6U);
-    const u32 flag = LoadU32From(state + 0x20U);
+    // Typed view over the DAT_00477830 game-state manager record.
+    GameStateManager &mgr = *reinterpret_cast<GameStateManager *>(spell_state);
+    mgr.mode_0004 = 6;
+    const u32 flag = mgr.frame_timer.flags;
     if ((flag & 1U) == 0U) {
-        StoreU32To(state + 0x14U, 0U);
-        StoreU32To(state + 0x10U, static_cast<u32>(-999999));
-        StoreU32To(state + 0x18U, 0U);
-        StoreU32To(state + 0x1cU, 0x476f78U);
-        StoreU32To(state + 0x20U, flag | 1U);
+        mgr.frame_timer.count = 0;
+        mgr.frame_timer.prev = static_cast<i32>(0xfff0bdc1U); // -999999
+        mgr.frame_timer.accum = 0;
+        mgr.frame_timer.rate = &g_MainChainStartupScale;
+        mgr.frame_timer.flags = flag | 1U;
     }
-    StoreU32To(state + 0x14U, 0U);
-    StoreU32To(state + 0x18U, 0U);
-    StoreU32To(state + 0x10U, static_cast<u32>(-1));
+    mgr.frame_timer.count = 0;
+    mgr.frame_timer.accum = 0;
+    mgr.frame_timer.prev = -1;
 
     StoreU32To(reinterpret_cast<void *>(title_state + 0x58U),
                LoadU32From(reinterpret_cast<const void *>(title_state + 0x58U))
@@ -757,7 +759,7 @@ i32 RecordSpellPracticeCaptureEdiAbi(void *spell_state)
     AssignPoolVmScriptEcxEaxAbi(reinterpret_cast<void *>(vm), 0);
     u32 overlay_id = 0U;
     AttachEffectVmToListB(&overlay_id, reinterpret_cast<void *>(vm), manager);
-    StoreU32To(state + 0x1d8U, overlay_id);
+    mgr.handle_b_01d8 = overlay_id;
     (void)CreateGameOverOverlay(g_MainChainRenderOwner,
                                 static_cast<i32>(overlay_id), 32, 16, 384,
                                 448);
@@ -772,13 +774,15 @@ i32 RecordSpellPracticeCaptureEdiAbi(void *spell_state)
     {
         u32 out_id = 0U;
         AttachEffectVmToListB(&out_id, reinterpret_cast<void *>(vm), manager);
+        // Native stores the spawned entity id to manager+0x1d4
+        // (handle_a_01d4) at 0x0042349f.
+        mgr.handle_a_01d4 = out_id;
     }
     // The HUD owner's +0x9ec8 glyph resource (read through the absolute
     // global DAT_0047770c) is copied to +0x2c4.
     AsciiHudOwner &hud_owner = *reinterpret_cast<AsciiHudOwner *>(
         LoadU32From(reinterpret_cast<const void *>(0x47770cU)));
-    StoreU32To(state + 0x2c4U,
-               reinterpret_cast<u32>(hud_owner.front_anm_work));
+    mgr.front_anm_work_02c4 = hud_owner.front_anm_work;
 
     StartBgmTrack("bgm/th10_17.wav", 0);
     if ((g_MainChainRuntimeOptions & 0x10U) != 0U) {
@@ -788,11 +792,11 @@ i32 RecordSpellPracticeCaptureEdiAbi(void *spell_state)
 
     u8 *const records = &g_SpellPracticeRecords;
     records[0x1d8a3U] = 1U;
-    StoreU32To(state + 0x1e4U, 1U);
+    mgr.spell_practice_flag_01e4 = 1;
 
     const u32 old_scale =
         LoadU32From(reinterpret_cast<const void *>(0x476f78U));
-    StoreU32To(state + 0x2c0U, old_scale);
+    *reinterpret_cast<u32 *>(&mgr.saved_time_scale_02c0) = old_scale;
     StoreU32To(reinterpret_cast<void *>(0x476f78U), 0x3f800000U); // 1.0f
     return 1;
 }

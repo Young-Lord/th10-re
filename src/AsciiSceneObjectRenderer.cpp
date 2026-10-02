@@ -3,6 +3,7 @@
 #include "AsciiHudOwner.hpp"
 #include "AsciiHudRenderer.hpp"
 #include "AsciiRenderModeDispatcher.hpp"
+#include "GameStateManagerObject.hpp"
 #include "TitleScreenObject.hpp"
 
 #include <cmath>
@@ -95,8 +96,10 @@ i32 RenderAsciiSceneObjectAndBarOverlay(void *object_memory)
     if (reinterpret_cast<const AsciiHudOwner *>(g_AsciiHudOwner)
             ->result_script_state != 0)
         return 1;
-    if (*reinterpret_cast<const i32 *>(
-            static_cast<u8 *>(g_GameStateManager) + 4) != 0)
+    // Manager mode word at +0x4 (no null check on DAT_00477830).
+    const GameStateManager &mgr =
+        *reinterpret_cast<const GameStateManager *>(g_GameStateManager);
+    if (mgr.mode_0004 != 0)
         return 1;
     const i32 bar_value = static_cast<i32>(g_AsciiHudBarValue);
     if (bar_value == 0)

@@ -7,6 +7,7 @@
 // configuration table selector published to DAT_00477748.
 
 #include "Th10Types.hpp"
+#include "StageHostObject.hpp"
 #include "CallbackScheduler.hpp"
 #include "ManagerCreation.hpp"
 #include "GameManagerState.hpp"
@@ -38,23 +39,26 @@ i32 TH10_FASTCALL StageHostSpriteViewDrawAdapter(void *host); // 0x40abf0
 // 0x1a2-dword object (order quirk: the seeds are dead stores), sets bit
 // 1 of the first dword and publishes DAT_004776f8. Returns the host.
 void *InitStageHostObjectEdxAbi(void *host) {
-    u8 *bytes = static_cast<u8 *>(host);
+    StageHostObject &host_view = *reinterpret_cast<StageHostObject *>(host);
+    u8 *bytes = reinterpret_cast<u8 *>(&host_view);
 
     // Dead-seed block preserved for fidelity (erased by the wipe below).
-    *reinterpret_cast<u32 *>(bytes + 0x10) = 0x4703e4U;
-    *reinterpret_cast<u32 *>(bytes + 0x10c) = 1;
-    *reinterpret_cast<u32 *>(bytes + 0x44) = 0x3e7;
-    *reinterpret_cast<u32 *>(bytes + 0x11c) = 0x3e7;
-    *reinterpret_cast<u32 *>(bytes + 0x1e4) = 1;
-    *reinterpret_cast<u32 *>(bytes + 0x1f4) = 0x3e7;
-    *reinterpret_cast<u32 *>(bytes + 0x2bc) = 1;
+    host_view.thread_control.marker = reinterpret_cast<void *>(0x4703e4U);
+    host_view.cursor_a.wrap_flag = 1;
+    host_view.cursor_a.maximum = 0x3e7;
+    host_view.cursor_b.maximum = 0x3e7;
+    host_view.cursor_b.wrap_flag = 1;
+    host_view.cursor_c.maximum = 0x3e7;
+    host_view.cursor_c.wrap_flag = 1;
     // Embedded 0x3ac record at +0x2c8: clear its nine busy-flag dwords.
+    // Native mask is 0xFFFFFFFE, i.e. bit 0 (mov eax,0FFFFFFFEh at TH10
+    // 0x40a0c1 through 0x40a0f5).
     static const u32 kEmbeddedFlagOffsets[9] = {
         0x6c, 0xb0, 0xfc, 0x128, 0x174, 0x1b0, 0x1fc, 0x228, 0x378};
     for (int i = 0; i < 9; ++i) {
         u32 *flag = reinterpret_cast<u32 *>(
             bytes + 0x2c8 + kEmbeddedFlagOffsets[i]);
-        *flag &= ~2u;
+        *flag &= ~1u;
     }
 
     u32 *wipe = reinterpret_cast<u32 *>(bytes);
@@ -74,7 +78,7 @@ void *InitStageHostObjectEdxAbi(void *host) {
 // overlay draw adapter) at priority 0x27, both enabled (flags |= 2).
 // Elements land at host+8 / host+0xc. Returns 0.
 i32 RegisterStageHostSchedulerRecordsEbxAbi(void *host) {
-    u8 *bytes = static_cast<u8 *>(host);
+    StageHostObject &host_view = *reinterpret_cast<StageHostObject *>(host);
     g_SceneConfigTablePointer = 0x474788U;
     g_StageIndex = 0;
     g_StageIndexMirror = 0;
@@ -85,14 +89,14 @@ i32 RegisterStageHostSchedulerRecordsEbxAbi(void *host) {
     calc->arg = host;
     CallbackSchedulerApi::AddToCalculationChain(g_CallbackScheduler, calc,
                                                 5);
-    *reinterpret_cast<ChainElem **>(bytes + 0x8) = calc;
+    host_view.calc_element = calc;
 
     ChainElem *draw = CallbackSchedulerApi::Create(
         StageHostSpriteViewDrawAdapter);
     draw->flags |= ChainElemFlag_Enabled;
     draw->arg = host;
     CallbackSchedulerApi::AddToDrawChain(g_CallbackScheduler, draw, 0x27);
-    *reinterpret_cast<ChainElem **>(bytes + 0xc) = draw;
+    host_view.draw_element = draw;
     return 0;
 }
 
@@ -116,42 +120,48 @@ void *CreateStageHostObject() {
 
 // TH10 0x0040ada0. Native EAX = configuration index, ECX = stage host.
 // Publishes the selected scene configuration table
-// (DAT_00477748 = 0x474788 + index * 0x30) and stores the index at
-// host+0x3c and host+0x40.
+// (DAT_00477748 = 0x474788 + index * 0x30) and stores the index into the
+// mode/config select cursor: cursor_a.value (+0x3c) and
+// cursor_a.previous (+0x40).
 void SelectStageConfigTableEcxEaxAbi(void *host, u32 index) {
     g_SceneConfigTablePointer = 0x474788U + index * 0x30;
-    u8 *bytes = static_cast<u8 *>(host);
-    *reinterpret_cast<u32 *>(bytes + 0x3c) = index;
-    *reinterpret_cast<u32 *>(bytes + 0x40) = index;
+    StageHostObject &host_view = *reinterpret_cast<StageHostObject *>(host);
+    host_view.cursor_a.value = static_cast<i32>(index);
+    host_view.cursor_a.previous = static_cast<i32>(index);
 }
 
 // TH10 0x0040add0. Native EAX = the record to reset (usercall; the entry
 // carries no cross-references in the canonical binary and stands alone
 // between 0x40ada0 and 0x40ae00, so it is preserved as a trivial
-// initializer of its EAX record): clears +0x8c, +0x0 and +0xd4, seeds
-// +0xd0 with flag bit 1 and sets the +0x8 counter to 999.
+// initializer of its EAX record): clears step_count (+0x8c), value (+0x0)
+// and disabled_count (+0xd4), seeds wrap_flag (+0xd0) with flag bit 1 and
+// sets maximum (+0x8) to 999.
 void ResetStageHostSubrecordDefaultsEaxAbi(void *record) {
-    u32 *fields = static_cast<u32 *>(record);
-    fields[0x8c / 4] = 0;
-    fields[0] = 0;
-    fields[0xd4 / 4] = 0;
-    fields[0xd0 / 4] = 1;
-    fields[0x8 / 4] = 0x3e7U;
+    ManagerCursorRecord &cursor =
+        *reinterpret_cast<ManagerCursorRecord *>(record);
+    cursor.step_count = 0;
+    cursor.value = 0;
+    cursor.disabled_count = 0;
+    cursor.wrap_flag = 1;
+    cursor.maximum = 0x3e7U;
 }
 
 // TH10 0x0040d6b0 (StageHostConditionalState.cpp).
 void *CreateStageConditionalStateStackAbi(const char *script_path);
 
-// TH10 0x0040a350. Native ESI = the game manager. Full game-mode entry:
+// TH10 0x0040a350. Native ESI = the stage host (the embedded ThreadControl
+// timeline continuation 0x0040a340 calls this with ESI = g_StageHostObject,
+// and every offset below is a StageHostObject field). Full game-mode entry:
 // creates the player state block, the effect manager root, the game
 // context, the two remaining manager roots (0x41aed0 / 0x42b660), the
-// stage conditional state (0x40d6b0) from the manager's selected stage
-// script, and the ASCII HUD owner; finally shifts the manager's +0x1ec
-// cursor record by +1 and -1 to refresh it (seeding +0x1f4 from the
-// conditional state's +0x54 sub-record cursor first) and sets the +0x30
-// state to 1. Returns 0.
+// stage conditional state (0x40d6b0) from the host's selected stage
+// script, and the ASCII HUD owner; finally shifts the host's cursor_c
+// (+0x1ec) record by +1 and -1 to refresh it (seeding cursor_c.maximum
+// (+0x1f4) from the conditional state's +0x54 sub-record cursor first) and
+// sets the +0x30 state machine to 1. Returns 0.
 i32 EnterGameModeSetupEsiAbi(void *game_manager) {
-    u8 *bytes = static_cast<u8 *>(game_manager);
+    StageHostObject &host =
+        *reinterpret_cast<StageHostObject *>(game_manager);
     CreatePlayerStateBlock();
     CreateEffectManagerRoot();
     CreateGameContextObject();
@@ -159,26 +169,25 @@ i32 EnterGameModeSetupEsiAbi(void *game_manager) {
     CreateMainChainObject840Boundary();
 
     // Stage conditional state from the selected stage script:
-    // script = manager->stage_table[manager->stage_index] (+0x34 base,
+    // script = host.stage_table[host.cursor_b.value] (+0x34 base,
     // +0x114 index).
-    const u32 index = *reinterpret_cast<u32 *>(bytes + 0x114);
-    void *stage_table = *reinterpret_cast<void **>(bytes + 0x34);
-    const char *script_path = *reinterpret_cast<char **>(
-        static_cast<u8 *>(stage_table) + index * 4);
+    const u32 index = static_cast<u32>(host.cursor_b.value);
+    const char *script_path = host.stage_table[index];
     CreateStageConditionalStateStackAbi(script_path);
 
     CreateAsciiHudOwner();
 
-    // Refresh the +0x1ec cursor record: seed +0x1f4 from the conditional
-    // state's +0x54 sub-record cursor, shift +1 then -1, set state 1.
-    void *cursor = bytes + 0x1ec;
+    // Refresh the cursor_c (+0x1ec) record: seed cursor_c.maximum (+0x1f4)
+    // from the conditional state's +0x54 sub-record cursor, shift +1 then
+    // -1, set the +0x30 state machine to 1.
+    ManagerCursorRecord *cursor = &host.cursor_c;
     void *sub_record = *reinterpret_cast<void **>(
         static_cast<u8 *>(g_AsciiHudConditionalState) + 0x54);
-    *reinterpret_cast<u32 *>(bytes + 0x1f4) =
+    cursor->maximum =
         *reinterpret_cast<u32 *>(static_cast<u8 *>(sub_record) + 0x8);
     ShiftManagerSelector(cursor, 1);
     ShiftManagerSelector(cursor, -1);
-    *reinterpret_cast<u32 *>(bytes + 0x30) = 1;
+    host.state_machine = 1;
     return 0;
 }
 

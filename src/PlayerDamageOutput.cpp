@@ -8,6 +8,7 @@
 #include "PlayerDamageOutput.hpp"
 
 #include "EntityHelpers.hpp"
+#include "ConditionalStateObject.hpp"
 #include "GameContext.hpp"
 #include "PlayerRecord.hpp"
 #include "PlayerShotSpawner.hpp"
@@ -170,9 +171,13 @@ i32 ComputeBombAreaDamageThisAbi(const void *game_context,
     const i32 variant = ctx.bomb_variant;
     const bool shot_gate =
         (g_SpellBulletGate[0x378CU] & 1) != 0;
-    const bool finish_active =
-        *reinterpret_cast<const u32 *>(g_AsciiHudConditionalStateDamage
-                                       + 0x10U) != 0;
+    // g_AsciiHudConditionalStateDamage = DAT_00477704; the bomb damage rule
+    // reads published_ids[0] (+0x10, the primary stage/battle ECL record
+    // pointer) — nonzero marks an active finish sequence.
+    const ConditionalState &hud_cond =
+        *reinterpret_cast<const ConditionalState *>(
+            g_AsciiHudConditionalStateDamage);
+    const bool finish_active = hud_cond.published_ids[0] != 0U;
 
     // Native compare is radius*radius >= dx*dx + dy*dy (inclusive).
     if (radius * radius >= dx * dx + dy * dy) {

@@ -21,6 +21,7 @@
 #include "ConditionalStateSubrecords.hpp"
 
 #include "CallbackScheduler.hpp"
+#include "ConditionalStateObject.hpp"
 #include "EclScriptLibrary.hpp"
 
 namespace th10 {
@@ -50,21 +51,27 @@ void StoreU32At(void *address, u32 value)
 void InitScriptViewerPathEcxStackAbi(void *viewer /* ECX */,
                                      const char *path);
 
-// TH10 0x0040c5e0 (vtable 0x46d0c0 slot +0x14 of an ECL script object).
-// Native ECX = the record, stack = the argument. Requested by the frame
-// ticker after a record reports an update; modeled as a boundary.
+// TH10 0x0040c5e0 (slot 0 of the destruction vtable 0x46d0d8 planted by
+// 0x0040dae0). Native ECX = the record, stack = the argument. The 0x0040d750
+// frame ticker calls it directly after a record reports an update — it does
+// not go through the live 0x46d0c0 vtable, whose slot +0x14 is the scalar
+// deleting destructor 0x0040cc50. Modeled as a boundary.
 i32 NotifyEclScriptObjectEcxStackAbi(void *record /* ECX */, i32 argument);
 
 // TH10 0x0040d750, entered through 0x0040d810 with ECX = the state.
 i32 TickConditionalStateRecords(void *state)
 {
+    // Typed view of the 0x68-byte conditional state (the scheduler passes it
+    // in ECX); the list nodes themselves stay raw (they are embedded in the
+    // ECL records at record+0x116c, not part of ConditionalState).
+    ConditionalState &cond = *static_cast<ConditionalState *>(state);
+
     // One forced update per ECL script object in the state's list. Records
     // with the +0x2480 bit 0x20000 set skip the ECL run and are notified
     // directly; otherwise the ECL per-frame update runs and its nonzero
     // result also notifies. On a zero result the run-gate bit 0x400 is
     // cleared so the record can run again next frame.
-    for (u32 *node = *reinterpret_cast<u32 **>(
-             static_cast<u8 *>(state) + 0x58U);
+    for (u32 *node = static_cast<u32 *>(cond.script_list_head_0058);
          node != 0; node = reinterpret_cast<u32 *>(node[1])) {
         u8 *const record = reinterpret_cast<u8 *>(node[0]);
         // (The native dereferences the record without a null check.)
@@ -82,19 +89,20 @@ i32 TickConditionalStateRecords(void *state)
     // mirrored in AsciiOverlayCallbacks.cpp):
     // publish the frame counter into the score slot, then either count
     // whole frames (rate inside the 0.99..1.01 band, exclusive) or add the
-    // fractional rate and reconvert.
-    u8 *const bytes = static_cast<u8 *>(state);
-    const i32 tick = *reinterpret_cast<const i32 *>(bytes + 0x44U);
-    *reinterpret_cast<i32 *>(bytes + 0x40U) = tick;
-    const float rate = **reinterpret_cast<const float *const *>(
-        bytes + 0x4cU);
-    float *const accumulator = reinterpret_cast<float *>(bytes + 0x48U);
+    // fractional rate and reconvert. The accumulator (+0x48) is the i32
+    // TimerNode::accum field reinterpreted as the float accumulator (same
+    // storage, native bit pattern).
+    const i32 tick = cond.frame_timer.count; // +0x44
+    cond.frame_timer.prev = tick;            // +0x40
+    const float rate = *cond.frame_timer.rate; // +0x4c -> flt_476F78 family
+    float *const accumulator =
+        reinterpret_cast<float *>(&cond.frame_timer.accum); // +0x48
     if (rate > 0.99f && rate < 1.01f) {
-        *reinterpret_cast<i32 *>(bytes + 0x44U) = tick + 1;
+        cond.frame_timer.count = tick + 1;
         *accumulator += 1.0f;
     } else {
         *accumulator += rate;
-        *reinterpret_cast<i32 *>(bytes + 0x44U) =
+        cond.frame_timer.count =
             ConvertFloatToI32TowardZeroX87(*accumulator);
     }
     return 1;
@@ -146,12 +154,16 @@ ChainElem *CreateStateChainRecord(ChainCallback callback, void *argument)
 i32 InitializeConditionalStateSubrecordsEbxStackAbi(void *state /* EBX */,
                                                     const char *script_path)
 {
-    u8 *const state_bytes = static_cast<u8 *>(state);
+    // Typed view of the 0x68-byte conditional state; the script viewer body
+    // itself (the +0x54 target) is an opaque 0x1098-byte allocation and
+    // keeps raw byte stores below.
+    ConditionalState &cond = *static_cast<ConditionalState *>(state);
 
-    // Publish the effect manager's pool word (the native dereferences the
-    // DAT_004776f0 holder without a null check).
-    StoreU32At(state_bytes + 0x30U,
-        LoadU32At(static_cast<const u8 *>(g_EffectManagerRoot) + 0x3e0b50U));
+    // Publish the effect manager's pool word into resource_table entry 0
+    // (the native dereferences the DAT_004776f0 holder without a null
+    // check).
+    cond.resource_table[0] = *reinterpret_cast<void *const *>(
+        static_cast<const u8 *>(g_EffectManagerRoot) + 0x3e0b50U);
 
     // The 0x1098-byte script viewer: zero-filled (the trailing +0x1090 /
     // +0x1094 words are cleared again individually before the rep stos in
@@ -166,37 +178,37 @@ i32 InitializeConditionalStateSubrecordsEbxStackAbi(void *state /* EBX */,
             StoreU32At(viewer + i * 4U, 0U);
         StoreU32At(viewer, 0x46d0b4U);
     }
-    StoreU32At(state_bytes + 0x54U, reinterpret_cast<u32>(viewer));
+    cond.name_registry_0054 = viewer; // +0x54
     InitScriptViewerPathEcxStackAbi(viewer, script_path);
 
     // Frame ticker on the calculation chain (priority 0x12) and the draw
     // no-op (priority 0x14); both carry the state as their argument.
     ChainElem *calc = CreateStateChainRecord(
         ConditionalStateCalcCallbackFastAbi, state);
-    StoreU32At(state_bytes + 0x8U, reinterpret_cast<u32>(calc));
+    cond.calc_element = calc; // +0x08
     (void)CallbackSchedulerApi::AddToCalculationChain(g_CallbackScheduler,
         calc, 0x12);
 
     ChainElem *draw = CreateStateChainRecord(
         ConditionalStateDrawCallbackFastAbi, state);
-    StoreU32At(state_bytes + 0xcU, reinterpret_cast<u32>(draw));
+    cond.draw_element = draw; // +0x0c
     (void)CallbackSchedulerApi::AddToDrawChain(g_CallbackScheduler, draw,
         0x14);
 
-    // Score/countdown block: the first-time seed (score -999999, zero
-    // counters, 1.0f rate) runs only when block bit 0 is clear, and the
-    // final unconditional pass forces score -1 and zeroed counters.
-    if ((LoadU32At(state_bytes + 0x50U) & 1U) == 0U) {
-        StoreU32At(state_bytes + 0x50U, LoadU32At(state_bytes + 0x50U) | 1U);
-        StoreU32At(state_bytes + 0x44U, 0U);
-        StoreU32At(state_bytes + 0x40U, 0xfff0bdc1U); // -999999
-        StoreU32At(state_bytes + 0x48U, 0U);
-        StoreU32At(state_bytes + 0x4cU,
-            reinterpret_cast<u32>(&g_AsciiOverlayInitialRate));
+    // Score/countdown block (the frame_timer TimerNode at +0x40..+0x50):
+    // the first-time seed (score -999999, zero counters, 1.0f rate) runs
+    // only when the timer flag bit 0 is clear, and the final unconditional
+    // pass forces score -1 and zeroed counters.
+    if ((cond.frame_timer.flags & 1U) == 0U) {
+        cond.frame_timer.flags |= 1U;
+        cond.frame_timer.count = 0;
+        cond.frame_timer.prev = static_cast<i32>(0xfff0bdc1U); // -999999
+        cond.frame_timer.accum = 0; // float accumulator storage zeroed
+        cond.frame_timer.rate = &g_AsciiOverlayInitialRate;
     }
-    StoreU32At(state_bytes + 0x44U, 0U);
-    StoreU32At(state_bytes + 0x48U, 0U);
-    StoreU32At(state_bytes + 0x40U, 0xffffffffU); // -1
+    cond.frame_timer.count = 0;
+    cond.frame_timer.accum = 0;
+    cond.frame_timer.prev = -1;
 
     return 0;
 }

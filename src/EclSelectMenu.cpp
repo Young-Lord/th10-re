@@ -1,6 +1,7 @@
 #include "EclSelectMenu.hpp"
 
 #include "AsciiHudOverlayUpdate.hpp"
+#include "ConditionalStateObject.hpp"
 #include "EclScriptLibrary.hpp"
 #include "GameManagerState.hpp"
 #include "ManagerReleaseWrappers.hpp"
@@ -288,11 +289,17 @@ void RunSpellSelectPath(u8 *menu)
         descriptor[i] = 0U;
     }
     select = LoadU32From(menu + 0x1ecU);
-    const u32 table = LoadU32From(
-        reinterpret_cast<const u8 *>(g_AsciiHudConditionalState) + 0x54U);
-    const u32 row = LoadU32From(reinterpret_cast<const u8 *>(table) + 0x8cU);
+    // The +0x54 name registry and its +0x8c name table are modeled
+    // ConditionalState / ConditionalNameRegistry fields; the entry index
+    // (the menu cursor at +0x1ec) is unbounded natively, so the 8-byte
+    // entry read itself stays RAW (no bounds check in the native either).
+    ConditionalState &hud_cond =
+        *reinterpret_cast<ConditionalState *>(g_AsciiHudConditionalState);
+    ConditionalNameRegistry *const registry =
+        static_cast<ConditionalNameRegistry *>(hud_cond.name_registry_0054);
+    const void *const name_table = registry->name_table_008c;
     const u32 script_id = LoadU32From(
-        reinterpret_cast<const u8 *>(row) + select * 8U);
+        static_cast<const u8 *>(name_table) + select * 8U);
     StoreU32To(descriptor + 0x14U, 10000U);
     CreateEclScriptObjectEaxStackAbi(reinterpret_cast<const u32 *>(descriptor),
                                      hud_state, static_cast<i32>(script_id));

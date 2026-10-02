@@ -9,6 +9,7 @@
 
 #include "EclScriptObjectTeardown.hpp"
 
+#include "ConditionalStateObject.hpp"
 #include "EntityHelpers.hpp"
 #include "PlayerRecord.hpp"
 
@@ -54,12 +55,14 @@ void DestroyEclScriptObjectInPlaceStackAbi(void *record)
     // +0x60 and +0x64 (native quirk; the +0x64 counter is never undone).
     // The native dereferences the DAT_00477704 holder without a null
     // check; the reconstruction keeps that direct read.
-    u8 *const state = static_cast<u8 *>(g_AsciiHudConditionalState);
+    u8 *const state_bytes = static_cast<u8 *>(g_AsciiHudConditionalState);
+    ConditionalState &cond =
+        *reinterpret_cast<ConditionalState *>(state_bytes);
     u32 *const node = reinterpret_cast<u32 *>(rec + 0x116cU);
-    if (LoadU32From(state + 0x58U) == reinterpret_cast<u32>(node))
-        StoreU32To(state + 0x58U, node[1]);
-    if (LoadU32From(state + 0x5cU) == reinterpret_cast<u32>(node))
-        StoreU32To(state + 0x5cU, node[2]);
+    if (cond.script_list_head_0058 == node) // +0x58
+        cond.script_list_head_0058 = reinterpret_cast<void *>(node[1]);
+    if (cond.script_list_tail_005c == node) // +0x5c
+        cond.script_list_tail_005c = reinterpret_cast<void *>(node[2]);
 
     const u32 next = node[1];
     if (next != 0U)
@@ -70,14 +73,15 @@ void DestroyEclScriptObjectInPlaceStackAbi(void *record)
 
     node[1] = 0U;
     node[2] = 0U;
-    StoreU32To(state + 0x60U, LoadU32From(state + 0x60U) - 1U);
+    --cond.script_count_0060; // +0x60 (the +0x64 aux count never unwinds)
 
-    // Published-id slot: only records carrying the +0x2480 bit 0x8000
-    // ever registered one (the +0x248c index); the read of +0x248c is
-    // unconditional garbage otherwise.
+    // Published-id slot clear: the index is the record's +0x248c field and
+    // is unbounded natively (the constructor even seeds 0xffffffff there),
+    // so the +0x10 store stays RAW — see the bounds note in
+    // src/ConditionalStateObject.hpp.
     if ((LoadU32From(rec + 0x2480U) & 0x8000U) != 0U) {
         const u32 slot = LoadU32From(rec + 0x248cU);
-        StoreU32To(state + 0x10U + slot * 4U, 0U);
+        StoreU32To(state_bytes + 0x10U + slot * 4U, 0U);
     }
 
     // Soft-release the ten published entity ids through the render owner.

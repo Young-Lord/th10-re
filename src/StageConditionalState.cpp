@@ -3,6 +3,7 @@
 
 #include "Th10Types.hpp"
 #include "ManagerWork.hpp"
+#include "ConditionalStateObject.hpp"
 #include "ConditionalStateSubrecords.hpp"
 
 namespace th10 {
@@ -20,16 +21,17 @@ const u32 kAnimTag = 0x4d494e41U; // 'ANIM'
 const u32 kEcliTag = 0x494c4345U; // 'ECLI'
 } // namespace
 
-// TH10 0x0040d680. Native ESI = the 0x68-byte conditional state
-// destructor piece: publish the 0x46d0f0 vtable, CRT-free the +0x8c
-// buffer and clear the pointer.
+// TH10 0x0040d680. Native ESI = the +0x54 name-registry sub-object
+// (0x1098-byte ConditionalNameRegistry) of the conditional state: publish
+// the 0x46d0f0 destructing vtable, CRT-free the +0x8c name-table buffer
+// and clear the pointer.
 void DestroyConditionalStateBufferEsiAbi(void *state) {
-    u8 *bytes = static_cast<u8 *>(state);
-    *reinterpret_cast<u32 *>(bytes) = 0x46d0f0U;
-    void *buffer = *reinterpret_cast<void **>(bytes + 0x8c);
-    if (buffer != 0) {
-        CrtFree(buffer);
-        *reinterpret_cast<void **>(bytes + 0x8c) = 0;
+    ConditionalNameRegistry &registry =
+        *static_cast<ConditionalNameRegistry *>(state);
+    registry.vtable_0000 = reinterpret_cast<void *>(0x46d0f0U);
+    if (registry.name_table_008c != 0) {
+        CrtFree(registry.name_table_008c);
+        registry.name_table_008c = 0;
     }
 }
 
@@ -42,11 +44,14 @@ void DestroyConditionalStateBufferEsiAbi(void *state) {
 void *CreateStageConditionalStateStackAbi(const char *script_path) {
     void *state = ::operator new(0x68U);
     if (state != 0) {
+        // Typed view for the creator flag; the wipe itself stays a raw
+        // dword sweep over the whole 0x68-byte object.
+        ConditionalState &cond = *static_cast<ConditionalState *>(state);
         u32 *wipe = static_cast<u32 *>(state);
         for (int i = 0; i < 0x1a; ++i) {
             wipe[i] = 0;
         }
-        *wipe |= 2u;
+        cond.flags_0000 |= 2U; // creator flag bit 1
         g_AsciiHudConditionalState = state;
     }
     const i32 result = InitializeConditionalStateSubrecordsEbxStackAbi(
@@ -80,6 +85,11 @@ i32 ParseAnimSectionStackAbi(void *sub_record, const u8 *data) {
     const u8 *cursor = base;
 
     u8 *state = static_cast<u8 *>(g_AsciiHudConditionalState);
+    // The +0x34 + 4*i stores below are resource_table[1 + i] of the
+    // conditional state, indexed by the ANIM chunk's name count: the native
+    // parser (0x0040d447) writes resource_table + 0x34 + 4*i unboundedly
+    // (the count comes from the file), so this access stays RAW — see the
+    // bounds note in src/ConditionalStateObject.hpp.
     for (u32 i = 0; i < name_count; ++i) {
         const char *name = reinterpret_cast<const char *>(cursor);
         ManagerWorkPartial *work = RequestManagerWork(

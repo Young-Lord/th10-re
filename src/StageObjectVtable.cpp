@@ -24,6 +24,7 @@
 
 #include "EntityHelpers.hpp"
 #include "BgmRuntime.hpp"
+#include "ConditionalStateObject.hpp"
 #include "PlayerFrameworkHelpers.hpp"
 #include "PlayerMotionHelpers.hpp"
 #include "PlayerRecord.hpp"
@@ -1186,9 +1187,12 @@ i32 TH10_STDCALL StageObjectUpdateB(void *object)
                                           * LoadFloatAt(obj, 0x440U)));
 
     // Descriptor flag bit 1: follow the chain position at
-    // [DAT_00477704+0x10]+0x1068.
+    // [DAT_00477704+0x10]+0x1068. The +0x10 slot is published_ids[0] (the
+    // primary stage/battle ECL record pointer), a modeled field.
     if ((LoadU32At(obj, 0x468U) & 1U) != 0U) {
-        const u32 chain = LoadU32At(g_AsciiHudConditionalState, 0x10U);
+        ConditionalState &hud_cond =
+            *static_cast<ConditionalState *>(g_AsciiHudConditionalState);
+        const u32 chain = hud_cond.published_ids[0];
         if (chain != 0U)
             CopyBlock(obj + kSobOffPos,
                       reinterpret_cast<const u8 *>(chain) + 0x1068U, 0x0cU);

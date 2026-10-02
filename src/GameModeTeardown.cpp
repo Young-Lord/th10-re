@@ -3,6 +3,7 @@
 #include "CallbackScheduler.hpp"
 #include "EntityHelpers.hpp"
 #include "GlobalLifecycleManager.hpp"
+#include "GameStateManagerObject.hpp"
 #include "LargeRenderOwnerLayout.hpp"
 #include "ManagerReleaseWrappers.hpp"
 #include "ScoreSave.hpp"
@@ -170,21 +171,22 @@ void DestroyDemoParseObject(void *parsed)
 // is void like the other destructor bodies in this cluster.
 void DestroyGameStateObjectInPlace(void *object)
 {
-    u32 *const words = static_cast<u32 *>(object);
+    GameStateManager &mgr = *reinterpret_cast<GameStateManager *>(object);
 
-    RemoveSchedulerRecordSynchronized(words, 0x08U);
-    RemoveSchedulerRecordSynchronized(words, 0x0cU);
+    // Detach the +0x8 calc / +0xc draw scheduler nodes.
+    RemoveSchedulerRecordSynchronized(&mgr.calc_element, 0U);
+    RemoveSchedulerRecordSynchronized(&mgr.draw_element, 0U);
 
     // 25 game-mode sub-objects at +0x1ec: each non-null one is torn down
     // with 0x004294a0 and freed with the shared delete. The native leaves
     // the slot words untouched here (they are re-established on the next
     // game-mode construction).
-    u32 *slot = reinterpret_cast<u32 *>(words) + 0x1ecU / 4U;
+    void **slot = mgr.parsed_replay_files;
     for (u32 i = 0; i < 25U; ++i) {
-        const u32 sub_object = *slot;
-        if (sub_object != 0U) {
-            DestroyGameModeObjectInPlace(reinterpret_cast<void *>(sub_object));
-            FreeMainChainObject(reinterpret_cast<void *>(sub_object));
+        void *sub_object = *slot;
+        if (sub_object != 0) {
+            DestroyGameModeObjectInPlace(sub_object);
+            FreeMainChainObject(sub_object);
         }
         ++slot;
     }
@@ -195,11 +197,11 @@ void DestroyGameStateObjectInPlace(void *object)
     // and (while entity+0x18 is clear) the same flag is applied to every
     // child in the +0x14 list — which is exactly the reconstructed
     // ReleaseEntityById body.
-    const u32 entity_id = words[0x1dcU / 4U];
+    const u32 entity_id = mgr.handle_c_01dc;
     if (entity_id != 0U) {
         ReleaseEntityById(g_MainChainRenderOwner, entity_id);
     }
-    words[0x1dcU / 4U] = 0U;
+    mgr.handle_c_01dc = 0U;
 
     g_GameStateManager = 0; // DAT_00477830
 }

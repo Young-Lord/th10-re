@@ -1,6 +1,7 @@
 #include "MenuRecordHelpers.hpp"
 
 #include "GameModeTeardown.hpp"
+#include "GameStateManagerObject.hpp"
 #include "PauseEnterSetup.hpp"
 #include "PauseMenuModes.hpp"
 #include "PostRunReplaySaveMenu.hpp"
@@ -40,59 +41,57 @@ extern void *g_MainChainContext;     // TH10 DAT_00477810
 void *ResetScoreRecordDefaultsEdxAbi(void *record)
 {
     u8 *bytes = static_cast<u8 *>(record);
-    *reinterpret_cast<u32 *>(bytes + 0x20) &= ~1U;
-    *reinterpret_cast<u32 *>(bytes + 0xb0) = 0;
-    *reinterpret_cast<u32 *>(bytes + 0x24) = 0;
-    *reinterpret_cast<u32 *>(bytes + 0xf8) = 0;
-    *reinterpret_cast<u32 *>(bytes + 0xf4) = 1;
-    *reinterpret_cast<u32 *>(bytes + 0x2c) = 999;
-    *reinterpret_cast<u32 *>(bytes + 0x104) = 999;
-    *reinterpret_cast<u32 *>(bytes + 0x188) = 0;
-    *reinterpret_cast<u32 *>(bytes + 0xfc) = 0;
-    *reinterpret_cast<u32 *>(bytes + 0x1d0) = 0;
-    *reinterpret_cast<u32 *>(bytes + 0x1cc) = 1;
+    GameStateManager &mgr = *reinterpret_cast<GameStateManager *>(record);
+    mgr.frame_timer.flags &= ~1U;      // +0x20
+    mgr.cursor_a.step_count = 0;       // +0xb0
+    mgr.cursor_a.value = 0;            // +0x24
+    mgr.cursor_a.disabled_count = 0;   // +0xf8
+    mgr.cursor_a.wrap_flag = 1;        // +0xf4
+    mgr.cursor_a.maximum = 999;        // +0x2c
+    mgr.cursor_b.maximum = 999;        // +0x104
+    mgr.cursor_b.step_count = 0;       // +0x188
+    mgr.cursor_b.value = 0;            // +0xfc
+    mgr.cursor_b.disabled_count = 0;   // +0x1d0
+    mgr.cursor_b.wrap_flag = 1;        // +0x1cc
     // The native zeroes the whole 0x2c8 record after the defaults,
     // erasing them; preserved verbatim.
     memset(bytes, 0, 0x2c8);
-    *reinterpret_cast<u32 *>(bytes) |= 2U;
+    mgr.flags_0000 |= 2U;
     g_ScoreRecordOwner = bytes;
     return bytes;
 }
 
 i32 InstallReplayNameEntryCallbacksEbxAbi(void *owner)
 {
-    u8 *bytes = static_cast<u8 *>(owner);
+    GameStateManager &mgr = *reinterpret_cast<GameStateManager *>(owner);
 
     u8 *calc_node = static_cast<u8 *>(AllocSchedulerCallbackNode(
         reinterpret_cast<void *>(&ScoreNameEntryCalcCallback)));
     *reinterpret_cast<u32 *>(calc_node + 0x4) &= ~2U;
     *reinterpret_cast<u32 *>(calc_node + 0x20) =
-        reinterpret_cast<u32>(bytes);
+        reinterpret_cast<u32>(&mgr);
     RegisterSchedulerCalcCallback(calc_node, &g_SchedulerHeap, 0);
-    *reinterpret_cast<u32 *>(bytes + 8) =
-        reinterpret_cast<u32>(calc_node);
+    mgr.calc_element = reinterpret_cast<ChainElem *>(calc_node); // +0x8
 
     u8 *draw_node = static_cast<u8 *>(AllocSchedulerCallbackNode(
         reinterpret_cast<void *>(&ScoreNameEntryDrawCallback)));
     *reinterpret_cast<u32 *>(draw_node + 0x4) &= ~2U;
     *reinterpret_cast<u32 *>(draw_node + 0x20) =
-        reinterpret_cast<u32>(bytes);
+        reinterpret_cast<u32>(&mgr);
     RegisterSchedulerDrawCallback(draw_node, &g_SchedulerHeap, 0);
-    *reinterpret_cast<u32 *>(bytes + 0xc) =
-        reinterpret_cast<u32>(draw_node);
+    mgr.draw_element = reinterpret_cast<ChainElem *>(draw_node); // +0xc
 
-    u32 flags = *reinterpret_cast<u32 *>(bytes + 0x20);
+    u32 flags = mgr.frame_timer.flags; // +0x20
     if ((flags & 1U) == 0U) {
-        *reinterpret_cast<u32 *>(bytes + 0x14) = 0;
-        *reinterpret_cast<u32 *>(bytes + 0x10) = 0xfff0bdc1U;
-        *reinterpret_cast<u32 *>(bytes + 0x18) = 0;
-        *reinterpret_cast<u32 *>(bytes + 0x1c) =
-            reinterpret_cast<u32>(&g_FrameTimeScale);
-        *reinterpret_cast<u32 *>(bytes + 0x20) = flags | 1U;
+        mgr.frame_timer.count = 0;     // +0x14
+        mgr.frame_timer.prev = static_cast<i32>(0xfff0bdc1U); // +0x10
+        mgr.frame_timer.accum = 0;     // +0x18
+        mgr.frame_timer.rate = &g_FrameTimeScale; // +0x1c
+        mgr.frame_timer.flags = flags | 1U;
     }
-    *reinterpret_cast<u32 *>(bytes + 0x14) = 0;
-    *reinterpret_cast<u32 *>(bytes + 0x18) = 0;
-    *reinterpret_cast<i32 *>(bytes + 0x10) = -1;
+    mgr.frame_timer.count = 0;         // +0x14
+    mgr.frame_timer.accum = 0;         // +0x18
+    mgr.frame_timer.prev = -1;         // +0x10
     return 0;
 }
 
@@ -112,8 +111,8 @@ void *CreateScoreRecordOwner()
 
 i32 TickPauseMenuSequencerEsiAbi(void *record)
 {
-    u8 *bytes = static_cast<u8 *>(record);
-    switch (*reinterpret_cast<u32 *>(bytes + 4)) {
+    GameStateManager &mgr = *reinterpret_cast<GameStateManager *>(record);
+    switch (mgr.mode_0004) {
     case 0:
         if ((g_ScoreNameStage & 0x20U) == 0U &&
             ((g_ScoreNameTrigger & 8U) != 0U ||
@@ -150,47 +149,45 @@ i32 TickPauseMenuSequencerEsiAbi(void *record)
         break;
     }
 
-    const u32 current = *reinterpret_cast<u32 *>(bytes + 0x14);
-    const float *rate = *reinterpret_cast<float *const *>(bytes + 0x1c);
-    *reinterpret_cast<u32 *>(bytes + 0x10) = current;
+    const u32 current = static_cast<u32>(mgr.frame_timer.count); // +0x14
+    const float *rate = mgr.frame_timer.rate;                    // +0x1c
+    mgr.frame_timer.prev = static_cast<i32>(current);            // +0x10
     if (*rate <= 0.99f || *rate >= 1.01f) {
         const float accumulated =
-            *rate + *reinterpret_cast<float *>(bytes + 0x18);
-        *reinterpret_cast<float *>(bytes + 0x18) = accumulated;
-        *reinterpret_cast<u32 *>(bytes + 0x14) =
-            static_cast<u32>(accumulated);
+            *rate + *reinterpret_cast<const float *>(&mgr.frame_timer.accum);
+        *reinterpret_cast<float *>(&mgr.frame_timer.accum) = accumulated;
+        mgr.frame_timer.count = static_cast<i32>(static_cast<u32>(accumulated));
     } else {
-        *reinterpret_cast<float *>(bytes + 0x18) += 1.0f;
-        *reinterpret_cast<u32 *>(bytes + 0x14) = current + 1U;
+        *reinterpret_cast<float *>(&mgr.frame_timer.accum) += 1.0f;
+        mgr.frame_timer.count = static_cast<i32>(current + 1U);
     }
     return 1;
 }
 
 void SeedPostRunReplaySaveModeEsiAbi(void *record)
 {
-    u8 *bytes = static_cast<u8 *>(record);
-    *reinterpret_cast<u32 *>(bytes + 4) = 13;
-    u32 flags = *reinterpret_cast<u32 *>(bytes + 0x20);
+    GameStateManager &mgr = *reinterpret_cast<GameStateManager *>(record);
+    mgr.mode_0004 = 13; // +0x4
+    u32 flags = mgr.frame_timer.flags; // +0x20
     if ((flags & 1U) == 0U) {
         flags |= 1U;
-        *reinterpret_cast<u32 *>(bytes + 0x14) = 0;
-        *reinterpret_cast<u32 *>(bytes + 0x10) = 0xfff0bdc1U;
-        *reinterpret_cast<u32 *>(bytes + 0x18) = 0;
-        *reinterpret_cast<u32 *>(bytes + 0x1c) =
-            reinterpret_cast<u32>(&g_FrameTimeScale);
-        *reinterpret_cast<u32 *>(bytes + 0x20) = flags;
+        mgr.frame_timer.count = 0;     // +0x14
+        mgr.frame_timer.prev = static_cast<i32>(0xfff0bdc1U); // +0x10
+        mgr.frame_timer.accum = 0;     // +0x18
+        mgr.frame_timer.rate = &g_FrameTimeScale; // +0x1c
+        mgr.frame_timer.flags = flags;
     }
-    *reinterpret_cast<u32 *>(bytes + 0x14) = 0;
-    *reinterpret_cast<u32 *>(bytes + 0x18) = 0;
-    *reinterpret_cast<i32 *>(bytes + 0x10) = -1;
+    mgr.frame_timer.count = 0;         // +0x14
+    mgr.frame_timer.accum = 0;         // +0x18
+    mgr.frame_timer.prev = -1;         // +0x10
     ReleaseTimelineContinuationHandle(
-        reinterpret_cast<i32 *>(bytes + 0x1d8));
+        reinterpret_cast<i32 *>(&mgr.handle_b_01d8)); // +0x1d8
     ReleaseTimelineContinuationHandle(
-        reinterpret_cast<i32 *>(bytes + 0x1d4));
+        reinterpret_cast<i32 *>(&mgr.handle_a_01d4)); // +0x1d4
     // Native quirk: the frame-time scale dword is republished as a
     // raw copy from the record's +0x2c0 slot.
     *reinterpret_cast<u32 *>(&g_FrameTimeScale) =
-        *reinterpret_cast<u32 *>(bytes + 0x2c0);
+        *reinterpret_cast<u32 *>(&mgr.saved_time_scale_02c0);
 }
 
 } // namespace th10

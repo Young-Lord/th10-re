@@ -12,6 +12,7 @@
 
 #include "CallbackScheduler.hpp"
 #include "ManagerReleaseWrappers.hpp"
+#include "StageHostObject.hpp"
 #include "ThreadControl.hpp"
 
 namespace th10 {
@@ -48,14 +49,13 @@ void StoreU32To(void *address, u32 value)
     bytes[3] = static_cast<u8>(value >> 24);
 }
 
-// Native idiom around each record at +0x8 / +0xc: under the scheduler
-// critical section (DAT_00492274) with the DAT_0049231c activity byte
-// incremented, the shared removal 0x00449f60 unlinks the record and frees
-// scheduler-owned records. RemoveSynchronized models exactly that.
-void RemoveHostSchedulerRecord(const u8 *host, u32 offset)
+// Native idiom around each scheduler record (host.calc_element +0x8 /
+// host.draw_element +0xc): under the scheduler critical section
+// (DAT_00492274) with the DAT_0049231c activity byte incremented, the
+// shared removal 0x00449f60 unlinks the record and frees scheduler-owned
+// records. RemoveSynchronized models exactly that.
+void RemoveHostSchedulerRecord(ChainElem *record)
 {
-    ChainElem *const record = reinterpret_cast<ChainElem *>(
-        LoadU32From(host + offset));
     if (record == 0)
         return;
     CallbackSchedulerApi::RemoveSynchronized(g_CallbackScheduler, record);
@@ -66,14 +66,18 @@ void RemoveHostSchedulerRecord(const u8 *host, u32 offset)
 // TH10 0x0040a1a0. Stack argument = host, ret 4.
 void DestroyStageHostObjectStackAbi(void *host)
 {
+    StageHostObject *const host_view =
+        static_cast<StageHostObject *>(host);
     u8 *const host_bytes = static_cast<u8 *>(host);
 
     // The host doubles as the ECL select menu for name-table purposes:
-    // native ESI = the host for 0x00409eb0.
+    // native ESI = the host for 0x00409eb0. That release (defined in
+    // ManagerReleaseWrappers.cpp) frees every stage_table[i] string
+    // (+0x34 array, +0x38 count) and then the array itself.
     ReleaseEclSelectMenuNamesEsiAbi(host);
 
-    RemoveHostSchedulerRecord(host_bytes, 0x8U);
-    RemoveHostSchedulerRecord(host_bytes, 0xcU);
+    RemoveHostSchedulerRecord(host_view->calc_element);
+    RemoveHostSchedulerRecord(host_view->draw_element);
 
     // Destroy-and-free every published manager through the shared
     // "in-place destructor, then shared delete" wrappers (native pairs
@@ -87,9 +91,11 @@ void DestroyStageHostObjectStackAbi(void *host)
     ReleaseBulletManagerEsiAbi(g_BulletManagerSlot);
     ReleaseMainChainObject840EsiAbi(g_TextEffectOwnerSlot);
 
-    // +0x620 owned buffer: the published host global is cleared first,
-    // then the buffer is released through the CRT free and the slot
-    // cleared.
+    // +0x620 owned buffer (DELIBERATE RAW: this slot lies INSIDE the
+    // embedded animation_vm record at +0x2c8, aliasing VmRecord+0x358, so
+    // StageHostObject carries no typed field for it): the published host
+    // global is cleared first, then the buffer is released through the CRT
+    // free and the slot cleared.
     g_StageHostObject = 0; // DAT_004776f8
     const u32 buffer = LoadU32From(host_bytes + 0x620U);
     if (buffer != 0U)
@@ -98,9 +104,9 @@ void DestroyStageHostObjectStackAbi(void *host)
 
     // Stop the embedded thread control block: plant the ThreadControl
     // vtable 0x4703e4 first, exactly as the native destructor does.
-    StoreU32To(host_bytes + 0x10U, 0x004703e4U);
-    StopThreadControl(reinterpret_cast<ThreadControl *>(
-        host_bytes + 0x10U));
+    host_view->thread_control.marker =
+        reinterpret_cast<void *>(0x004703e4U);
+    StopThreadControl(&host_view->thread_control);
 }
 
 } // namespace th10

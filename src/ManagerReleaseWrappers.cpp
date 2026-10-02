@@ -1,6 +1,7 @@
 #include "ManagerReleaseWrappers.hpp"
 
 #include "CallbackScheduler.hpp"
+#include "ConditionalStateObject.hpp"
 #include "EntityHelpers.hpp"
 #include "GameContext.hpp"
 #include "Th10Platform.hpp"
@@ -399,36 +400,38 @@ void DestroyPlayerStateBlockInPlace(void *object)
 // state.
 void DestroyAsciiHudConditionalStateEax(void *state)
 {
-    u8 *const bytes = static_cast<u8 *>(state);
+    // Typed view of the 0x68-byte conditional state; the global clears and
+    // the render-owner slot sweep below are outside the object and stay as
+    // they are.
+    ConditionalState &cond = *static_cast<ConditionalState *>(state);
     ReleaseAsciiHudConditionalState(state); // TH10 0x00409f90
 
-    RemoveManagerSchedulerRecord(bytes, 0x08U);
-    RemoveManagerSchedulerRecord(bytes, 0x0cU);
+    RemoveSchedulerChainRecord(cond.calc_element); // +0x08 ticker
+    RemoveSchedulerChainRecord(cond.draw_element); // +0x0c no-op
 
-    const u32 sub = LoadU32From(bytes + 0x54U);
-    if (sub != 0U) {
-        // The native frees each non-null +0x0c..+0x88 word without clearing
-        // the slots.
-        for (u32 offset = 0x0cU; offset < 0x8cU; offset += 4U) {
-            const u32 pointer = LoadU32From(reinterpret_cast<const u8 *>(sub)
-                                            + offset);
+    ConditionalNameRegistry *const registry =
+        static_cast<ConditionalNameRegistry *>(cond.name_registry_0054);
+    if (registry != 0) {
+        // The native frees each non-null file-data pointer (+0x0c..+0x88,
+        // the 32 modeled file_data slots) without clearing the slots.
+        for (u32 index = 0; index < 32U; ++index) {
+            void *const pointer = registry->file_data_000c[index];
             if (pointer != 0U) {
-                ReleaseResourceBuffer(reinterpret_cast<void *>(pointer));
+                ReleaseResourceBuffer(pointer);
             }
         }
         // TH10 0x0040d680 (native ESI = the sub-object): plants the
-        // 0x46D0F0 vtable, frees the +0x8C buffer through the CRT free and
-        // clears the slot, then the sub-object allocation is released.
-        u8 *const sub_bytes = reinterpret_cast<u8 *>(sub);
-        StoreU32To(sub_bytes, 0x0046D0F0U);
-        const u32 tail = LoadU32From(sub_bytes + 0x8cU);
-        if (tail != 0U) {
-            ReleaseResourceBuffer(reinterpret_cast<void *>(tail));
-            StoreU32To(sub_bytes + 0x8cU, 0U);
+        // 0x46D0F0 vtable, frees the +0x8C name-table buffer through the
+        // CRT free and clears the slot, then the sub-object allocation is
+        // released.
+        registry->vtable_0000 = reinterpret_cast<void *>(0x0046D0F0U);
+        if (registry->name_table_008c != 0) {
+            ReleaseResourceBuffer(registry->name_table_008c);
+            registry->name_table_008c = 0;
         }
-        FreeMainChainObject(reinterpret_cast<void *>(sub));
+        FreeMainChainObject(registry);
     }
-    StoreU32To(bytes + 0x54U, 0U);
+    cond.name_registry_0054 = 0; // +0x54
 
     if ((g_GlobalModeFlags & 9U) != 0U) {
         g_AsciiHudConditionalState = 0; // DAT_00477704

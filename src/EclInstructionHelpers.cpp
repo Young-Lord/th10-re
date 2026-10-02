@@ -7,10 +7,18 @@
 
 namespace th10 {
 
-extern void *g_StageHostObject; // TH10 DAT_004776f8 (effect spawn host)
+extern void *g_StageHostObject; // TH10 DAT_004776f8 (stage host; NOT read by
+                                // the effect-spawn path below — native
+                                // 0x40e6a0 never touches that global)
 
 // Boundaries.
 extern i32 FloatToIntBoundary(float value); // TH10 0x463b2c (ftol)
+// TH10 0x448db0 raw. Native contract (userpurge): EDI = vec3 position
+// (inside 0x448db0 x += g_AsciiObjectScrollX TH10 0x470b4c and
+// y += g_AsciiObjectScrollY 0x470b48), ECX = VM/record, EBX = script
+// index, EAX = out-id slot, remaining arguments on the stack. The
+// reconstruction's leading `void *host` parameter is a placeholder
+// mapping, not the native register assignment.
 extern i32 SpawnStageEffectRawEdxStackAbi(void *host, i32 script_index,
                                           const float position[3],
                                           void *id_slot); // 0x448db0 raw
@@ -79,11 +87,17 @@ i32 CheckTitleScriptGroupLivenessEbxAbi(void *context) {
 // list (next at node+0x4): when a node's +0x2480 flags intersect the
 // "expire" masks (bits 0x10|0x40 in the low byte or 0x4000|0x8000 in the
 // high byte) and the low byte is negative-signed, spawns the node's
-// effect: when the +0x2448 script index is non-negative, launches it
-// through the stage host with the +0x244c slot's effect id, then sets
-// flag bit 0x20000. Afterwards the record's +0x40 mirror and frame
-// accumulator advance with the (0.98, 1.01) window rule. Returns
-// nothing.
+// effect: when the +0x2448 script index is non-negative, calls 0x448db0
+// (call at 0x40e6ef) with EDI = the node's +0x1068 vec3 position, EBX =
+// script index, the out-id slot (= this function's own stack argument)
+// pushed on the stack, and the VM/record argument fetched at 0x40e6e4
+// from g_AsciiHudConditionalState + 0x30 + 4*[node+0x244c]. NOTE: this
+// spawn path never reads the DAT_004776f8 stage host — 0x40e6a0 has
+// exactly 3 xrefs in the canonical binary and none of the referencing
+// sites are effect-spawn code; the +0x244c slot indexes the conditional
+// state's VM pointer array, it is not an effect id handed to a host.
+// Afterwards the record's +0x40 mirror and frame accumulator advance with
+// the (0.98, 1.01) window rule. Returns nothing.
 void TickEffectSpawnWaitListEbpStackAbi(void *owner_record) {
     u8 *bytes = static_cast<u8 *>(owner_record);
     u8 *node = *reinterpret_cast<u8 **>(bytes + 0x58);

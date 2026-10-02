@@ -2,6 +2,7 @@
 
 #include "AsciiHudOwner.hpp"
 #include "AsciiRenderModeDispatcher.hpp"
+#include "ConditionalStateObject.hpp"
 #include "LargeRenderOwnerLayout.hpp"
 #include "MainChainRender.hpp"
 #include "Th10Platform.hpp"
@@ -160,15 +161,20 @@ i32 RenderAsciiHudBatch(void *owner_memory)
         }
     }
 
-    u8 *const conditional = static_cast<u8 *>(g_AsciiHudConditionalState);
+    // Typed view of the conditional state; published_ids[0] is the primary
+    // stage/battle ECL record pointer (nonzero = active).
+    ConditionalState *const conditional =
+        static_cast<ConditionalState *>(g_AsciiHudConditionalState);
     if (conditional != 0) {
-        u8 *const state = *reinterpret_cast<u8 **>(conditional + 0x10);
-        if (state != 0 && (*reinterpret_cast<const u32 *>(state + 0x2480) &
-                           0x11U) == 0)
+        void *const record =
+            reinterpret_cast<void *>(conditional->published_ids[0]);
+        if (record != 0 && (*reinterpret_cast<const u32 *>(
+                                static_cast<const u8 *>(record) + 0x2480) &
+                             0x11U) == 0)
             (void)DispatchAsciiAnimationVmRenderMode(&hud.aux_vm,
                 g_MainChainRenderOwner);
         if (hud.spell_countdown >= 0 &&
-            state != 0 && hud.result_script_state == 0)
+            record != 0 && hud.result_script_state == 0)
             DispatchVmRange(reinterpret_cast<u8 *>(hud.pool_e), 2);
     }
     return 1;

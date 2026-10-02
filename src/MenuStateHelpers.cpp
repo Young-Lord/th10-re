@@ -3,10 +3,15 @@
 //   0x00434a20: splits a text line at its CRLF terminator in place (used
 //     three times by RunManagerStateBodyE 0x00433ef0 while parsing the
 //     score/ranking text lines).
-//   0x00434a80: initializes the manager's vector-tween record at +0x70:
-//     start triple copied from manager+0x334, target triple from the
-//     caller, dual time-window words from DAT_00491c14..1c, and the eased
-//     interpolation sub-record at +0xa0..0xb4.
+//   0x00434a80: initializes a VmRecord's position_anim tween block
+//     ( adjudicated 2026-10-03: the object at EAX is the 0x3ac VmRecord
+//     text-slot entity itself, NOT the game-manager record — both call
+//     sites 0x43427b/0x434600 inside RunManagerStateBodyE 0x00433ef0 pass
+//     EAX = a text-slot entity and EDX = &vm->base_pos_x, and the fallback
+//     branch writes base_pos directly): start triple (from the record's own
+//     base_pos_x at +0x334), target triple from the caller, dual time-window
+//     words from DAT_00491c14..1c, kind word at +0xb4, flag byte at +0xb8,
+//     eased interpolation sub-record at +0xa0.
 //   0x00434ba0 / 0x00434bc0: menu flag / disabled-row helpers.
 //   0x0043cb80: menu LCG random (state ^ 0x9630, subtract 25939, u16).
 #include <string.h>
@@ -30,9 +35,10 @@ u32 ReadTimeWord(u32 index)
     return g_TimeWords[index];
 }
 
-// TH10 0x00434a80 native registers: EAX = manager (record base), EDX =
-// start-triple source (manager+0x334), ECX = target triple, stack = kind
-// word, flag byte.
+// TH10 0x00434a80 native registers: EAX = the VmRecord (0x3ac text-slot
+// entity) whose position is tweened, EDX = &vm->base_pos_x (+0x334), ECX =
+// target triple, stack = kind word, flag byte. The +0x70..+0xb8 block is the
+// record's position_anim region (start/end triples, time words, timer).
 void BeginManagerVectorTweenBody(u32 *record, const u32 *start,
                                  const u32 *target, u32 kind, u8 flag)
 {
@@ -106,14 +112,15 @@ u8 *TrimLineAtNewlineEcxEdiStackAbi(u8 *line, u32 *remaining, u32 buffer_end)
     return cursor;
 }
 
-// TH10 0x00434a80. Native EAX = manager, EDX = manager+0x334, ECX = target
-// triple, stack (ret 8) = kind word + flag byte.
-void BeginManagerVectorTweenEdxCcxStackAbi(void *manager,
+// TH10 0x00434a80. Native EAX = the VmRecord whose position is tweened,
+// EDX = &vm->base_pos_x, ECX = target triple, stack (ret 8) = kind word +
+// flag byte.
+void BeginManagerVectorTweenEdxCcxStackAbi(void *vm_record,
                                            const u32 *start_triple,
                                            const u32 *target_triple,
                                            u32 kind, u8 flag)
 {
-    BeginManagerVectorTweenBody(static_cast<u32 *>(manager), start_triple,
+    BeginManagerVectorTweenBody(static_cast<u32 *>(vm_record), start_triple,
                                 target_triple, kind, flag);
 }
 

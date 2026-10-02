@@ -1,5 +1,6 @@
 #include "EclEasedTransforms.hpp"
 
+#include "ConditionalStateObject.hpp"
 #include "EclScriptLibrary.hpp"
 #include "VmLeafHelpers.hpp"
 
@@ -451,12 +452,14 @@ void *ConstructEclScriptObjectEsiStackAbi(void *record_memory, i32 ctor_arg)
         StoreU32(record, base, static_cast<u32>(-1));
     }
 
-    // Presentation slot from the HUD conditional state, then resolve the
-    // ctor argument into the +8 node (id at +4, null at +0).
+    // Presentation slot from the HUD conditional state: the native reads
+    // DAT_00477704 once and takes state+0x54 (the name-registry pointer)
+    // from it, then resolves the ctor argument into the +8 node (id at +4,
+    // null at +0).
+    ConditionalState *const conditional_state =
+        static_cast<ConditionalState *>(g_AsciiHudConditionalState);
     StoreU32(record, 0x102cU,
-             LoadU32(*reinterpret_cast<u8 *const *>(
-                         g_AsciiHudConditionalState),
-                     0x54U));
+             reinterpret_cast<u32>(conditional_state->name_registry_0054));
     const i32 table_id = ResolveScriptTableIndexEaxAbi(ctor_arg);
     StoreU32(record, 0xcU, static_cast<u32>(table_id));
     StoreU32(record, 8U, 0U);

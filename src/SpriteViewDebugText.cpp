@@ -2,6 +2,7 @@
 
 #include "AsciiGlyphRenderer.hpp"
 #include "AsciiManager.hpp"
+#include "ConditionalStateObject.hpp"
 
 #include <stdio.h>
 
@@ -81,14 +82,22 @@ i32 DrawSpriteViewOverlayTextEdiAbi(void *state_memory)
             manager.AddFormatTextSelected(&position, "File not found.");
         }
         position.y = 26.0f;
-        u8 *const conditional = *reinterpret_cast<u8 *const *>(0x477704U);
+        // Typed view of the conditional state; +0x54 is the modeled
+        // name-registry pointer and +0x8c its name-table pointer. The
+        // entry index (state+0x1ec) is unbounded natively, so the 8-byte
+        // entry read itself stays RAW (no bounds check in the native).
+        ConditionalState *const conditional =
+            *reinterpret_cast<ConditionalState *const *>(0x477704U);
         if (conditional != 0) {
-            const u8 *const slot = ReadPointer(conditional, 0x54);
-            const u8 *const names = ReadPointer(slot, 0x8c);
+            const ConditionalNameRegistry *const registry =
+                static_cast<const ConditionalNameRegistry *>(
+                    conditional->name_registry_0054);
+            const void *const names = registry->name_table_008c;
             manager.AddFormatTextSelected(
                 &position, "Ecl %s",
                 *reinterpret_cast<void *const *>(
-                    names + ReadU32(state, 0x1ecU) * 8U));
+                    static_cast<const u8 *>(names) +
+                    ReadU32(state, 0x1ecU) * 8U));
         } else {
             manager.AddFormatTextSelected(&position, "Ecl %d",
                                           ReadU32(state, 0x1ecU));
@@ -124,9 +133,13 @@ i32 DrawSpriteViewOverlayTextEdiAbi(void *state_memory)
     }
     case 4: {
         const Float3 position = {500.0f, 240.0f, 0.0f};
-        const u8 *const conditional = *reinterpret_cast<u8 *const *>(0x477704U);
+        // Typed view; the gate word is script_count_0060 (+0x60). The
+        // native dereferences the DAT_00477704 holder without a null check
+        // on this path.
+        const ConditionalState *const conditional =
+            *reinterpret_cast<ConditionalState *const *>(0x477704U);
         manager.AddFormatTextSelected(&position, "Enemy %d",
-                                      ReadU32(conditional, 0x60));
+                                      conditional->script_count_0060);
         return 1;
     }
     default:

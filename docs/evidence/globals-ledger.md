@@ -572,3 +572,30 @@ ABI 语法经验：__usercall 必须带返回位置注解（@<eax>），否则�
 - 改写:约 300 处,31 文件。全量构建 exit 0(232 obj)。
 - 归属未决保留:StageEffectHost.cpp(疑 stage-host)、MenuStateHelpers
   tween 块(疑池 VM 记录)。
+
+## 第 8 轮:StageHost / GameStateManager / ConditionalState 字段化(2026-10-03)
+
+- 结构体:StageHostObject 0x688(DAT_004776f8;new@0x40a3c6/0x40a3c0、init+wipe
+  0x40a040、dtor 0x40a1a0;state_machine@0x30、char** stage_table@0x34、
+  三个 ManagerCursorRecord@0x3c/0x114/0x1ec、0x3ac 动画记录@0x2c8、
+  内嵌 ThreadControl@0x10;+0x620 malloc 指针与 animation_vm 重叠 = 保留 raw)、
+  GameStateManager 0x2c8(DAT_00477830;mode@0x4、TimerNode@0x10、
+  游标 A/B@0x24/0xfc、overlay 句柄@0x1d4-0x1dc、replay files[25]@0x1ec、
+  replay_name[12]@0x2b4、saved_time_scale@0x2c0;+0x250..0x2b3 无人访问死区)、
+  ConditionalState 0x68(DAT_00477704;published_ids@0x10 按 rec+0x248c 索引、
+  resource_table@0x30 按 rec+0x244c 索引、TimerNode@0x40、0x1098 名字注册表
+  @0x54 其 +0x8c 为 8 字节 {name,data} 排序表——Ecl 菜单传的是名字指针非 id)、
+  ConditionalNameRegistry 0x1098。IDB 已声明四个类型并绑定三个全局。
+  证据:docs/evidence/stage-host-game-state-conditional-state.md。
+- 语义修复:①StageEffectHost 九个 busy-flag 掩码 ~2u → ~1u(原生 0xFFFFFFFE,
+  0x40a0c1);②RecordSpellPracticeCaptureEdiAbi(0x423370)补存 script 129
+  overlay VM id → +0x1d4(原生 0x42349f,原先丢弃);③EclEasedTransforms
+  0x40d830 处双解引用改单解引用 state+0x54;④EclInstructionHelpers "effect
+  spawn host" 注释纠正(0x40e6a0 从不读 0x4776f8);⑤MenuStateHelpers
+  0x434a80 归属裁决:+0x70..0xb8 是 VmRecord position_anim(调用点
+  0x43427b/0x434600 传 EAX=文本槽实体、EDX=&vm->base_pos_x),非 manager;
+  ⑥vtable 0x46d0c0 slot+0x14 = 0x40cc50 注释纠正。
+- 改写:约 230 处,20 文件。全量构建 exit 0(232 obj)。
+- 剩余热点:DAT_004776fc 0x18 对象、DAT_004776f0 0x68 池持有者、散点
+  LoadU32At/LoadFloat gap、SpriteViewDebugText 经参数访问的 host 裸偏移
+  (可换 StageHostObject 参数类型)。

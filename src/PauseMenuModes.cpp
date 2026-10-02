@@ -12,6 +12,7 @@
 #include "BgmRuntime.hpp"
 #include "EntityHelpers.hpp"
 #include "GameManagerState.hpp"
+#include "GameStateManagerObject.hpp"
 #include "PlayerFrameworkHelpers.hpp"
 #include "PlayerTimerHelpers.hpp"
 #include "PauseMenuModes.hpp"
@@ -33,27 +34,13 @@ extern float g_FrameTimeScale;       // TH10 DAT_00476f78
 
 const u32 kGameStateManager = 0x491C28U; // RequestGameStateTransition target
 
-// Record field offsets.
-const u32 kMode = 0x04U;
-const u32 kTimerCount = 0x14U;
-const u32 kCursor = 0x24U;    // value; +4 copy; +8 max; +0xd0 wrap flag
-const u32 kCursorWrap = 0xF4U;
-const u32 kHandleA = 0x1D4U;
-const u32 kHandleB = 0x1D8U;
-const u32 kHandleC = 0x1DCU;
-const u32 kSavedFloat = 0x2C0U;
+// The record is the 0x2c8 game-state manager (TH10 DAT_00477830), accessed
+// through the typed GameStateManager view (src/GameStateManagerObject.hpp):
+// mode +0x04, frame-timer count +0x14, cursor record +0x24 (value +0x24 /
+// previous +0x28 / maximum +0x2c / wrap flag +0xf4), overlay handles
+// +0x1d4 / +0x1d8 / +0x1dc, saved time scale +0x2c0.
 
 // ------------------------------------------------------- access helpers
-
-inline u32 &W(void *record, u32 offset)
-{
-    return *reinterpret_cast<u32 *>(static_cast<u8 *>(record) + offset);
-}
-
-inline i32 &I(void *record, u32 offset)
-{
-    return *reinterpret_cast<i32 *>(static_cast<u8 *>(record) + offset);
-}
 
 // Zero-extended 16-bit state word argument (`xor esi,esi; mov si,value;
 // add si,7` / `add si,0xf`).
@@ -72,14 +59,12 @@ inline i32 StateWordArgSignExt(i32 value, u32 bias)
 
 // Max-aware store: max < 0 stores max - 1, otherwise 0 (native `test/jg/dec`
 // chain, preserved verbatim).
-inline void StoreClampedAgainstMax(void *record, u32 value_offset,
-                                   u32 max_offset)
+inline void StoreClampedAgainstMax(i32 &value, const i32 &max)
 {
-    const i32 max = I(record, max_offset);
     if (max < 0) {
-        I(record, value_offset) = max - 1;
+        value = max - 1;
     } else {
-        I(record, value_offset) = 0;
+        value = 0;
     }
 }
 
@@ -88,9 +73,9 @@ inline void PlayMenuSound(u32 kind)
     ReserveContextChannel(reinterpret_cast<void *>(0x492590U), kind, 0U);
 }
 
-inline void ArmRunTimer(void *record)
+inline void ArmRunTimer(GameStateManager &mgr)
 {
-    TickPlayerTimerEaxStackAbi(reinterpret_cast<u8 *>(record) + 0x10U, 0);
+    TickPlayerTimerEaxStackAbi(&mgr.frame_timer, 0);
 }
 
 // TH10 0x004243f0. Set the u16 stop word 6 at entity+0x304 for the entity
@@ -117,31 +102,26 @@ void SetResultEntityStateSixByHandleSlot(u32 *handle_slot)
 }
 
 // Highlight a child of `kind` under the record's handle A and stop it.
-void HighlightChildByKind(void *record, i32 kind, u32 *out_handle)
+void HighlightChildByKind(GameStateManager &mgr, i32 kind, u32 *out_handle)
 {
-    ResolveChildEntityByKind(reinterpret_cast<u32 *>(
-                                 static_cast<u8 *>(record) + kHandleA),
-                             kind, out_handle);
+    ResolveChildEntityByKind(&mgr.handle_a_01d4, kind, out_handle);
     SetResultEntityStateSixByHandleSlot(out_handle);
 }
 
 // Shared cancel tail at 0x423059 (modes 2 and 4): gate byte 0x474e36 bit 3
 // clamps the cursor against its maximum, expires all three handles, moves
 // to mode 3 and re-arms the timer.
-void CancelTail(void *record)
+void CancelTail(GameStateManager &mgr)
 {
     if ((g_ManagerSubGateFlags & 0x8U) == 0U) {
         return;
     }
-    StoreClampedAgainstMax(record, kCursor, 0x2CU);
-    ExpireEntityHandleEaxAbi(reinterpret_cast<u32 *>(
-        static_cast<u8 *>(record) + kHandleB));
-    ExpireEntityHandleEaxAbi(reinterpret_cast<u32 *>(
-        static_cast<u8 *>(record) + kHandleA));
-    ExpireEntityHandleEaxAbi(reinterpret_cast<u32 *>(
-        static_cast<u8 *>(record) + kHandleC));
-    I(record, kMode) = 3;
-    ArmRunTimer(record);
+    StoreClampedAgainstMax(mgr.cursor_a.value, mgr.cursor_a.maximum);
+    ExpireEntityHandleEaxAbi(&mgr.handle_b_01d8);
+    ExpireEntityHandleEaxAbi(&mgr.handle_a_01d4);
+    ExpireEntityHandleEaxAbi(&mgr.handle_c_01dc);
+    mgr.mode_0004 = 3;
+    ArmRunTimer(mgr);
 }
 
 } // namespace
@@ -149,6 +129,8 @@ void CancelTail(void *record)
 // TH10 0x00422c30. Native ESI = record.
 void ResumeGameFromPauseEsiAbi(void *record)
 {
+    GameStateManager &mgr = *reinterpret_cast<GameStateManager *>(record);
+
     // Clear the pause bit 0x10 of the 0x477810 state object's +0x58 word.
     TitleScreen &ts = *reinterpret_cast<TitleScreen *>(g_TitleScreen);
     ts.flags &= ~0x10U;
@@ -159,138 +141,129 @@ void ResumeGameFromPauseEsiAbi(void *record)
                     "UnPause", 7, 0);
 
     // Soft-release the entity bound to the +0x1dc handle slot.
-    u32 *const handle_slot = reinterpret_cast<u32 *>(
-        static_cast<u8 *>(record) + kHandleC);
-    if (*handle_slot != 0U) {
-        ReleaseEntityById(g_MainChainRenderOwner, *handle_slot);
+    if (mgr.handle_c_01dc != 0U) {
+        ReleaseEntityById(g_MainChainRenderOwner, mgr.handle_c_01dc);
     }
-    *handle_slot = 0;
+    mgr.handle_c_01dc = 0;
 
     // Restore the saved frame-time scale.
-    g_FrameTimeScale =
-        *reinterpret_cast<float *>(static_cast<u8 *>(record) + kSavedFloat);
+    g_FrameTimeScale = mgr.saved_time_scale_02c0;
 }
 
 // TH10 0x00422c80 (native `retn 4`; the record arrives as the stack
 // argument). Switch on record+4 - 1 over modes 1..5.
 void RunPauseMenuModesStackAbi(void *record)
 {
+    GameStateManager &mgr = *reinterpret_cast<GameStateManager *>(record);
     const TitleScreen &ts = *reinterpret_cast<const TitleScreen *>(g_TitleScreen);
-    switch (I(record, kMode) - 1) {
+    switch (mgr.mode_0004 - 1) {
     case 0: { // ------------------------------------------------- mode 1
-        if (I(record, kTimerCount) < 10) {
+        if (mgr.frame_timer.count < 10) {
             return;
         }
-        I(record, kMode) = 2;
+        mgr.mode_0004 = 2;
         // Maximum = ([0x477810]+0x5c != 0) ? 2 : 3 (neg/sbb/add-3 idiom).
         const i32 max = (ts.mode != 0U) ? 2 : 3;
-        I(record, 0x2C) = max;
-        I(record, kCursorWrap) = 1;
-        StoreClampedAgainstMax(record, kCursor, 0x2CU);
-        SetEntityStateWordEaxEsiAbi(reinterpret_cast<u32 *>(
-                                        static_cast<u8 *>(record) + kHandleA),
+        mgr.cursor_a.maximum = max;
+        mgr.cursor_a.wrap_flag = 1;
+        StoreClampedAgainstMax(mgr.cursor_a.value, mgr.cursor_a.maximum);
+        SetEntityStateWordEaxEsiAbi(&mgr.handle_a_01d4,
                                     StateWordArgZeroExt(
-                                        static_cast<u32>(I(record, kCursor)),
+                                        static_cast<u32>(mgr.cursor_a.value),
                                         7U));
         return;
     }
 
     case 1: { // ------------------------------------------------- mode 2
-        W(record, kCursor + 4U) = W(record, kCursor);
+        mgr.cursor_a.previous = mgr.cursor_a.value;
         if ((g_ManagerSubGateFlags & 0x10U) != 0U
             || (g_MenuInputFlagsByte & 0x10U) != 0U) {
-            ShiftManagerSelector(reinterpret_cast<u8 *>(record) + kCursor, -1);
+            ShiftManagerSelector(&mgr.cursor_a, -1);
         }
         if ((g_ManagerSubGateFlags & 0x20U) != 0U
             || (g_MenuInputFlagsByte & 0x20U) != 0U) {
-            ShiftManagerSelector(reinterpret_cast<u8 *>(record) + kCursor, 1);
+            ShiftManagerSelector(&mgr.cursor_a, 1);
         }
-        if (W(record, kCursor + 4U) != W(record, kCursor)) {
+        if (mgr.cursor_a.previous != mgr.cursor_a.value) {
             SetEntityStateWordEaxEsiAbi(
-                reinterpret_cast<u32 *>(static_cast<u8 *>(record) + kHandleA),
-                StateWordArgZeroExt(W(record, kCursor), 7U));
+                &mgr.handle_a_01d4,
+                StateWordArgZeroExt(static_cast<u32>(mgr.cursor_a.value), 7U));
             PlayMenuSound(0xCU);
         }
         if ((g_ManagerSubGateFlags & 0x1001U) != 0U) {
             // Accept: dispatch on the selected item.
             PlayMenuSound(0xAU);
             u32 highlight = 0;
-            switch (W(record, kCursor)) {
+            switch (mgr.cursor_a.value) {
             case 0: // to the terminal mode
-                ExpireEntityHandleEaxAbi(reinterpret_cast<u32 *>(
-                    static_cast<u8 *>(record) + kHandleB));
-                ExpireEntityHandleEaxAbi(reinterpret_cast<u32 *>(
-                    static_cast<u8 *>(record) + kHandleA));
-                ExpireEntityHandleEaxAbi(reinterpret_cast<u32 *>(
-                    static_cast<u8 *>(record) + kHandleC));
-                I(record, kMode) = 3;
+                ExpireEntityHandleEaxAbi(&mgr.handle_b_01d8);
+                ExpireEntityHandleEaxAbi(&mgr.handle_a_01d4);
+                ExpireEntityHandleEaxAbi(&mgr.handle_c_01dc);
+                mgr.mode_0004 = 3;
                 break;
             case 1: // confirm submenu (kind 0x75 sprite)
-                HighlightChildByKind(record, 0x75, &highlight);
-                I(record, kMode) = 4;
+                HighlightChildByKind(mgr, 0x75, &highlight);
+                mgr.mode_0004 = 4;
                 break;
             case 2: // second submenu entry (kind 0x74 sprite); the
                     // +0x5c gate picks the terminal mode directly
-                HighlightChildByKind(record, 0x74, &highlight);
-                I(record, kMode) = (ts.mode != 0U) ? 3 : 4;
+                HighlightChildByKind(mgr, 0x74, &highlight);
+                mgr.mode_0004 = (ts.mode != 0U) ? 3 : 4;
                 break;
             default:
                 break;
             }
-            ArmRunTimer(record);
+            ArmRunTimer(mgr);
         }
         if ((g_ManagerSubGateFlags & 0x4000U) != 0U) {
             PlayMenuSound(0xAU);
             u32 highlight = 0;
-            HighlightChildByKind(record, 0x75, &highlight);
-            ArmRunTimer(record);
-            I(record, kMode) = 3;
+            HighlightChildByKind(mgr, 0x75, &highlight);
+            ArmRunTimer(mgr);
+            mgr.mode_0004 = 3;
             // Clamp 0 -> 2, > 2 -> 2, otherwise max - 1.
-            const i32 max = I(record, 0x2C);
+            const i32 max = mgr.cursor_a.maximum;
             if (max == 0 || max > 2) {
-                I(record, kCursor) = 2;
+                mgr.cursor_a.value = 2;
             } else {
-                I(record, kCursor) = max - 1;
+                mgr.cursor_a.value = max - 1;
             }
-            ExpireEntityHandleEaxAbi(reinterpret_cast<u32 *>(
-                static_cast<u8 *>(record) + kHandleB));
+            ExpireEntityHandleEaxAbi(&mgr.handle_b_01d8);
         }
         if ((g_ManagerSubGateFlags & 0x200U) != 0U) {
             PlayMenuSound(0xAU);
             u32 highlight = 0;
-            HighlightChildByKind(record, 0x74, &highlight);
-            ArmRunTimer(record);
-            I(record, kMode) = 3;
+            HighlightChildByKind(mgr, 0x74, &highlight);
+            ArmRunTimer(mgr);
+            mgr.mode_0004 = 3;
             // Clamp 0 -> 1, > 1 -> 1, otherwise max - 1.
-            const i32 max = I(record, 0x2C);
+            const i32 max = mgr.cursor_a.maximum;
             if (max == 0 || max > 1) {
-                I(record, kCursor) = 1;
+                mgr.cursor_a.value = 1;
             } else {
-                I(record, kCursor) = max - 1;
+                mgr.cursor_a.value = max - 1;
             }
         }
-        CancelTail(record);
+        CancelTail(mgr);
         return;
     }
 
     case 2: { // ------------------------------------------------- mode 3
-        if (I(record, kTimerCount) < 0xC) {
+        if (mgr.frame_timer.count < 0xC) {
             return;
         }
-        I(record, kMode) = 0;
-        switch (I(record, kCursor)) {
+        mgr.mode_0004 = 0;
+        switch (mgr.cursor_a.value) {
         case 0:
-            ResumeGameFromPauseEsiAbi(record);
+            ResumeGameFromPauseEsiAbi(&mgr);
             return;
         case 1:
-            ExpireEntityHandleEaxAbi(reinterpret_cast<u32 *>(
-                static_cast<u8 *>(record) + kHandleA));
+            ExpireEntityHandleEaxAbi(&mgr.handle_a_01d4);
             RequestGameStateTransitionEaxStackAbi(
                 reinterpret_cast<void *>(kGameStateManager), 4);
             return;
         case 2:
-            ExpireEntityHandleEaxAbi(reinterpret_cast<u32 *>(
-                static_cast<u8 *>(record) + kHandleA));
+            ExpireEntityHandleEaxAbi(&mgr.handle_a_01d4);
             g_SharedStatusGate = 0xAU;
             return;
         default:
@@ -299,86 +272,82 @@ void RunPauseMenuModesStackAbi(void *record)
     }
 
     case 3: { // ------------------------------------------------- mode 4
-        if (I(record, kTimerCount) < 0x14) {
+        if (mgr.frame_timer.count < 0x14) {
             return;
         }
-        if (I(record, kTimerCount) == 0x14) {
-            RunManagerCursorHandle(reinterpret_cast<u8 *>(record) + kCursor);
-            I(record, 0x2C) = 2;
-            I(record, kCursorWrap) = 1;
-            const i32 max = I(record, 0x2C);
+        if (mgr.frame_timer.count == 0x14) {
+            RunManagerCursorHandle(&mgr.cursor_a);
+            mgr.cursor_a.maximum = 2;
+            mgr.cursor_a.wrap_flag = 1;
+            const i32 max = mgr.cursor_a.maximum;
             if (max == 0 || max > 1) {
-                I(record, kCursor) = 1;
+                mgr.cursor_a.value = 1;
             } else {
-                I(record, kCursor) = max - 1;
+                mgr.cursor_a.value = max - 1;
             }
-            SetEntityStateWordEaxEsiAbi(reinterpret_cast<u32 *>(
-                                            static_cast<u8 *>(record)
-                                                + kHandleA),
-                                        0xE);
+            SetEntityStateWordEaxEsiAbi(&mgr.handle_a_01d4, 0xE);
         }
-        if (I(record, kTimerCount) < 0x1E) {
+        if (mgr.frame_timer.count < 0x1E) {
             return;
         }
-        if (I(record, kTimerCount) == 0x1E) {
+        if (mgr.frame_timer.count == 0x1E) {
             SetEntityStateWordEaxEsiAbi(
-                reinterpret_cast<u32 *>(static_cast<u8 *>(record) + kHandleA),
-                StateWordArgZeroExt(static_cast<u32>(I(record, kCursor)),
+                &mgr.handle_a_01d4,
+                StateWordArgZeroExt(static_cast<u32>(mgr.cursor_a.value),
                                     0xFU));
         }
-        W(record, kCursor + 4U) = W(record, kCursor);
+        mgr.cursor_a.previous = mgr.cursor_a.value;
         if (PollMenuInputState(0x10U)) {
-            ShiftManagerSelector(reinterpret_cast<u8 *>(record) + kCursor, -1);
+            ShiftManagerSelector(&mgr.cursor_a, -1);
         }
         if (PollMenuInputState(0x20U)) {
-            ShiftManagerSelector(reinterpret_cast<u8 *>(record) + kCursor, 1);
+            ShiftManagerSelector(&mgr.cursor_a, 1);
         }
-        if (W(record, kCursor + 4U) != W(record, kCursor)) {
+        if (mgr.cursor_a.previous != mgr.cursor_a.value) {
             SetEntityStateWordEaxEsiAbi(
-                reinterpret_cast<u32 *>(static_cast<u8 *>(record) + kHandleA),
-                StateWordArgZeroExt(W(record, kCursor), 0xFU));
+                &mgr.handle_a_01d4,
+                StateWordArgZeroExt(static_cast<u32>(mgr.cursor_a.value),
+                                    0xFU));
             PlayMenuSound(0xCU);
         }
         if ((g_ManagerSubGateFlags & 0x1001U) != 0U) {
             PlayMenuSound(0xAU);
             u32 highlight = 0;
-            if (I(record, kCursor) == 0) {
-                HighlightChildByKind(record, 0x77, &highlight);
-            } else if (I(record, kCursor) == 1) {
-                HighlightChildByKind(record, 0x78, &highlight);
+            if (mgr.cursor_a.value == 0) {
+                HighlightChildByKind(mgr, 0x77, &highlight);
+            } else if (mgr.cursor_a.value == 1) {
+                HighlightChildByKind(mgr, 0x78, &highlight);
             }
-            I(record, kMode) = 5;
-            ArmRunTimer(record);
+            mgr.mode_0004 = 5;
+            ArmRunTimer(mgr);
         }
-        CancelTail(record);
+        CancelTail(mgr);
         return;
     }
 
     case 4: { // ------------------------------------------------- mode 5
-        if (I(record, kTimerCount) < 0x14) {
+        if (mgr.frame_timer.count < 0x14) {
             return;
         }
-        switch (I(record, kCursor)) {
+        switch (mgr.cursor_a.value) {
         case 0:
-            ExpireEntityHandleEaxAbi(reinterpret_cast<u32 *>(
-                static_cast<u8 *>(record) + kHandleB));
-            ExpireEntityHandleEaxAbi(reinterpret_cast<u32 *>(
-                static_cast<u8 *>(record) + kHandleA));
-            I(record, kMode) = 3;
-            Call44BE70(reinterpret_cast<u8 *>(record) + kCursor);
+            ExpireEntityHandleEaxAbi(&mgr.handle_b_01d8);
+            ExpireEntityHandleEaxAbi(&mgr.handle_a_01d4);
+            mgr.mode_0004 = 3;
+            Call44BE70(&mgr.cursor_a);
             break;
         case 1:
-            Call44BE70(reinterpret_cast<u8 *>(record) + kCursor);
+            Call44BE70(&mgr.cursor_a);
             SetEntityStateWordEaxEsiAbi(
-                reinterpret_cast<u32 *>(static_cast<u8 *>(record) + kHandleA),
-                StateWordArgSignExt(I(record, kCursor), 7U));
-            I(record, kMode) = 2;
-            ArmRunTimer(record);
+                &mgr.handle_a_01d4,
+                StateWordArgSignExt(mgr.cursor_a.value, 7U));
+            mgr.mode_0004 = 2;
+            ArmRunTimer(mgr);
             return;
         default:
             break;
         }
-        ArmRunTimer(record);
+        ArmRunTimer(mgr);
         return;
     }
 
