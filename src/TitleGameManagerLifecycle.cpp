@@ -4,6 +4,7 @@
 #include "AsciiHudOwner.hpp"
 #include "CallbackScheduler.hpp"
 #include "EntityHelpers.hpp"
+#include "GameManagerObject.hpp"
 #include "GameManagerState.hpp"
 #include "GlobalLifecycleManager.hpp"
 #include "LargeRenderOwnerLayout.hpp"
@@ -19,6 +20,7 @@
 #include "ScoreSave.hpp"
 #include "TitleCalcCluster.hpp"
 #include "TitleScreenCalcBody.hpp"
+#include "TitleScreenObject.hpp"
 #include "TitleStateAccessors.hpp"
 
 namespace th10 {
@@ -73,8 +75,9 @@ void InvokeTitleOwnerHook()
 void *ConstructGameManagerInPlace(void *game_manager)
 {
     u8 *const manager = static_cast<u8 *>(game_manager);
-    memset(manager, 0, 0x5acc);
-    reinterpret_cast<u32 *>(manager)[4 / 4] |= 2U;
+    memset(manager, 0, 0x5acc); // whole-object wipe kept raw
+    GameManager &mgr = *reinterpret_cast<GameManager *>(manager);
+    mgr.flags_0004 |= 2U; // +0x004 bit 1
     g_GameManager = manager; // DAT_0047784c
     return manager;
 }
@@ -211,7 +214,7 @@ i32 GameManagerDrawChannel(void *game_manager)
 // the already-published words (matching the original partial state).
 i32 InstallGameManagerWorkerChannels(void *game_manager)
 {
-    u32 *const words = static_cast<u32 *>(game_manager);
+    GameManager &mgr = *reinterpret_cast<GameManager *>(game_manager);
 
     ChainElem *const calculation =
         CallbackSchedulerApi::Create(
@@ -220,7 +223,7 @@ i32 InstallGameManagerWorkerChannels(void *game_manager)
     calculation->arg = game_manager;
     CallbackSchedulerApi::AddToCalculationChain(g_CallbackScheduler,
                                                 calculation, 6);
-    words[0x0c / 4] = reinterpret_cast<u32>(calculation);
+    mgr.calc_element = calculation; // +0x0c
 
     ChainElem *const draw =
         CallbackSchedulerApi::Create(
@@ -228,13 +231,13 @@ i32 InstallGameManagerWorkerChannels(void *game_manager)
     draw->flags &= ~ChainElemFlag_Enabled;
     draw->arg = game_manager;
     CallbackSchedulerApi::AddToDrawChain(g_CallbackScheduler, draw, 3);
-    words[0x10 / 4] = reinterpret_cast<u32>(draw);
+    mgr.draw_element = draw; // +0x10
 
     ManagerWorkOwnerPartial *const owner =
         reinterpret_cast<ManagerWorkOwnerPartial *>(g_MainChainRenderOwner);
     ManagerWorkPartial *const title_work =
         RequestManagerWork(owner, 0x19, "title.anm");
-    words[0x14 / 4] = reinterpret_cast<u32>(title_work);
+    mgr.anm_work_title = title_work; // +0x14
     if (title_work == 0) {
         ReportMainChainErrorText(
             g_MainChainErrorReceiver,
@@ -244,7 +247,7 @@ i32 InstallGameManagerWorkerChannels(void *game_manager)
 
     ManagerWorkPartial *const title_v_work =
         RequestManagerWork(owner, 0x1a, "title_v.anm");
-    words[0x18 / 4] = reinterpret_cast<u32>(title_v_work);
+    mgr.anm_work_title_v = title_v_work; // +0x18
     if (title_v_work == 0) {
         ReportMainChainErrorText(
             g_MainChainErrorReceiver,
@@ -252,7 +255,7 @@ i32 InstallGameManagerWorkerChannels(void *game_manager)
         return -1;
     }
 
-    words[0xf4 / 4] = 1;
+    mgr.cursor_a.wrap_flag = 1; // +0xf4 worker-ready flag (dual duty)
     g_MainChainManagerGate = 0; // DAT_004918a4
     return 0;
 }
@@ -268,8 +271,9 @@ i32 InstallGameManagerWorkerChannels(void *game_manager)
 u32 TH10_CDECL GameManagerWorkerThread(void *unused)
 {
     (void)unused;
-    u32 *const manager = static_cast<u32 *>(g_GameManager); // DAT_0047784c
-    if (InstallGameManagerWorkerChannels(manager) != 0) {
+    GameManager &mgr =
+        *reinterpret_cast<GameManager *>(g_GameManager); // DAT_0047784c
+    if (InstallGameManagerWorkerChannels(&mgr) != 0) {
         g_MainChainSharedStatus = // DAT_00491fb8 fallback mode
             ((~(g_MainChainRuntimeFlags >> 12) & 1U) | 2U);
         return 0;
@@ -289,8 +293,7 @@ u32 TH10_CDECL GameManagerWorkerThread(void *unused)
         }
     }
 
-    ChainElem *const calculation =
-        reinterpret_cast<ChainElem *>(manager[0x0c / 4]);
+    ChainElem *const calculation = mgr.calc_element; // +0x0c
     calculation->flags |= ChainElemFlag_Enabled;
     return 0;
 }
@@ -358,9 +361,9 @@ void ResetMainChainFrameStateBlock(u32 value)
 i32 RunGameManagerCalculationBody(void *game_manager)
 {
     u8 *const bytes = static_cast<u8 *>(game_manager);
-    u32 *const words = reinterpret_cast<u32 *>(bytes);
+    GameManager &mgr = *reinterpret_cast<GameManager *>(bytes);
 
-    u32 state = words[0x1c / 4];
+    u32 state = static_cast<u32>(mgr.state); // +0x1c
     u32 flow;
     bool flow_loaded = false;
     if (state == 1 || state == 2) {
@@ -440,15 +443,14 @@ i32 RunGameManagerCalculationBody(void *game_manager)
         *reinterpret_cast<u32 *>(ascii_target) = 0;
 
         if (flow == 3) {
-            words[0x2c / 4] = 10;
-            const i32 t = static_cast<i32>(words[0x2c / 4]);
-            words[0x24 / 4] = (t >= 0) ? 0U : static_cast<u32>(t - 1);
+            mgr.cursor_a.maximum = 10; // +0x2c
+            const i32 t = mgr.cursor_a.maximum;
+            mgr.cursor_a.value = (t >= 0) ? 0 : t - 1; // +0x24
             QueueTransitionBgmGate();
             SetGameManagerState(game_manager, 0xf);
             SpawnManagerEntityFromScript(game_manager, 0x5b);
             SetManagerSlotEntityStopWord(game_manager, 0x5b, 9);
-            reinterpret_cast<ChainElem *>(words[0x10 / 4])->flags |=
-                ChainElemFlag_Enabled;
+            mgr.draw_element->flags |= ChainElemFlag_Enabled;
             g_MainChainManagerFlow = 1;
             RunManagerStateBodyF(game_manager);
             break;
@@ -466,32 +468,30 @@ i32 RunGameManagerCalculationBody(void *game_manager)
         if (flow != 0) {
             if (flow == 1) {
                 if (g_StageScoreSelector[0] == 4) {
-                    const i32 t = static_cast<i32>(words[0x2c / 4]);
+                    const i32 t = mgr.cursor_a.maximum;
                     if (t == 0 || t > 1)
-                        words[0x24 / 4] = 1;
+                        mgr.cursor_a.value = 1;
                     else
-                        words[0x24 / 4] = static_cast<u32>(t - 1);
+                        mgr.cursor_a.value = t - 1;
                 }
                 SetGameManagerState(game_manager, 2);
                 SpawnManagerEntityFromScript(game_manager, 0x5b);
-                reinterpret_cast<ChainElem *>(words[0x10 / 4])->flags |=
-                    ChainElemFlag_Enabled;
+                mgr.draw_element->flags |= ChainElemFlag_Enabled;
                 RunManagerStateBody2(game_manager);
                 break;
             }
             if (flow == 2) {
-                words[0x2c / 4] = 10;
-                const i32 t = static_cast<i32>(words[0x2c / 4]);
+                mgr.cursor_a.maximum = 10;
+                const i32 t = mgr.cursor_a.maximum;
                 if (t == 0 || t > 3)
-                    words[0x24 / 4] = 3;
+                    mgr.cursor_a.value = 3;
                 else
-                    words[0x24 / 4] = static_cast<u32>(t - 1);
+                    mgr.cursor_a.value = t - 1;
                 QueueTransitionBgmGate();
                 SetGameManagerState(game_manager, 0xc);
                 SpawnManagerEntityFromScript(game_manager, 0x5b);
                 SetManagerSlotEntityStopWord(game_manager, 0x5b, 9);
-                reinterpret_cast<ChainElem *>(words[0x10 / 4])->flags |=
-                    ChainElemFlag_Enabled;
+                mgr.draw_element->flags |= ChainElemFlag_Enabled;
                 g_MainChainManagerFlow = 1;
                 RunManagerStateBodyC(game_manager);
                 break;
@@ -508,8 +508,7 @@ i32 RunGameManagerCalculationBody(void *game_manager)
         RunManagerStateBody1(game_manager);
         break;
     case 2:
-        reinterpret_cast<ChainElem *>(words[0x10 / 4])->flags |=
-            ChainElemFlag_Enabled;
+        mgr.draw_element->flags |= ChainElemFlag_Enabled;
         RunManagerStateBody2(game_manager);
         break;
     case 3:
@@ -556,18 +555,20 @@ i32 RunGameManagerCalculationBody(void *game_manager)
         break;
     }
 
-    words[0x2b0 / 4] = words[0x2b4 / 4];
-    float *const rate_ptr = *reinterpret_cast<float **>(bytes + 0x2bc);
+    mgr.frame_timer.prev = mgr.frame_timer.count; // +0x2b0 = +0x2b4
+    const float *const rate_ptr = mgr.frame_timer.rate; // +0x2bc
     const float rate = *rate_ptr;
     const float rate_low = *reinterpret_cast<const float *>(0x00470b68);
     const float rate_high = *reinterpret_cast<const float *>(0x00470b64);
     if (rate_low < rate && rate < rate_high) {
-        *reinterpret_cast<float *>(bytes + 0x2b8) +=
+        // Accum dword at +0x2b8 is consumed as a float here — addressed
+        // through the named field but kept as the native bit-pattern view.
+        *reinterpret_cast<float *>(&mgr.frame_timer.accum) +=
             *reinterpret_cast<const float *>(0x00470afc);
-        words[0x2b4 / 4] = words[0x2b4 / 4] + 1;
+        mgr.frame_timer.count = mgr.frame_timer.count + 1; // +0x2b4
     } else {
-        *reinterpret_cast<float *>(bytes + 0x2b8) += rate;
-        words[0x2b4 / 4] = GetTickTimeSource();
+        *reinterpret_cast<float *>(&mgr.frame_timer.accum) += rate;
+        mgr.frame_timer.count = static_cast<i32>(GetTickTimeSource());
     }
     return 1;
 }
@@ -577,9 +578,8 @@ i32 RunGameManagerCalculationBody(void *game_manager)
 // simply return one.
 i32 RunGameManagerDrawBody(void *game_manager)
 {
-    const u32 state =
-        *reinterpret_cast<const u32 *>(
-            static_cast<const u8 *>(game_manager) + 0x1c);
+    GameManager &mgr = *reinterpret_cast<GameManager *>(game_manager);
+    const u32 state = static_cast<u32>(mgr.state); // +0x1c
     switch (state) {
     case 0x9:
         RunManagerDrawBody9(game_manager);
@@ -617,8 +617,9 @@ u32 TH10_CDECL TitleScreenCallbackWorker(void *unused)
 // four render-owner words at +0x4c/+0x50/+0x54/+0x58, then returns one.
 i32 TitleScreenDrawCallback(void *title_screen)
 {
-    u8 *const bytes = static_cast<u8 *>(title_screen);
-    if ((*reinterpret_cast<u32 *>(bytes + 0x58) & 4U) == 0) {
+    const TitleScreen &ts =
+        *reinterpret_cast<const TitleScreen *>(title_screen);
+    if ((ts.flags & 4U) == 0) {
         LargeRenderOwnerLayout &owner =
             *static_cast<LargeRenderOwnerLayout *>(g_MainChainRenderOwner);
         owner.live_object_count = 0;    // +0x4c
@@ -647,20 +648,22 @@ i32 TitleScreenCalcCallback(void *title_screen)
 // DAT_00477810 and starts the callback thread. Native ABI is ret 4.
 void *CreateTitleScreen(u32 mode)
 {
-    u32 *title = static_cast<u32 *>(AllocateMainChainObject(0x60));
+    TitleScreen *title =
+        reinterpret_cast<TitleScreen *>(AllocateMainChainObject(0x60));
     if (title != 0) {
-        title[0x20 / 4] &= ~1U;
+        title->timer.flags &= ~1U; // timer "initialized" bit at +0x20
         InitializeTitleScreenSubObject(
             reinterpret_cast<u8 *>(title) + 0x24);
+        u32 *const words = reinterpret_cast<u32 *>(title);
         for (u32 word = 0; word != 0x18; ++word)
-            title[word] = 0;
+            words[word] = 0;
     }
     InvokeTitleOwnerHook();
     // The native code writes +0x58/+0x5c even after an allocation failure
     // (through a null pointer); the reconstruction guards them instead.
     if (title != 0) {
-        title[0x5c / 4] = mode;
-        title[0x58 / 4] |= 4U;
+        title->mode = mode;
+        title->flags |= 4U;
     }
     g_TitleScreen = title;
     StartMainChainCallbackThread(
@@ -959,7 +962,8 @@ void DestroyAsciiHudOwnerInPlace(void *object)
 
 i32 TH10_STDCALL TeardownTitleScreenStackAbi(void *title_screen)
 {
-    const u8 *const title = static_cast<const u8 *>(title_screen);
+    const TitleScreen &ts =
+        *reinterpret_cast<const TitleScreen *>(title_screen);
     SaveScoreRecordFileEbx(g_TitleScoreSaveRecord);
     g_GlobalModeFlags &= ~3U;
     g_MainChainTimeScaleTarget = 1.0f;
@@ -1047,12 +1051,14 @@ i32 TH10_STDCALL TeardownTitleScreenStackAbi(void *title_screen)
     DestroyAndFreeSlot(&g_GameContext, DestroyGameContextInPlace);
     DestroyAndFreeSlot(&g_SpellBulletBase, DestroySpellBulletBaseInPlace);
 
-    // Remove the title screen's calculation/draw scheduler records. The
-    // native code brackets 0x00449f60 with the scheduler lock and the
-    // activity-depth byte and does not clear the record slots.
-    for (u32 slot = 0x08; slot <= 0x0c; slot += 4) {
-        ChainElem *const record = *reinterpret_cast<ChainElem *const *>(
-            title + slot);
+    // Remove the title screen's calculation/draw scheduler records (the
+    // +0x08 calc element and the +0x0c draw element). The native code
+    // brackets 0x00449f60 with the scheduler lock and the activity-depth
+    // byte and does not clear the record slots.
+    ChainElem *const title_record_slots[2] = {ts.calc_element,
+                                              ts.draw_element};
+    for (u32 slot = 0; slot < 2; ++slot) {
+        ChainElem *const record = title_record_slots[slot];
         if (record == 0)
             continue;
         EnterCriticalSectionInternal(&g_CallbackSchedulerLock);
@@ -1088,17 +1094,17 @@ void *CreateGameManager()
     if (manager != 0) {
         manager = static_cast<u8 *>(ConstructGameManagerInPlace(manager));
         if (manager != 0) {
-            ThreadControl *const control =
-                reinterpret_cast<ThreadControl *>(manager + 0x5ab0);
-            StopThreadControl(control);
-            control->thread_entry =
+            GameManager &mgr = *reinterpret_cast<GameManager *>(manager);
+            GameManagerWorkerControl &control = mgr.worker_control; // +0x5ab0
+            StopThreadControl(reinterpret_cast<ThreadControl *>(&control));
+            control.thread_entry =
                 reinterpret_cast<void *>(&GameManagerWorkerThread);
-            control->field_0010 = 1;
-            control->stop_requested = 0;
-            control->thread_handle = reinterpret_cast<void *>(_beginthreadex(
+            control.field_0010 = 1;
+            control.stop_requested = 0;
+            control.thread_handle = reinterpret_cast<void *>(_beginthreadex(
                 0, 0,
                 reinterpret_cast<CrtThreadStartFn>(&GameManagerWorkerThread),
-                manager, 0, &control->thread_id));
+                manager, 0, &control.thread_id));
         }
     }
     return manager;
@@ -1114,15 +1120,18 @@ void *CreateGameManager()
 // restored before the periodic hook runs again.
 void TeardownGameManagerInPlace(void *game_manager)
 {
-    u32 *const manager = reinterpret_cast<u32 *>(game_manager);
-    ThreadControl *const control = reinterpret_cast<ThreadControl *>(
-        reinterpret_cast<u8 *>(game_manager) + 0x5ab0);
-    manager[0] = 0x0046ecf0U; // destructor vtable
+    u8 *const bytes = static_cast<u8 *>(game_manager);
+    GameManager &mgr = *reinterpret_cast<GameManager *>(bytes);
+    ThreadControl *const control =
+        reinterpret_cast<ThreadControl *>(&mgr.worker_control); // +0x5ab0
+    *reinterpret_cast<u32 *>(bytes) = 0x0046ecf0U; // destructor vtable (+0x0)
     StopThreadControl(control);
 
-    for (u32 record_index = 3; record_index <= 4; ++record_index) {
-        ChainElem *const record = reinterpret_cast<ChainElem *>(
-            manager[record_index]);
+    // Scheduler records at +0x0c / +0x10.
+    ChainElem *const teardown_records[2] = {mgr.calc_element,
+                                            mgr.draw_element};
+    for (u32 record_index = 0; record_index < 2; ++record_index) {
+        ChainElem *const record = teardown_records[record_index];
         if (record != 0)
             CallbackSchedulerApi::RemoveSynchronized(g_CallbackScheduler,
                                                      record);
@@ -1142,14 +1151,14 @@ void TeardownGameManagerInPlace(void *game_manager)
 
     for (u32 index = 0; index != 0x32; ++index) {
         void *const subordinate =
-            reinterpret_cast<void *>(manager[0x1679 + index]);
+            reinterpret_cast<void *>(mgr.replay_parse_handles[index]);
         if (subordinate != 0) {
             DestroyOpaqueMainChainManagerInPlace(subordinate);
             ReleaseResourceBuffer(subordinate);
         }
     }
 
-    const i32 entity_id = static_cast<i32>(manager[0x174]);
+    const i32 entity_id = static_cast<i32>(mgr.teardown_entity_id); // +0x174
     OwnerLink *node = 0;
     if (entity_id != 0) {
         OwnerLink *cursor = owner.first_list_a; // owner+0x72dad4 head
@@ -1184,12 +1193,12 @@ void TeardownGameManagerInPlace(void *game_manager)
         }
     }
 
-    if (manager[0x16ab] != 0) {
-        ReleaseResourceBuffer(reinterpret_cast<void *>(manager[0x16ab]));
-        manager[0x16ab] = 0;
+    if (mgr.owned_buffer != 0) { // +0x5aac
+        ReleaseResourceBuffer(mgr.owned_buffer);
+        mgr.owned_buffer = 0;
     }
     g_GameManager = 0; // DAT_0047784c
-    manager[0x16ac] = 0x004703e4U; // thread-control destructor marker
+    mgr.worker_control.marker = reinterpret_cast<void *>(0x004703e4U);
     StopThreadControl(control);
 }
 

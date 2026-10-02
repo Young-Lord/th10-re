@@ -2,6 +2,7 @@
 
 #include "AsciiAnimationVm.hpp"
 #include "EntityHelpers.hpp"
+#include "GameManagerObject.hpp"
 
 namespace th10 {
 
@@ -76,23 +77,25 @@ u32 ResolveChildIdByKind(u8 *parent, u16 kind)
 
 void *UpdateResultScreenStatDigitsEaxAbi(void *state)
 {
-    u8 *const st = static_cast<u8 *>(state);
+    GameManager &mgr = *reinterpret_cast<GameManager *>(state);
     void *const manager = g_MainChainRenderOwner;
     void *result = 0;
 
     const u32 block_count = sizeof(k_blocks) / sizeof(k_blocks[0]);
     for (u32 i = 0; i < block_count; ++i) {
-        const u32 parent_id = LoadU32(st + 0x2ccU);
+        const u32 parent_id = mgr.script_entity_handles[2];
         u8 *const parent = FindEntityEdxStackAbi(manager, parent_id);
         if (parent == 0) {
-            StoreU32(st + 0x2ccU, 0U);
+            mgr.script_entity_handles[2] = 0U;
         }
 
         const u32 child_id = ResolveChildIdByKind(parent, k_blocks[i].kind);
         u8 *const child = FindEntityEdxStackAbi(manager, child_id);
         if (child != 0) {
-            const i32 value =
-                static_cast<signed short>(LoadU16(st + k_blocks[i].field_offset));
+            // k_blocks stores the native state u16 offsets 0x59cc..0x59d4,
+            // i.e. the result_stats[0..4] words.
+            const i32 value = static_cast<signed short>(
+                mgr.result_stats[(k_blocks[i].field_offset - 0x59ccU) / 2U]);
             const i32 digit = k_blocks[i].tens ? value / 10 : value % 10;
             result = reinterpret_cast<void *>(InitializeAsciiAnimationVmEntry(
                 child, static_cast<u32>(digit + k_digit_entry_base),

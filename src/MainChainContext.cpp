@@ -1,5 +1,6 @@
 #include "MainChainContext.hpp"
 #include "GlobalLifecycleManager.hpp"
+#include "TitleScreenObject.hpp"
 
 extern "C" void TH10_STDCALL EnterCriticalSection(void *critical_section);
 extern "C" void TH10_STDCALL LeaveCriticalSection(void *critical_section);
@@ -27,12 +28,8 @@ extern void DestroyGameManager(void *game_manager); // TH10 0x0042cdb0
 extern void *CreateGameManager(); // TH10 0x0042cd50
 extern void DestroyTransitionObject(); // TH10 0x0040b9d0
 extern void *CreateTransitionObject(); // TH10 0x0040b940
-
-// The only field read from the title object by 0x004218d0 is +0x5c.
-struct TitleScreenTransitionData {
-    u8 unknown_0000[0x5c];
-    void *transition_argument;
-};
+// The only field read from the title object by 0x004218d0 is +0x5c
+// (TitleScreen::mode, the CreateTitleScreen transition argument).
 
 void CreateGameManagerForStateFour(MainChainState previous_state)
 {
@@ -166,15 +163,17 @@ MainChainAdvanceResult MainChainContext::AdvanceState()
         break;
 
     case MainChainState_TitleTransition11: {
-        TitleScreenTransitionData *title =
-            static_cast<TitleScreenTransitionData *>(g_TitleScreen);
-        void *transition_argument = title->transition_argument;
+        // Native 0x421a51: reads the +0x5c mode dword and hands it to
+        // CreateTitleScreen as the transition argument.
+        const TitleScreen &ts =
+            *reinterpret_cast<const TitleScreen *>(g_TitleScreen);
+        const u32 transition_argument = ts.mode;
 
         transition_flag = 0;
         if (previous_state == MainChainState_TitleScreen)
             DestroyTitleScreen(g_TitleScreen);
         requested_state = MainChainState_TitleScreen;
-        CreateTitleScreen(reinterpret_cast<i32>(transition_argument));
+        CreateTitleScreen(static_cast<i32>(transition_argument));
         break;
     }
 

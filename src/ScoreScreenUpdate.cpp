@@ -3,11 +3,13 @@
 // cursor / spawn / boundary helpers are the semantic bodies exported from
 // GameManagerState.cpp and EntityHelpers.cpp; the score-save unlock probe
 // (0x0042c850) is reconstructed here because it is this menu's private
-// leaf. Offsets are byte offsets into the manager; the timer at +0x2b4 and
-// the cursor record at +0x24 follow the shared manager-state layout.
+// leaf. Offsets are byte offsets into the manager; the timer at +0x2b4
+// (frame_timer.count) and the cursor record at +0x24 (cursor_a) follow the
+// shared manager-state layout.
 #include "ScoreScreenUpdate.hpp"
 
 #include "GameManagerState.hpp"
+#include "GameManagerObject.hpp"
 #include "EntityHelpers.hpp"
 #include "Th10Types.hpp"
 
@@ -63,11 +65,12 @@ int RunManagerStateBody2(void *game_manager)
 {
     u8 *const bytes = static_cast<u8 *>(game_manager);
     u32 *const words = reinterpret_cast<u32 *>(bytes);
-    u32 *const cursor = words + 9; // +0x24 value, +0x28 copy, +0x2c max
+    GameManager &mgr = *reinterpret_cast<GameManager *>(game_manager);
+    i32 *const cursor = &mgr.cursor_a.value; // +0x24 value, +0x28 copy, +0x2c max
 
-    switch (words[8]) { // +0x20 sub-state
+    switch (mgr.sub_state) {
     case 0: {
-        cursor[2] = 8U;
+        mgr.cursor_a.maximum = 8U;
         if (!IsScoreUnlockBankActiveEaxAbi(g_ScoreSaveState))
             AppendScoreScreenPendingFlag(words);
 
@@ -75,11 +78,11 @@ int RunManagerStateBody2(void *game_manager)
         // sign-split: maximum 0 -> 2, > 2 -> 2, else maximum - 1) and
         // clear the bit.
         if ((g_GlobalModeFlags & 0x10U) != 0U) {
-            const u32 maximum = cursor[2];
+            const u32 maximum = mgr.cursor_a.maximum;
             if (maximum == 0U || maximum > 2U)
-                cursor[0] = 2U;
+                mgr.cursor_a.value = 2U;
             else
-                cursor[0] = maximum - 1U;
+                mgr.cursor_a.value = maximum - 1U;
             g_GlobalModeFlags &= ~0x10U;
         }
 
@@ -92,16 +95,16 @@ int RunManagerStateBody2(void *game_manager)
     }
     // fallthrough
     case 1:
-        if (static_cast<i32>(words[0x2b4 / 4]) > 10) {
+        if (mgr.frame_timer.count > 10) {
             SetGameManagerSubState(game_manager, 2);
-            SetEntityStopWordByIdAndRun(words[0x2c4 / 4], 3U);
+            SetEntityStopWordByIdAndRun(mgr.script_entity_handles[0], 3U);
             SetManagerSlotEntityStopWord(
                 game_manager,
-                static_cast<u32>(static_cast<u16>(cursor[0]) + 17U), 0U);
+                static_cast<u32>(static_cast<u16>(mgr.cursor_a.value) + 17U), 0U);
         }
         return 1;
     case 2: {
-        cursor[1] = cursor[0];
+        mgr.cursor_a.previous = mgr.cursor_a.value;
 
         if ((g_ManagerSubGateFlags & 0x10U) != 0U
             || (g_MenuInputFlagsByte & 0x10U) != 0U)
@@ -110,19 +113,19 @@ int RunManagerStateBody2(void *game_manager)
             || (g_MenuInputFlagsByte & 0x20U) != 0U)
             ShiftManagerSelector(cursor, 1);
 
-        if (cursor[1] != cursor[0]) {
+        if (mgr.cursor_a.previous != mgr.cursor_a.value) {
             ReserveContextChannel(reinterpret_cast<void *>(0x00492590U),
                                   0xcU, 0U);
-            SetEntityStopWordByIdAndRun(words[0x2c4 / 4], 3U);
+            SetEntityStopWordByIdAndRun(mgr.script_entity_handles[0], 3U);
             SetManagerSlotEntityStopWord(
                 game_manager,
-                static_cast<u32>(static_cast<u16>(cursor[0]) + 7U), 0U);
+                static_cast<u32>(static_cast<u16>(mgr.cursor_a.value) + 7U), 0U);
         }
 
         // Exit / row accept. Native tests the low byte of the 0x474e36
         // flag dword against 0xa.
         if ((g_ManagerSubGateFlags & 0xaU) != 0U) {
-            if (cursor[0] == 7U) {
+            if (mgr.cursor_a.value == 7U) {
                 ReserveContextChannel(reinterpret_cast<void *>(0x00492590U),
                                       0xbU, 0U);
                 SetGameManagerSubState(game_manager, 4U);
@@ -132,22 +135,22 @@ int RunManagerStateBody2(void *game_manager)
                                   0xbU, 0U);
             // Clamp the cursor onto the last row (maximum - 1 with the
             // native sign-split idiom).
-            const u32 maximum = cursor[2];
+            const u32 maximum = mgr.cursor_a.maximum;
             if (maximum == 0U || maximum > 7U)
-                cursor[0] = 7U;
+                mgr.cursor_a.value = 7U;
             else
-                cursor[0] = maximum - 1U;
+                mgr.cursor_a.value = maximum - 1U;
             Call42C750(game_manager, 0U);
             SetManagerSlotEntityStopWord(
                 game_manager,
-                static_cast<u32>(static_cast<u16>(cursor[0]) + 7U), 0U);
+                static_cast<u32>(static_cast<u16>(mgr.cursor_a.value) + 7U), 0U);
         }
 
         // Row accept dispatch (0x1001 flag mask). The slot-6 stop word is
         // queued before the row switch.
         if ((g_ManagerSubGateFlags & 0x1001U) != 0U) {
             SetManagerSlotEntityStopWord(game_manager, 6U, 0U);
-            switch (cursor[0]) {
+            switch (mgr.cursor_a.value) {
             case 0:
             case 1:
             case 2:
@@ -171,6 +174,8 @@ int RunManagerStateBody2(void *game_manager)
             case 6:
                 ReserveContextChannel(
                     reinterpret_cast<void *>(0x00492590U), 0xaU, 0U);
+                SetManagerSlotEntityStopWord(game_manager, 90U, 7U);
+                SetManagerSlotEntityStopWord(game_manager, 91U, 7U);
                 SetGameManagerSubState(game_manager, 4U);
                 Call42C750(game_manager, 90U);
                 Call42C750(game_manager, 91U);
@@ -187,10 +192,10 @@ int RunManagerStateBody2(void *game_manager)
         return 1;
     }
     case 4: {
-        if (static_cast<i32>(words[0x2b4 / 4]) < 20)
+        if (mgr.frame_timer.count < 20)
             return 1;
 
-        switch (cursor[0]) {
+        switch (mgr.cursor_a.value) {
         case 0:
             g_GlobalModeFlags &= ~0x10U;
             // Common rows 0/2 tail below.
@@ -211,17 +216,17 @@ int RunManagerStateBody2(void *game_manager)
             ReleaseManagerSlotEntity(game_manager, 0x58U);
             SetGameManagerState(game_manager, 6U);
             RunManagerCursorHandle(cursor);
-            words[0x58f0 / 4] = g_CurrentDifficulty;
+            mgr.name_length = g_CurrentDifficulty;
             g_CurrentDifficulty = 4U;
             // Re-clamp the cursor from the (unchanged) maximum with the
             // native sign-split idiom (positive or zero maximum -> 0,
             // negative maximum -> maximum - 1).
             {
-                const i32 maximum = static_cast<i32>(cursor[2]);
+                const i32 maximum = mgr.cursor_a.maximum;
                 if (maximum >= 0)
-                    cursor[0] = 0U;
+                    mgr.cursor_a.value = 0U;
                 else
-                    cursor[0] = static_cast<u32>(maximum - 1);
+                    mgr.cursor_a.value = static_cast<u32>(maximum - 1);
             }
             return 1;
         case 2:

@@ -25,6 +25,7 @@
 
 #include <cmath>
 #include "TitleBulletUpdate.hpp"
+#include "TitleScreenObject.hpp"
 
 namespace th10 {
 
@@ -172,7 +173,8 @@ i32 BulletCalcRecordCallbackEcxStackAbi(void *bullet_manager)
 {
     void *mode_record = g_GameModeRecord; // TH10 DAT_00477810
     if (mode_record != 0) {
-        u32 flags = LoadU32At(mode_record, 0x58U);
+        const TitleScreen &ts = *reinterpret_cast<const TitleScreen *>(mode_record);
+        const u32 flags = ts.flags;
         if ((((flags | (flags >> 2)) & 1U) != 0U)
             || ((flags & 0x400U) != 0U)) {
             return 1;

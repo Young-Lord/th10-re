@@ -16,6 +16,7 @@
 #include "PlayerTimerHelpers.hpp"
 #include "PauseMenuModes.hpp"
 #include "Th10Types.hpp"
+#include "TitleScreenObject.hpp"
 
 namespace th10 {
 
@@ -149,8 +150,8 @@ void CancelTail(void *record)
 void ResumeGameFromPauseEsiAbi(void *record)
 {
     // Clear the pause bit 0x10 of the 0x477810 state object's +0x58 word.
-    u8 *const state = static_cast<u8 *>(g_TitleScreen);
-    *reinterpret_cast<u32 *>(state + 0x58) &= ~0x10U;
+    TitleScreen &ts = *reinterpret_cast<TitleScreen *>(g_TitleScreen);
+    ts.flags &= ~0x10U;
 
     // Queue the "UnPause" BGM command (native string at 0x46e0b8; the
     // adjacent 0x46e0bc holds "Pause").
@@ -174,6 +175,7 @@ void ResumeGameFromPauseEsiAbi(void *record)
 // argument). Switch on record+4 - 1 over modes 1..5.
 void RunPauseMenuModesStackAbi(void *record)
 {
+    const TitleScreen &ts = *reinterpret_cast<const TitleScreen *>(g_TitleScreen);
     switch (I(record, kMode) - 1) {
     case 0: { // ------------------------------------------------- mode 1
         if (I(record, kTimerCount) < 10) {
@@ -181,12 +183,7 @@ void RunPauseMenuModesStackAbi(void *record)
         }
         I(record, kMode) = 2;
         // Maximum = ([0x477810]+0x5c != 0) ? 2 : 3 (neg/sbb/add-3 idiom).
-        const i32 max =
-            (*reinterpret_cast<u32 *>(static_cast<u8 *>(g_TitleScreen)
-                                      + 0x5CU)
-             != 0U)
-                ? 2
-                : 3;
+        const i32 max = (ts.mode != 0U) ? 2 : 3;
         I(record, 0x2C) = max;
         I(record, kCursorWrap) = 1;
         StoreClampedAgainstMax(record, kCursor, 0x2CU);
@@ -235,12 +232,7 @@ void RunPauseMenuModesStackAbi(void *record)
             case 2: // second submenu entry (kind 0x74 sprite); the
                     // +0x5c gate picks the terminal mode directly
                 HighlightChildByKind(record, 0x74, &highlight);
-                I(record, kMode) =
-                    (*reinterpret_cast<u32 *>(
-                         static_cast<u8 *>(g_TitleScreen) + 0x5CU)
-                     != 0U)
-                        ? 3
-                        : 4;
+                I(record, kMode) = (ts.mode != 0U) ? 3 : 4;
                 break;
             default:
                 break;

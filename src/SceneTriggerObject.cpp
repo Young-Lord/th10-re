@@ -9,6 +9,7 @@
 #include "PlayerShotData.hpp"
 #include "PlayerStageHelpers.hpp"
 #include "PlayerTimerHelpers.hpp"
+#include "TitleScreenObject.hpp"
 
 namespace th10 {
 
@@ -444,10 +445,15 @@ void FireSceneTriggerExpireEffect(void *object)
     StoreU32(obj, kOffExpireTimer + 8U, 0U);
     StoreU32(obj, kOffExpireTimer, static_cast<u32>(-1));
 
+    // Native 0x426e3d: null-checked dword test of the title screen's
+    // +0x58 flags (bit 0x200 sound gate).
     void *const gate_owner = g_SoundGateOwner;
-    if (gate_owner != 0
-        && (LoadU32(static_cast<u8 *>(gate_owner), 0x58U) & 0x200U) == 0U)
-        ReserveContextChannel(g_SoundGateContext, 4U, 0U);
+    if (gate_owner != 0) {
+        const TitleScreen &ts =
+            *reinterpret_cast<const TitleScreen *>(gate_owner);
+        if ((ts.flags & 0x200U) == 0U)
+            ReserveContextChannel(g_SoundGateContext, 4U, 0U);
+    }
 
     LazyInitTimerBlock(obj, kOffScriptTimer);
     StoreU32(obj, kOffScriptTimer + 4U, 6U);

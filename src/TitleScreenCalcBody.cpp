@@ -17,6 +17,7 @@
 #include "Th10Platform.hpp"
 #include "TimelineAudioActions.hpp"
 #include "Th10Types.hpp"
+#include "TitleScreenObject.hpp"
 #include "ThreadControl.hpp"
 #include "TitleCalcCluster.hpp"
 #include "TitleScreenCalcBody.hpp"
@@ -146,13 +147,11 @@ void RunGameStartReset(u32 *descriptor)
 
 i32 TH10_STDCALL RunTitleScreenCalcBodyStackAbi(void *title_screen)
 {
-    u32 *const state = static_cast<u32 *>(title_screen);
-    u32 *const frame_word = &state[0x14 / 4];
-    const u32 frame = *frame_word;
-    u32 *const flags_word = &state[0x58 / 4];
+    TitleScreen &ts = *reinterpret_cast<TitleScreen *>(title_screen);
+    const u32 frame = static_cast<u32>(ts.timer.count);
 
     if (frame == 0U) {
-        if ((*flags_word & 8U) != 0U) {
+        if ((ts.flags & 8U) != 0U) {
             // Shutdown frame: stop the secondary worker and publish the
             // shared-status gate ((~(DAT_00491ff4 >> 12) & 1) | 2).
             StopThreadControl(&g_MainChainSecondaryControl);
@@ -167,13 +166,13 @@ i32 TH10_STDCALL RunTitleScreenCalcBodyStackAbi(void *title_screen)
             // 0x800 flag and expire the HUD overlay handle at +0x9e14.
             TriggerTitleScoreAnim30EsiAbi(g_TitleScreenStatePrimary);
             TriggerTitleScoreAnim60EaxAbi(g_TitleScreenStateSecondary);
-            *flags_word |= 0x800U;
+            ts.flags |= 0x800U;
             AsciiHudOwner &hud = *reinterpret_cast<AsciiHudOwner *>(
                 *reinterpret_cast<void **>(0x47770CU));
             ExpireEntityHandleEaxAbi(&hud.first_banner_handle);
         } else {
             // First frame without the title state: run the game-start reset.
-            *flags_word &= ~0x800U;
+            ts.flags &= ~0x800U;
             u32 descriptor[16];
             for (u32 i = 0; i < 16U; ++i)
                 descriptor[i] = 0U;
@@ -193,8 +192,8 @@ i32 TH10_STDCALL RunTitleScreenCalcBodyStackAbi(void *title_screen)
         }
     } else if (frame == 30U) {
         // Restart frame, gated on the 0x800 flag.
-        if ((*flags_word & 0x800U) != 0U) {
-            *flags_word &= ~0x800U;
+        if ((ts.flags & 0x800U) != 0U) {
+            ts.flags &= ~0x800U;
             u32 descriptor[16];
             for (u32 i = 0; i < 16U; ++i)
                 descriptor[i] = 0U;
@@ -215,8 +214,7 @@ i32 TH10_STDCALL RunTitleScreenCalcBodyStackAbi(void *title_screen)
             u8 *const host = static_cast<u8 *>(g_AsciiManagerHost);
             ExpireEntityHandleEaxAbi(reinterpret_cast<u32 *>(host + 0x89A4U));
             *reinterpret_cast<u32 *>(host + 0x89A4U) = 0;
-            TickPlayerTimerEaxStackAbi(
-                reinterpret_cast<u8 *>(state) + 0x10U, 0);
+            TickPlayerTimerEaxStackAbi(&ts.timer, 0);
         }
     }
 
@@ -231,8 +229,8 @@ i32 TH10_STDCALL RunTitleScreenCalcBodyStackAbi(void *title_screen)
         FreeMainChainObject(g_TitleScreenStatePrimary);
     }
 
-    if ((*flags_word & 4U) != 0U) {
-        *flags_word |= 0x80U;
+    if ((ts.flags & 4U) != 0U) {
+        ts.flags |= 0x80U;
         return 1;
     }
 
@@ -242,7 +240,7 @@ i32 TH10_STDCALL RunTitleScreenCalcBodyStackAbi(void *title_screen)
         const u32 present_options =
             LoadU32From(reinterpret_cast<const void *>(0x474E30U));
         if ((present_options & 0x160BU) != 0U ||
-            (*flags_word & 0x70U) != 0U) {
+            (ts.flags & 0x70U) != 0U) {
             // DAT_00491fb8 = (DAT_00491ff4 & 0x1000) ? 2 : 4.
             g_SharedStatusGate =
                 (LoadU32From(reinterpret_cast<const void *>(0x491FF4U)) &
@@ -259,7 +257,7 @@ i32 TH10_STDCALL RunTitleScreenCalcBodyStackAbi(void *title_screen)
 
     UpdateInGameScoreDisplayEsiAbi(*reinterpret_cast<void **>(0x47770CU));
 
-    if ((*flags_word & (0x10U | 0x20U | 0x40U)) != 0U) {
+    if ((ts.flags & (0x10U | 0x20U | 0x40U)) != 0U) {
         return 3;
     }
 
@@ -294,7 +292,7 @@ i32 TH10_STDCALL RunTitleScreenCalcBodyStackAbi(void *title_screen)
 
     ++*reinterpret_cast<u32 *>(0x474C88U);
     ++*reinterpret_cast<u32 *>(0x474C8CU);
-    TickTimerForwardEsiAbi(reinterpret_cast<u8 *>(state) + 0x10U);
+    TickTimerForwardEsiAbi(&ts.timer);
     return 1;
 }
 

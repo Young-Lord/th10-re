@@ -2,6 +2,7 @@
 
 #include "AsciiHudRenderer.hpp"
 #include "MainChainRender.hpp"
+#include "TitleScreenObject.hpp"
 
 namespace th10 {
 
@@ -177,9 +178,8 @@ i32 UpdateAsciiOverlayFadeIn(void *context_memory)
     }
     if (tick >= WrapAdd(duration, 2))
         return 7;
-    if (g_TitleScreen == 0 ||
-        (*reinterpret_cast<const u32 *>(static_cast<const u8 *>(g_TitleScreen) +
-            0x58) & 5U) == 0)
+    const TitleScreen *const ts = static_cast<const TitleScreen *>(g_TitleScreen);
+    if (ts == 0 || (ts->flags & 5U) == 0)
         AdvanceAsciiOverlayTime(context);
     return 1;
 }
@@ -295,9 +295,8 @@ i32 UpdateAsciiOverlayKindEight(void *context_memory)
     u8 *const context = static_cast<u8 *>(context_memory);
     if (g_AsciiOverlayUpdateSuspended != 0)
         return 7;
-    if (g_TitleScreen == 0 ||
-        (*reinterpret_cast<const u32 *>(static_cast<const u8 *>(g_TitleScreen) +
-            0x58) & 0x77U) != 0)
+    const TitleScreen *const ts = static_cast<const TitleScreen *>(g_TitleScreen);
+    if (ts == 0 || (ts->flags & 0x77U) != 0)
         return 1;
 
     AdvanceAsciiOverlayTime(context);

@@ -1,6 +1,7 @@
 #include "StageObjectManager.hpp"
 
 #include "AsciiRenderModeDispatcher.hpp"
+#include "TitleScreenObject.hpp"
 
 #include <cmath>
 #include <string.h>
@@ -153,8 +154,9 @@ void *CreateStageObjectManagerEbxAbi(void *manager)
 
 i32 StageObjectManagerCalcCallbackEcxAbi(void *manager)
 {
-    u8 *main_chain = static_cast<u8 *>(g_MainChainContext);
-    const u32 state = *reinterpret_cast<const u32 *>(main_chain + 0x58);
+    const TitleScreen &ts =
+        *reinterpret_cast<const TitleScreen *>(g_MainChainContext);
+    const u32 state = ts.flags;
     if ((state & 1U) != 0U || (state & 4U) != 0U ||
         (state & 0x400U) != 0U)
         return 1;
@@ -184,8 +186,10 @@ u8 *NodeChainHead(void *manager)
 
 i32 StageObjectManagerDrawCallbackEcxAbi(void *manager)
 {
-    u8 *main_chain = static_cast<u8 *>(g_MainChainContext);
-    if ((*reinterpret_cast<const u8 *>(main_chain + 0x58) & 4U) != 0U)
+    const TitleScreen &ts =
+        *reinterpret_cast<const TitleScreen *>(g_MainChainContext);
+    // Native test is a byte load at +0x58 (test byte ptr [eax+58h], 4).
+    if ((*reinterpret_cast<const u8 *>(&ts.flags) & 4U) != 0U)
         return 1;
     typedef void (*NotifyThunk)(void *);
     for (u8 *node = NodeChainHead(manager); node != 0;

@@ -9,6 +9,7 @@
 #include "GameManagerState.hpp"
 #include "StageEffectHelpers.hpp"
 #include "Th10Types.hpp"
+#include "TitleScreenObject.hpp"
 #include "PauseEnterSetup.hpp"
 
 namespace th10 {
@@ -51,6 +52,7 @@ inline u32 FloatBits(float value)
 void RunPauseEnterSetupStackAbi(void *record_arg)
 {
     u8 *const record = static_cast<u8 *>(record_arg);
+    TitleScreen &ts = *reinterpret_cast<TitleScreen *>(g_TitleScreen);
 
     StoreU32At(record, 0x04, 1U); // mode = 1
 
@@ -70,7 +72,7 @@ void RunPauseEnterSetupStackAbi(void *record_arg)
     StoreU32At(record, 0x10, 0xFFFFFFFFU);
 
     // Latch the pause bit into the game state object.
-    StoreU32At(g_TitleScreen, 0x58, LoadU32At(g_TitleScreen, 0x58) | 0x10U);
+    ts.flags |= 0x10U;
 
     // Menu effect VM (script 0) from the ASCII manager's ANM manager-work.
     // Native binds the script with ECX = [DAT_004776e0]+0x8998; the semantic
@@ -114,7 +116,7 @@ void RunPauseEnterSetupStackAbi(void *record_arg)
     // When [DAT_00477810]+0x5c is set, release the kind-0x75 child of
     // handle A. The native releases unconditionally through the (possibly
     // zero) resolved handle.
-    if (LoadU32At(g_TitleScreen, 0x5c) != 0U) {
+    if (ts.mode != 0U) {
         u32 child_handle = 0;
         u32 *const out =
             ResolveChildEntityByKind(handle_a, 0x75, &child_handle);

@@ -9,6 +9,7 @@
 // two scheduler callbacks (0x406770 calc, 0x4067a0 draw).
 
 #include "Th10Types.hpp"
+#include "TitleScreenObject.hpp"
 #include "CallbackScheduler.hpp"
 #include "ManagerWork.hpp"
 #include "EntityHelpers.hpp"
@@ -199,11 +200,10 @@ i32 BindEffectTriggerGroupsEcxEcxAbi(void *root) {
             continue;
         }
         bool skip_bind = false;
-        const bool running = (g_TitleScreen != 0) &&
-            (((*reinterpret_cast<u32 *>(
-                   static_cast<u8 *>(g_TitleScreen) + 0x58) & 2) != 0) &&
-             ((*reinterpret_cast<u32 *>(
-                   static_cast<u8 *>(g_TitleScreen) + 0x58) & 0x400) != 0));
+        const TitleScreen *const ts =
+            static_cast<const TitleScreen *>(g_TitleScreen);
+        const bool running = (ts != 0) &&
+            (((ts->flags & 2U) != 0U) && ((ts->flags & 0x400U) != 0U));
         if (!running) {
             if (UpdateSceneTriggerObjectStackAbi(record) != 0) {
                 skip_bind = true;
@@ -268,8 +268,9 @@ i32 TickEffectTriggerGroupEcxEaxAbi(void *root, u32 group) {
 // returns 1 without touching the groups; otherwise runs the bind pass.
 i32 EffectTriggerGroupCalcCallbackEcxEcxAbi(void *root) {
     if (g_TitleScreen != 0) {
-        const u32 mode_flags = *reinterpret_cast<u32 *>(
-            static_cast<u8 *>(g_TitleScreen) + 0x58);
+        const TitleScreen &ts =
+            *reinterpret_cast<const TitleScreen *>(g_TitleScreen);
+        const u32 mode_flags = ts.flags;
         if ((((mode_flags >> 2) | mode_flags) & 1) != 0) {
             return 1;
         }
@@ -283,8 +284,9 @@ i32 EffectTriggerGroupCalcCallbackEcxEcxAbi(void *root) {
 // (0x4) set; otherwise ticks all six groups. Always returns 1.
 i32 EffectTriggerGroupDrawCallbackEcxEcxAbi(void *root) {
     if (g_TitleScreen != 0) {
-        if ((*reinterpret_cast<u32 *>(
-                 static_cast<u8 *>(g_TitleScreen) + 0x58) & 0x4) != 0) {
+        const TitleScreen &ts =
+            *reinterpret_cast<const TitleScreen *>(g_TitleScreen);
+        if ((ts.flags & 0x4U) != 0) {
             return 1;
         }
     }

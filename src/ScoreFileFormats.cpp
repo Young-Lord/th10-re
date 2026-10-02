@@ -8,6 +8,7 @@
 #include <time.h>
 
 #include "AsciiManager.hpp"
+#include "GameManagerObject.hpp"
 #include "PackedArchive.hpp"
 #include "ScoreFileFormats.hpp"
 #include "Th10Types.hpp"
@@ -256,11 +257,10 @@ void *DecodePackedSectionEcxStackAbi(const char *section_name,
 // TH10 0x00433b30. Native stdcall (retn 4) body.
 i32 RunManagerDrawBody10(void *manager)
 {
-    u8 *const bytes = static_cast<u8 *>(manager);
-    u32 *const words = reinterpret_cast<u32 *>(bytes);
+    GameManager &mgr = *reinterpret_cast<GameManager *>(manager);
     AsciiManager &ascii = *static_cast<AsciiManager *>(g_AsciiManagerHost);
 
-    const i32 mode = static_cast<i32>(words[0x20 / 4]);
+    const i32 mode = mgr.sub_state;
     if (mode == 2) {
         // Replay list: 25 rows, x = 56, y starting at 80 stepping 15.
         ascii.text_mode = 1;
@@ -269,13 +269,11 @@ i32 RunManagerDrawBody10(void *manager)
         position.y = 80.0f;
         position.z = 0.0f;
 
-        const u32 selected_row = words[0x24 / 4];
-        u32 *const record_slots =
-            words + (0x59e4 / 4);
+        const u32 selected_row = static_cast<u32>(mgr.cursor_a.value);
         for (u32 row = 0; row < 25; ++row) {
             ascii.color = EntryColor(selected_row, row);
             u32 *const record =
-                reinterpret_cast<u32 *>(record_slots[row]);
+                reinterpret_cast<u32 *>(mgr.replay_parse_handles[row]);
             if (record != 0) {
                 const u8 *const header =
                     reinterpret_cast<const u8 *>(record[0x18 / 4]);
@@ -300,16 +298,18 @@ i32 RunManagerDrawBody10(void *manager)
         }
     } else if (mode == 3) {
         // Selected high-score detail line.
-        const i32 selected = static_cast<i32>(words[0x59dc / 4]);
+        const i32 selected = static_cast<i32>(mgr.selected_replay_index);
         Float3 position;
         position.x = 56.0f;
         position.y = 240.0f; // TH10 flt_470BFC
         position.z = 0.0f;
-        if (static_cast<i32>(words[0x2b4 / 4]) < 10) {
+        if (mgr.frame_timer.count < 10) {
             // Scroll-in animation: y = (10 - mgr+0x2B8) * (15*sel + 0x50 -
-            // 240) * 0.1 + 240 (TH10 flt_470C1C / flt_470C18).
+            // 240) * 0.1 + 240 (TH10 flt_470C1C / flt_470C18). The float is
+            // the bit pattern of frame_timer.accum (+0x2b8).
             const float animated =
-                (10.0f - *reinterpret_cast<const float *>(bytes + 0x2b8)) *
+                (10.0f -
+                 *reinterpret_cast<const float *>(&mgr.frame_timer.accum)) *
                 (static_cast<float>(15 * selected + 0x50) - 240.0f) * 0.1f;
             position.y = animated + 240.0f;
         }
@@ -330,16 +330,16 @@ i32 RunManagerDrawBody10(void *manager)
             g_ScoreStageAllName,
             *reinterpret_cast<const float *>(header + 0x48));
 
-        if (static_cast<i32>(words[0x2b4 / 4]) >= 10) {
+        if (mgr.frame_timer.count >= 10) {
             // Comment editor: the entered name plus a grid of the alphabet
             // template with an insertion caret.
             const char *const comment =
                 *reinterpret_cast<char *const *>(0x4746D8U);
             const i32 length = static_cast<i32>(strlen(comment));
             char *const name_buffer =
-                reinterpret_cast<char *>(bytes + 0x58dc);
-            const i32 cursor = static_cast<i32>(words[0x58e8 / 4]);
-            const u32 grid_cursor = words[0x58f4 / 4];
+                reinterpret_cast<char *>(mgr.name_buffer);
+            const i32 cursor = static_cast<i32>(mgr.caret_column);
+            const u32 grid_cursor = mgr.alphabet_cursor;
 
             ascii.color = 0xFFFFFFFFU;
             Float3 line_position;

@@ -1,4 +1,5 @@
 #include "EntityHelpers.hpp"
+#include "GameManagerObject.hpp"
 #include "GameManagerState.hpp"
 #include "Th10Types.hpp"
 #include "VmRecord.hpp"
@@ -25,22 +26,21 @@ extern float g_MainChainTimeScaleTarget; // TH10 flt_00476f78
 // ResetMainChainFrameStateBlock.
 void *SetGameManagerState(void *game_manager, u32 state)
 {
-    u32 *const words = static_cast<u32 *>(game_manager);
-    words[0x1c / 4] = state;
-    words[0x20 / 4] = 0;
+    GameManager &mgr = *reinterpret_cast<GameManager *>(game_manager);
+    mgr.state = static_cast<i32>(state); // +0x1c
+    mgr.sub_state = 0; // +0x20
 
-    const u32 rate_flags = words[0x2c0 / 4];
+    const u32 rate_flags = mgr.frame_timer.flags; // +0x2c0
     if ((rate_flags & 1U) == 0) {
-        words[0x2b4 / 4] = 0;
-        words[0x2b0 / 4] = static_cast<u32>(-999999);
-        words[0x2b8 / 4] = 0;
-        words[0x2bc / 4] =
-            reinterpret_cast<u32>(&g_MainChainTimeScaleTarget);
-        words[0x2c0 / 4] = rate_flags | 1U;
+        mgr.frame_timer.count = 0;      // +0x2b4
+        mgr.frame_timer.prev = -999999; // +0x2b0
+        mgr.frame_timer.accum = 0;      // +0x2b8
+        mgr.frame_timer.rate = &g_MainChainTimeScaleTarget; // +0x2bc
+        mgr.frame_timer.flags = rate_flags | 1U;
     }
-    words[0x2b4 / 4] = 0;
-    words[0x2b8 / 4] = 0;
-    words[0x2b0 / 4] = static_cast<u32>(-1);
+    mgr.frame_timer.count = 0;
+    mgr.frame_timer.accum = 0;
+    mgr.frame_timer.prev = -1;
     return game_manager;
 }
 
@@ -50,21 +50,20 @@ void *SetGameManagerState(void *game_manager, u32 state)
 // SetGameManagerState.
 void SetGameManagerSubState(void *game_manager, u32 sub_state)
 {
-    u32 *const words = static_cast<u32 *>(game_manager);
-    words[0x20 / 4] = sub_state;
+    GameManager &mgr = *reinterpret_cast<GameManager *>(game_manager);
+    mgr.sub_state = static_cast<i32>(sub_state); // +0x20
 
-    const u32 rate_flags = words[0x2c0 / 4];
+    const u32 rate_flags = mgr.frame_timer.flags; // +0x2c0
     if ((rate_flags & 1U) == 0) {
-        words[0x2b4 / 4] = 0;
-        words[0x2b0 / 4] = static_cast<u32>(-999999);
-        words[0x2b8 / 4] = 0;
-        words[0x2bc / 4] =
-            reinterpret_cast<u32>(&g_MainChainTimeScaleTarget);
-        words[0x2c0 / 4] = rate_flags | 1U;
+        mgr.frame_timer.count = 0;      // +0x2b4
+        mgr.frame_timer.prev = -999999; // +0x2b0
+        mgr.frame_timer.accum = 0;      // +0x2b8
+        mgr.frame_timer.rate = &g_MainChainTimeScaleTarget; // +0x2bc
+        mgr.frame_timer.flags = rate_flags | 1U;
     }
-    words[0x2b4 / 4] = 0;
-    words[0x2b8 / 4] = 0;
-    words[0x2b0 / 4] = static_cast<u32>(-1);
+    mgr.frame_timer.count = 0;
+    mgr.frame_timer.accum = 0;
+    mgr.frame_timer.prev = -1;
 }
 
 // TH10 0x0042c670. Spawn a 0x3ac-byte pool VM record bound to the given
@@ -84,6 +83,8 @@ void *SpawnManagerEntityFromScript(void *game_manager, u32 script_id)
     AssignPoolVmScriptEcxEaxAbi(vm_memory, static_cast<i32>(script_id));
     u32 assigned_id = 0;
     LinkEntityAndAssignIdEaxEsiAbi(&assigned_id, vm_memory);
+    // Kept raw: script_id is a parameter and the evidence shows slots up to
+    // 182, past the modeled 180-entry script_entity_handles array.
     manager_words[(0x2c4 + 4 * script_id) / 4] = assigned_id;
     return vm_memory;
 }
@@ -95,6 +96,7 @@ void *SpawnManagerEntityFromScript(void *game_manager, u32 script_id)
 // + 0x14.
 i32 SetManagerSlotEntityStopWord(void *game_manager, u32 slot, u16 value)
 {
+    // Kept raw: slot is a parameter and can address slots past 180.
     u32 *const manager_words = static_cast<u32 *>(game_manager);
     u8 *const entity = FindEntityEdxStackAbi(
         g_MainChainRenderOwner,
@@ -257,6 +259,7 @@ i32 ShiftManagerSelector(void *cursor_record, i32 delta)
 // EDI, slot in ESI).
 void ReleaseManagerSlotEntity(void *game_manager, u32 slot)
 {
+    // Kept raw: slot is a parameter and can address slots past 180.
     u32 *const manager_words = static_cast<u32 *>(game_manager);
     u32 *const slot_word = &manager_words[(0x2c4 + 4 * slot) / 4];
     u8 *const entity =
@@ -281,6 +284,7 @@ void ReleaseManagerSlotEntity(void *game_manager, u32 slot)
 // EAX, slot in ECX).
 void Call42C750(void *game_manager, u32 slot)
 {
+    // Kept raw: slot is a parameter and can address slots past 180.
     u32 *const manager_words = static_cast<u32 *>(game_manager);
     SetEntityStopWordByIdAndRun(
         manager_words[(0x2c4 + 4 * slot) / 4], 3);

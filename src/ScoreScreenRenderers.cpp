@@ -16,6 +16,7 @@
 #include <time.h>
 
 #include "AsciiManager.hpp"
+#include "GameManagerObject.hpp"
 #include "ScoreScreenRenderers.hpp"
 #include "Th10Types.hpp"
 
@@ -128,17 +129,16 @@ void AppendScoreFileEmptyLine(AsciiManager &ascii, const Float3 &position,
 // per (difficulty, stage) pair (48 bytes per difficulty, stage 1..6).
 i32 RunManagerDrawBody9(void *manager)
 {
-    u8 *const bytes = static_cast<u8 *>(manager);
-    u32 *const words = reinterpret_cast<u32 *>(bytes);
+    GameManager &mgr = *reinterpret_cast<GameManager *>(manager);
 
-    const i32 state = static_cast<i32>(words[0x20 / 4]);
+    const i32 state = mgr.sub_state;
     if (state < 2 || state > 3)
         return 1;
 
     AsciiManager &ascii = *static_cast<AsciiManager *>(g_AsciiManagerHost);
     ascii.text_mode = 1U;
 
-    const i32 timer = static_cast<i32>(words[0x2b4 / 4]);
+    const i32 timer = mgr.frame_timer.count;
     if (timer < 10 && state != 3) {
         ascii.color = 0xFFFFFFFFU;
         ascii.text_mode = 0U;
@@ -158,7 +158,7 @@ i32 RunManagerDrawBody9(void *manager)
         const u8 cleared =
             save[block + pair_offset + 0x4e1U];
 
-        if (words[0x24 / 4] != stage - 1U) {
+        if (mgr.cursor_a.value != static_cast<i32>(stage - 1U)) {
             ascii.color = 0xFF808080U;
         } else if (cleared == 0U) {
             ascii.color = 0xFFDFDFDFU;
@@ -166,7 +166,7 @@ i32 RunManagerDrawBody9(void *manager)
             // Selected and cleared rows blink black while the state-3
             // detail screen is up: signed-mod-4 phase of the +0x2b4 timer
             // >= 2 renders 0xFF000000 (native and/or/dec/inc idiom).
-            i32 phase = static_cast<i32>(words[0x2b4 / 4] & 0x80000003U);
+            i32 phase = static_cast<i32>(mgr.frame_timer.count & 0x80000003U);
             if (phase < 0) {
                 --phase;
                 phase |= static_cast<i32>(0xFFFFFFFCU);
@@ -201,25 +201,24 @@ i32 RunManagerDrawBody9(void *manager)
 // non-zero suppresses the record list entirely.
 i32 RunManagerDrawBodyB(void *manager)
 {
-    u8 *const bytes = static_cast<u8 *>(manager);
-    u32 *const words = reinterpret_cast<u32 *>(bytes);
+    GameManager &mgr = *reinterpret_cast<GameManager *>(manager);
 
-    if (words[0x20 / 4] != 2U)
+    if (mgr.sub_state != 2)
         return 1;
 
     AsciiManager &ascii = *static_cast<AsciiManager *>(g_AsciiManagerHost);
     ascii.text_mode = 1U;
 
     const u8 *const save = static_cast<const u8 *>(g_ScoreSaveState);
-    const u32 shot_block = 0x437cU * words[0x24 / 4];
-    const u32 difficulty = words[0xfc / 4];
+    const u32 shot_block = 0x437cU * static_cast<u32>(mgr.cursor_a.value);
+    const u32 difficulty = mgr.cursor_b_value;
 
     Float3 position;
     position.x = 48.0f;
     position.y = 160.0f;
     position.z = 0.0f;
 
-    if (words[0x1d4 / 4] == 0U) {
+    if (mgr.state_b_page_cursor == 0) {
         u32 fade = 0xffU;
         u32 record_offset = difficulty * 0xf0U;
         for (i32 row = 1; row <= 10; ++row) {
@@ -272,12 +271,10 @@ i32 RunManagerDrawBodyB(void *manager)
 // (once the +0x2b4 timer reaches 10) its seven per-stage rows.
 i32 RunManagerDrawBodyC(void *manager)
 {
-    u8 *const bytes = static_cast<u8 *>(manager);
-    u32 *const words = reinterpret_cast<u32 *>(bytes);
+    GameManager &mgr = *reinterpret_cast<GameManager *>(manager);
     AsciiManager &ascii = *static_cast<AsciiManager *>(g_AsciiManagerHost);
 
-    const i32 state = static_cast<i32>(words[0x20 / 4]);
-    u32 *const slots = words + (0x59e4 / 4);
+    const i32 state = mgr.sub_state;
 
     if (state == 2) {
         // Replay list: 25 rows, x = 58, y = 80 stepping 15 (flt_470C08).
@@ -287,11 +284,12 @@ i32 RunManagerDrawBodyC(void *manager)
         position.y = 80.0f;
         position.z = 0.0f;
 
-        const u32 selected_row = words[0x24 / 4];
+        const u32 selected_row = static_cast<u32>(mgr.cursor_a.value);
         for (u32 row = 0; row < 25; ++row) {
             ascii.color = EntryColor(selected_row, row);
             const u32 *const record =
-                reinterpret_cast<const u32 *>(slots[row]);
+                reinterpret_cast<const u32 *>(
+                    mgr.replay_parse_handles[row]);
             if (record != 0) {
                 AppendReplayLine(ascii, position,
                                  static_cast<i32>(row) + 1,
@@ -310,9 +308,10 @@ i32 RunManagerDrawBodyC(void *manager)
     } else if (state == 4) {
         // Selected-entry detail. The slot is dereferenced without a null
         // check — quirk preserved.
-        const i32 selected = static_cast<i32>(words[0x59dc / 4]);
+        const i32 selected = static_cast<i32>(mgr.selected_replay_index);
         const u32 *const record =
-            reinterpret_cast<const u32 *>(slots[selected]);
+            reinterpret_cast<const u32 *>(
+                mgr.replay_parse_handles[selected]);
         const u8 *const header =
             reinterpret_cast<const u8 *>(record[0x18 / 4]);
 
@@ -320,12 +319,13 @@ i32 RunManagerDrawBodyC(void *manager)
         position.x = 80.0f;
         position.y = 80.0f;
         position.z = 0.0f;
-        if (static_cast<i32>(words[0x2b4 / 4]) < 10) {
+        if (mgr.frame_timer.count < 10) {
             // Scroll-in animation:
             // y = (10 - mgr+0x2B8) * (15 * selected) * 0.1 + 80
-            // (TH10 flt_470C1C / flt_470C18 / flt_470C28).
+            // (TH10 flt_470C1C / flt_470C18 / flt_470C28). The float is
+            // the bit pattern of frame_timer.accum (+0x2b8).
             const float animated =
-                *reinterpret_cast<const float *>(bytes + 0x2b8);
+                *reinterpret_cast<const float *>(&mgr.frame_timer.accum);
             position.y = (10.0f - animated) *
                              static_cast<float>(15 * selected) * 0.1f +
                          80.0f;
@@ -334,7 +334,7 @@ i32 RunManagerDrawBodyC(void *manager)
         ascii.text_mode = 1U;
         AppendReplayLine(ascii, position, selected + 1, header);
 
-        if (static_cast<i32>(words[0x2b4 / 4]) < 10) {
+        if (mgr.frame_timer.count < 10) {
             ascii.color = 0xFFFFFFFFU;
             ascii.text_mode = 0U;
             return 1;
@@ -351,7 +351,7 @@ i32 RunManagerDrawBodyC(void *manager)
         position.z = 0.0f;
         u32 sub_offset = 0x24U;
         for (i32 stage = 1; stage <= 7; ++stage, sub_offset += 0x24U) {
-            ascii.color = EntryColor(words[0x24 / 4],
+            ascii.color = EntryColor(static_cast<u32>(mgr.cursor_a.value),
                                      static_cast<u32>(stage) - 1U);
             const u8 *const sub =
                 reinterpret_cast<const u8 *>(record) + sub_offset;
@@ -387,17 +387,16 @@ i32 RunManagerDrawBodyC(void *manager)
 // manager+0x58ec is set.
 i32 RunManagerDrawBodyF(void *manager)
 {
-    u8 *const bytes = static_cast<u8 *>(manager);
-    u32 *const words = reinterpret_cast<u32 *>(bytes);
+    GameManager &mgr = *reinterpret_cast<GameManager *>(manager);
     AsciiManager &ascii = *static_cast<AsciiManager *>(g_AsciiManagerHost);
 
-    if (words[0x20 / 4] != 2U)
+    if (mgr.sub_state != 2)
         return 1;
 
     const u8 *const save = static_cast<const u8 *>(g_ScoreSaveState);
     const u32 block = 0x437cU * (g_PlayerShotType + 3U * g_PlayerCharacter);
     const u32 difficulty_base = 0xf0U * g_CurrentDifficulty;
-    const u32 name_entry_done = words[0x58ec / 4];
+    const u32 name_entry_done = mgr.name_entry_done;
 
     Float3 position;
     position.x = 48.0f;
@@ -410,7 +409,8 @@ i32 RunManagerDrawBodyF(void *manager)
         if (name_entry_done != 0U) {
             // Whole list fades (0xFFvvvvFF) while no name entry is pending.
             ascii.color = 0xFF0000FFU | (((fade << 8) | fade) << 8);
-        } else if (words[0x24 / 4] == static_cast<u32>(row)) {
+        } else if (static_cast<u32>(mgr.cursor_a.value)
+                   == static_cast<u32>(row)) {
             ascii.color = 0xFFFFFFFFU;
         } else {
             ascii.color = 0xFF404040U;
@@ -435,16 +435,16 @@ i32 RunManagerDrawBodyF(void *manager)
     // cursor row (x = 84, y = 18 * cursor + 160), with the caret "_" in
     // yellow nine pixels per entered character (pulled back one cell when
     // the cursor sits past the last character, cursor == 8).
-    const i32 cursor_row = static_cast<i32>(words[0x24 / 4]);
+    const i32 cursor_row = mgr.cursor_a.value;
     const float entry_y = static_cast<float>(cursor_row) * 18.0f + 160.0f;
 
     ascii.color = 0xFFFFFFFFU;
     position.x = 84.0f; // TH10 0x42a80000 constant
     position.y = entry_y;
     ascii.AddFormatText(&position, "%s",
-                        reinterpret_cast<const char *>(bytes + 0x58dc));
+                        reinterpret_cast<const char *>(mgr.name_buffer));
 
-    const i32 cursor = static_cast<i32>(words[0x58e8 / 4]);
+    const i32 cursor = static_cast<i32>(mgr.caret_column);
     float caret_x = static_cast<float>(cursor) * 9.0f + 84.0f;
     if (cursor == 8)
         caret_x -= 9.0f; // TH10 flt_470C10
@@ -465,7 +465,7 @@ i32 RunManagerDrawBodyF(void *manager)
         position.x = 212.0f;
         position.y = 360.0f;
         for (i32 index = 0; index < length; ++index) {
-            ascii.color = EntryColor(words[0x58f4 / 4],
+            ascii.color = EntryColor(mgr.alphabet_cursor,
                                      static_cast<u32>(index));
             char cell;
             if (index < length - 3)

@@ -4,6 +4,7 @@
 #include "AsciiHudOwner.hpp"
 #include "EntityHelpers.hpp"
 #include "PlayerShotData.hpp"
+#include "TitleScreenObject.hpp"
 #include "VmRecord.hpp"
 
 namespace th10 {
@@ -172,9 +173,11 @@ void ResetAsciiHudOverlayEdiAbi(void *owner_memory)
 
     // Stage-start text layer: spawn script 79 when the active layer is 1,
     // the title screen has no pending +0x5c state, and the third gate is
-    // clear.
+    // clear. Native 0x414068 reads g_TitleScreen->mode (dword +0x5c)
+    // without a null check.
+    const TitleScreen &ts = *reinterpret_cast<const TitleScreen *>(g_TitleScreen);
     if (g_ActiveTextLayer == 1 &&
-        ReadU32(static_cast<u8 *>(g_TitleScreen), 0x5c) == 0U &&
+        ts.mode == 0U &&
         g_HudGateState474c90 == 0)
         SpawnLinkedOverlayVm(glyph_resource, 79);
 

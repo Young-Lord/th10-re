@@ -271,7 +271,9 @@ void SpawnExplosionParticleEaxEcxEfxAbi(void *manager_memory,
 void RunGameOverPathBStackAbi(void *manager_memory, i32 param)
 {
     u8 *const manager = static_cast<u8 *>(manager_memory);
-    u8 *const title_screen = *static_cast<u8 *const *>(g_TitleScreen);
+    // The 0x477810 global holds the 0x60 title-screen object pointer
+    // directly (native single dereference, TH10 0x004231d0).
+    u8 *const title_screen = static_cast<u8 *>(g_TitleScreen);
     if (title_screen != 0 && ReadInt(title_screen, 0x5c) == 1) {
         extern i32 g_PostGameOverState; // TH10 DAT_00491fb8
         extern u32 g_ReplayModeFlags; // TH10 DAT_00491ff4
@@ -291,25 +293,39 @@ void RunGameOverPathBStackAbi(void *manager_memory, i32 param)
     WriteInt(manager, 0x14, 0);
     WriteInt(manager, 0x18, 0);
     WriteInt(manager, 0x10, -1);
-    u8 *const title = *static_cast<u8 *const *>(g_TitleScreen);
+    u8 *const title = static_cast<u8 *>(g_TitleScreen);
     if (title != 0)
         WriteInt(title, 0x58, ReadInt(title, 0x58) | 0x10);
 
-    for (u32 pass = 0; pass != 2; ++pass) {
+    // Native order: spawn script 0 (id -> +0x1d8), build the overlay with
+    // that id, publish front_anm_work at +0x2c4, then spawn script 0x80
+    // (id -> +0x1d4).
+    u32 overlay_id = 0;
+    {
         void *const vm = AllocatePoolVmEsiAbi(g_MainChainRenderOwner);
         VmRecord &vm_record = *reinterpret_cast<VmRecord *>(vm);
         vm_record.flags |= 0x40000000U;
         vm_record.render_kind = 0xf;
-        AssignPoolVmScriptEcxEaxAbi(vm, pass == 0 ? 0 : 0x80);
-        u32 overlay_id = 0;
+        AssignPoolVmScriptEcxEaxAbi(vm, 0);
         AttachEffectVmToListB(&overlay_id, vm, g_MainChainRenderOwner);
-        WriteInt(manager, pass == 0 ? 0x1d8 : 0x1d4, param);
+        WriteInt(manager, 0x1d8, static_cast<i32>(overlay_id));
     }
-    (void)CreateGameOverOverlay(manager, param, 0x20, 0x10, 0x180, 0x1c0);
+    (void)CreateGameOverOverlay(g_MainChainRenderOwner,
+                                static_cast<i32>(overlay_id),
+                                0x20, 0x10, 0x180, 0x1c0);
     AsciiHudOwner &hud =
         *reinterpret_cast<AsciiHudOwner *>(g_AsciiHudOwner);
     WriteInt(manager, 0x2c4,
              static_cast<i32>(reinterpret_cast<u32>(hud.front_anm_work)));
+    {
+        void *const vm = AllocatePoolVmEsiAbi(g_MainChainRenderOwner);
+        VmRecord &vm_record = *reinterpret_cast<VmRecord *>(vm);
+        vm_record.flags |= 0x40000000U;
+        vm_record.render_kind = 0xf;
+        AssignPoolVmScriptEcxEaxAbi(vm, 0x80);
+        AttachEffectVmToListB(&overlay_id, vm, g_MainChainRenderOwner);
+        WriteInt(manager, 0x1d4, static_cast<i32>(overlay_id));
+    }
     StartBgmTrack("bgm/th10_17.wav", 0);
     extern u32 g_SoundStopFlags; // TH10 DAT_00491d78
     extern TransitionRootPartial g_TransitionRoot; // TH10 DAT_00492590

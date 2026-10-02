@@ -3,6 +3,7 @@
 #include "AsciiHudOwner.hpp"
 #include "AsciiHudRenderer.hpp"
 #include "AsciiRenderModeDispatcher.hpp"
+#include "TitleScreenObject.hpp"
 
 #include <cmath>
 
@@ -82,8 +83,9 @@ i32 RenderAsciiSceneObjectAndBarOverlay(void *object_memory)
     // DAT_00474c58 last; every failure exits through the shared return.
     if (g_TitleScreen == 0)
         return 1;
-    if (*reinterpret_cast<const signed char *>(
-            static_cast<u8 *>(g_TitleScreen) + 0x54) >= 0)
+    const TitleScreen &ts = *reinterpret_cast<const TitleScreen *>(g_TitleScreen);
+    // Native 0x42643b: signed byte at sub_object[0x30] (= object +0x54).
+    if (*reinterpret_cast<const signed char *>(&ts.sub_object[0x30]) >= 0)
         return 1;
     if (g_AsciiHudConditionalState == 0 || g_AsciiHudOwner == 0)
         return 1;

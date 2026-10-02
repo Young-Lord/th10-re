@@ -557,3 +557,18 @@ ABI 语法经验：__usercall 必须带返回位置注解（@<eax>），否则�
 - 改写:约 360 处,26 文件(HUD 20 + title state 6)。全量构建 exit 0(229 obj)。
 - 剩余热点:0x2a78 已清;下一批:game-manager 0x5acc 对象(DAT_0047784c)、
   0x60 title screen(DAT_00477810)、散点 LoadU32At/LoadFloat 访问与 gap。
+
+## 第 7 轮:GameManager / TitleScreen 字段化(2026-10-02)
+
+- 结构体:GameManager 0x5acc(DAT_0047784c;state/sub_state@0x1c/0x20、
+  ManagerCursorRecord 0xd8@0x24、frame_timer@0x2b0、script_entity_handles[180]
+  @0x2c4、replay pool[50]@0x59e4、worker ThreadControl 前缀 0x1c@0x5ab0)、
+  TitleScreen 0x60(DAT_00477810;timer@0x10、sub_object 0x34@0x24、
+  flags@0x58、mode@0x5c)。IDB 已声明并绑定两个全局。
+  证据:docs/evidence/game-manager-and-title-screen.md。
+- 语义修复:RunGameOverPathBStackAbi(0x4231d0)——0x477810 单次解引用裁决;
+  overlay VM 实体 id(而非函数参数)存 +0x1d4/0x1d8;CreateGameOverOverlay
+  改传 (render owner, id);语句顺序按原生重排。
+- 改写:约 300 处,31 文件。全量构建 exit 0(232 obj)。
+- 归属未决保留:StageEffectHost.cpp(疑 stage-host)、MenuStateHelpers
+  tween 块(疑池 VM 记录)。

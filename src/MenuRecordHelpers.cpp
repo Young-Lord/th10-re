@@ -5,6 +5,7 @@
 #include "PauseMenuModes.hpp"
 #include "PostRunReplaySaveMenu.hpp"
 #include "TimelineRenderObjects.hpp"
+#include "TitleScreenObject.hpp"
 
 #include <string.h>
 
@@ -117,13 +118,14 @@ i32 TickPauseMenuSequencerEsiAbi(void *record)
         if ((g_ScoreNameStage & 0x20U) == 0U &&
             ((g_ScoreNameTrigger & 8U) != 0U ||
              (g_ScoreNamePending & 0x10U) != 0U)) {
-            u8 *chain = static_cast<u8 *>(g_MainChainContext);
-            void *sub = *reinterpret_cast<void *const *>(chain + 8);
-            if (sub != 0 &&
-                (*reinterpret_cast<const u8 *>(
-                     static_cast<const u8 *>(sub) + 4) &
-                 2U) != 0U &&
-                *reinterpret_cast<const i32 *>(chain + 0x14) >= 30)
+            // Native: mov ecx, g_TitleScreen; mov eax,[ecx+8] (calc
+            // element); test byte [eax+4], 2; cmp dword [ecx+0x14], 0x1e.
+            const TitleScreen &ts =
+                *reinterpret_cast<const TitleScreen *>(g_MainChainContext);
+            if (ts.calc_element != 0 &&
+                (*reinterpret_cast<const u8 *>(&ts.calc_element->flags)
+                 & 2U) != 0U &&
+                ts.timer.count >= 30)
                 RunPauseEnterSetupStackAbi(record);
         }
         break;

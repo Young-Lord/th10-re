@@ -2,6 +2,7 @@
 
 #include "AsciiRenderAdapter.hpp"
 #include "RegistrationDrawOwner.hpp"
+#include "TitleScreenObject.hpp"
 
 namespace th10 {
 
@@ -142,16 +143,15 @@ void UpdateRegistrationDrawTiming(RegistrationDrawOwner *owner)
     }
 
     if (g_TitleScreen != 0) {
-        u32 *const state_flags =
-            static_cast<u32 *>(g_TitleScreen) + 0x58U / sizeof(u32);
-        if ((*state_flags & 0x14U) == 0) {
+        TitleScreen &ts = *reinterpret_cast<TitleScreen *>(g_TitleScreen);
+        if ((ts.flags & 0x14U) == 0) {
             owner->elapsed_window += k_window_seconds;
             if (sampled_fps > k_full_speed_fps)
                 owner->displayed_fps += k_window_seconds;
             else
                 owner->displayed_fps += static_cast<double>(sampled_fps);
         }
-        *state_flags &= 0xffffff7fU; // clear the 0x80 frame-request bit
+        ts.flags &= 0xffffff7fU; // clear the 0x80 frame-request bit
     }
 
     owner->frame_accumulator = 0;

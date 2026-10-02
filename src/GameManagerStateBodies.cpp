@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "EntityHelpers.hpp"
+#include "GameManagerObject.hpp"
 #include "GameManagerState.hpp"
 #include "ReplaySave.hpp"
 #include "Th10Types.hpp"
@@ -99,13 +100,14 @@ extern void SetAudioOptionEntityState(u32 value); // TH10 0x00449670
 extern i32 QueryAudioOptionAvailability(u32 option); // TH10 0x00427c70
 
 // Append `row` to the disabled-row list of the cursor record embedded at
-// manager + 0x24: the list lives at manager + 0xb4 and its index/count word
-// at manager + 0xf8 (native increments that same word in place).
-inline void AppendDisabledMenuRow(u32 *words, u32 row)
+// manager + 0x24: the list lives at cursor_a.disabled_rows (+0xb4) and its
+// index/count word at cursor_a.disabled_count (+0xf8; native increments that
+// same word in place).
+inline void AppendDisabledMenuRow(GameManager &mgr, u32 row)
 {
-    const u32 index = words[0xf8 / 4];
-    words[(0xb4 + 4 * index) / 4] = row;
-    words[0xf8 / 4] = index + 1;
+    const u32 index = mgr.cursor_a.disabled_count;
+    mgr.cursor_a.disabled_rows[index] = row;
+    mgr.cursor_a.disabled_count = index + 1;
 }
 
 } // namespace
@@ -116,24 +118,25 @@ inline void AppendDisabledMenuRow(u32 *words, u32 row)
 // and practice-entry thresholds, all against the + 0x2b4 frame counter.
 i32 RunManagerStateBody1(void *game_manager)
 {
-    u32 *const words = static_cast<u32 *>(game_manager);
-    switch (words[0x20 / 4]) {
+    GameManager &mgr = *reinterpret_cast<GameManager *>(game_manager);
+    switch (mgr.sub_state) { // +0x20
     case 0: {
         u8 *const entity = FindEntityEdxStackAbi(
-            g_MainChainRenderOwner, words[0x424 / 4]);
+            g_MainChainRenderOwner,
+            mgr.script_entity_handles[88]); // +0x424 = 0x2c4 + 4*88
         if (entity == 0) {
             SpawnManagerEntityFromScript(game_manager, 0x58);
             SpawnManagerEntityFromScript(game_manager, 0x5a);
             u32 *const cell = ResolveManagerWorkCell(
-                reinterpret_cast<void *>(words[0x18 / 4]), 0, 0xf);
-            words[0x684 / 4] = *cell;
+                mgr.anm_work_title_v, 0, 0xf); // +0x18
+            mgr.state1_handle = *cell; // +0x684
         }
         SetGameManagerSubState(game_manager, 1);
-        const i32 slot_count = static_cast<i32>(words[0x2c / 4]);
+        const i32 slot_count = mgr.cursor_a.maximum; // +0x2c
         if (slot_count == 0 || slot_count > 0)
-            words[0x24 / 4] = 0;
+            mgr.cursor_a.value = 0; // +0x24
         else
-            words[0x24 / 4] = static_cast<u32>(slot_count - 1);
+            mgr.cursor_a.value = slot_count - 1;
         break;
     }
     case 1:
@@ -145,18 +148,17 @@ i32 RunManagerStateBody1(void *game_manager)
         SetGameManagerSubState(game_manager, 4);
         ReserveContextChannel(
             reinterpret_cast<void *>(0x00492590), 0x20, 0);
-        ReleaseHandleTargetByPointer(
-            reinterpret_cast<u8 *>(game_manager) + 0x684);
+        ReleaseHandleTargetByPointer(&mgr.state1_handle); // +0x684
         return 1;
     case 4:
-        if (static_cast<i32>(words[0x2b4 / 4]) >= 0x1e)
+        if (mgr.frame_timer.count >= 0x1e) // +0x2b4
             SetGameManagerState(game_manager, 2);
         return 1;
     default:
         return 1;
     }
 
-    if (static_cast<i32>(words[0x2b4 / 4]) > 10)
+    if (mgr.frame_timer.count > 10)
         SetGameManagerSubState(game_manager, 2);
     return 1;
 }
@@ -166,41 +168,39 @@ i32 RunManagerStateBody1(void *game_manager)
 // and exit commands. The three byte settings are TH10 DAT_00491d68..6a.
 i32 RunManagerStateBody4(void *game_manager)
 {
-    u8 *const bytes = static_cast<u8 *>(game_manager);
-    u32 *const words = reinterpret_cast<u32 *>(bytes);
+    GameManager &mgr = *reinterpret_cast<GameManager *>(game_manager);
     u8 *const music_volume = reinterpret_cast<u8 *>(0x00491d68U);
     u8 *const sound_volume = reinterpret_cast<u8 *>(0x00491d69U);
     u8 *const presentation_mode = reinterpret_cast<u8 *>(0x00491d6aU);
 
-    switch (words[8]) {
+    switch (mgr.sub_state) {
     case 0:
-        words[0x2c / 4] = 6;
-        Call40AD20(0, bytes + 0x24);
+        mgr.cursor_a.maximum = 6; // +0x2c
+        Call40AD20(0, &mgr.cursor_a); // +0x24 cursor record
         SpawnManagerEntityFromScript(game_manager, 1);
         RefreshAudioOptionPresentation();
         SetGameManagerSubState(game_manager, 1);
         break;
     case 1:
-        if (static_cast<i32>(words[0x2b4 / 4]) <= 6)
+        if (mgr.frame_timer.count <= 6)
             return 1;
         SetGameManagerSubState(game_manager, 2);
-        SetEntityStopWordByIdAndRun(words[178], 3);
+        SetEntityStopWordByIdAndRun(mgr.script_entity_handles[1], 3); // +0x2c8
         SetManagerSlotEntityStopWord(game_manager, 1,
-            static_cast<u16>(words[0x24 / 4]) + 17);
+            static_cast<u16>(mgr.cursor_a.value) + 17);
         break;
     case 2: {
-        const u32 previous = words[0x24 / 4];
-        words[0x28 / 4] = previous;
+        mgr.cursor_a.previous = mgr.cursor_a.value; // +0x28 = +0x24
         if ((g_ManagerSubGateFlags & 0x10U) != 0 ||
             (g_MenuInputFlagsByte & 0x10U) != 0)
-            ShiftManagerSelector(bytes + 0x24, -1);
+            ShiftManagerSelector(&mgr.cursor_a, -1);
         if ((g_ManagerSubGateFlags & 0x20U) != 0 ||
             (g_MenuInputFlagsByte & 0x20U) != 0)
-            ShiftManagerSelector(bytes + 0x24, 1);
-        const u32 selection = words[0x24 / 4];
-        if (previous != selection) {
+            ShiftManagerSelector(&mgr.cursor_a, 1);
+        const u32 selection = static_cast<u32>(mgr.cursor_a.value);
+        if (static_cast<u32>(mgr.cursor_a.previous) != selection) {
             ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0xc, 0);
-            SetEntityStopWordByIdAndRun(words[178], 3);
+            SetEntityStopWordByIdAndRun(mgr.script_entity_handles[1], 3); // +0x2c8
             SetManagerSlotEntityStopWord(game_manager, 1,
                 static_cast<u16>(selection) + 7);
         }
@@ -210,7 +210,7 @@ i32 RunManagerStateBody4(void *game_manager)
                 ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0xb, 0);
                 SetGameManagerSubState(game_manager, 4);
             } else {
-                Call40AD20(5, bytes + 0x24);
+                Call40AD20(5, &mgr.cursor_a);
                 Call42C750(game_manager, 1);
                 SetManagerSlotEntityStopWord(game_manager, 1, 12);
                 ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0xb, 0);
@@ -265,7 +265,7 @@ i32 RunManagerStateBody4(void *game_manager)
         break;
     }
     case 4:
-        if (static_cast<i32>(words[0x2b4 / 4]) >= 6) {
+        if (mgr.frame_timer.count >= 6) {
             ReleaseManagerSlotEntity(game_manager, 1);
             SetManagerSlotEntityStopWord(game_manager, 0x5a, 8);
             SetManagerSlotEntityStopWord(game_manager, 0x5b, 8);
@@ -285,11 +285,10 @@ i32 RunManagerStateBody4(void *game_manager)
 // copy at +0x58f0 (extra) or +0x24 (main).
 i32 RunManagerStateBody6(void *game_manager)
 {
-    u8 *const bytes = static_cast<u8 *>(game_manager);
-    u32 *const words = reinterpret_cast<u32 *>(bytes);
+    GameManager &mgr = *reinterpret_cast<GameManager *>(game_manager);
     u32 *const selector = g_StageScoreSelector; // DAT_00474c74
 
-    const u32 sub_state = words[0x20 / 4];
+    const u32 sub_state = static_cast<u32>(mgr.sub_state); // +0x20
     if (sub_state > 4)
         return 1;
 
@@ -301,46 +300,46 @@ i32 RunManagerStateBody6(void *game_manager)
     switch (sub_state) {
     case 0: {
         u8 *const entity = FindEntityEdxStackAbi(
-            g_MainChainRenderOwner, words[0x43c / 4]);
+            g_MainChainRenderOwner,
+            mgr.script_entity_handles[94]); // +0x43c = 0x2c4 + 4*94
         if (entity == 0) {
             SpawnManagerEntityFromScript(game_manager, 0x5e);
             u32 *const cell = ResolveManagerWorkCell(
                 static_cast<u8 *>(g_AsciiManagerHost) + 0x8994, 8, 0xf);
-            words[0x5d0 / 4] = *cell;
+            mgr.ascii_work_handle = *cell; // +0x5d0
         }
-        words[0x2c / 4] = (selector[0] >= 4) ? 1U : 4U;
+        mgr.cursor_a.maximum = (selector[0] >= 4) ? 1 : 4; // +0x2c
         ReleaseManagerSlotEntity(game_manager, char_slot);
         SpawnManagerEntityFromScript(game_manager, char_slot);
         SetEntityStopWordByIdAndRun(
-            words[(0x2c4 + 4 * char_slot) / 4], 3);
+            mgr.script_entity_handles[char_slot], 3); // 0x2c4 + 4*slot
         SetManagerSlotEntityStopWord(
             game_manager, char_slot,
-            static_cast<u16>(words[0x24 / 4]) + 0x11);
+            static_cast<u16>(mgr.cursor_a.value) + 0x11);
         SpawnManagerEntityFromScript(game_manager, 0x62);
         SetGameManagerSubState(game_manager, 1);
-        if (static_cast<i32>(words[0x2b4 / 4]) > 6)
+        if (mgr.frame_timer.count > 6) // +0x2b4
             SetGameManagerSubState(game_manager, 2);
         break;
     }
     case 1:
-        if (static_cast<i32>(words[0x2b4 / 4]) > 6)
+        if (mgr.frame_timer.count > 6) // +0x2b4
             SetGameManagerSubState(game_manager, 2);
         break;
     case 2:
         if (selector[0] < 4) {
-            const u32 previous = words[0x24 / 4];
-            words[0x28 / 4] = previous;
+            mgr.cursor_a.previous = mgr.cursor_a.value; // +0x28 = +0x24
             if (PollMenuInputState(0x10) != 0)
-                ShiftManagerSelector(bytes + 0x24, -1);
+                ShiftManagerSelector(&mgr.cursor_a, -1);
             if (PollMenuInputState(0x20) != 0)
-                ShiftManagerSelector(bytes + 0x24, 1);
-            if (words[0x28 / 4] != words[0x24 / 4]) {
+                ShiftManagerSelector(&mgr.cursor_a, 1);
+            if (mgr.cursor_a.previous != mgr.cursor_a.value) {
                 ReserveContextChannel(
                     reinterpret_cast<void *>(0x00492590), 0xc, 0);
                 Call42C750(game_manager, char_slot);
                 SetManagerSlotEntityStopWord(
                     game_manager, char_slot,
-                    static_cast<u16>(words[0x24 / 4]) + 7);
+                    static_cast<u16>(mgr.cursor_a.value) + 7);
             }
         }
         if ((g_ManagerSubGateFlags & 0xaU) != 0) {
@@ -354,7 +353,7 @@ i32 RunManagerStateBody6(void *game_manager)
             u32 chosen_handle = 0;
             SetManagerSlotEntityStopWord(game_manager, char_slot, 6);
             if (selector[0] >= 4) {
-                u32 *const slot_id = &words[(0x2c4 + 4 * char_slot) / 4];
+                u32 *const slot_id = &mgr.script_entity_handles[char_slot];
                 u8 *const focus_entity =
                     FindEntityEdxStackAbi(g_MainChainRenderOwner, *slot_id);
                 if (focus_entity == 0)
@@ -372,8 +371,8 @@ i32 RunManagerStateBody6(void *game_manager)
                 }
             } else {
                 ResolveChildEntityByKind(
-                    &words[(0x2c4 + 4 * char_slot) / 4],
-                    static_cast<i32>(words[0x24 / 4]) + 0x6d,
+                    &mgr.script_entity_handles[char_slot],
+                    static_cast<i32>(mgr.cursor_a.value) + 0x6d,
                     &chosen_handle);
             }
             SetEntityStateWordByHandleSlot(&chosen_handle, 2);
@@ -384,29 +383,30 @@ i32 RunManagerStateBody6(void *game_manager)
         }
         break;
     case 3:
-        if (static_cast<i32>(words[0x2b4 / 4]) < 14)
+        if (mgr.frame_timer.count < 14) // +0x2b4
             return 1;
         ReleaseManagerSlotEntity(game_manager, 0x62);
         SetGameManagerState(game_manager, 7);
         if (selector[0] < 4)
-            selector[0] = words[0x24 / 4];
+            selector[0] = static_cast<u32>(mgr.cursor_a.value);
         {
-            void *const handle = RunManagerCursorHandle(bytes + 0x24);
-            words[0x2c / 4] = 2;
-            Call40AD20(g_StageTextSprites[0], handle);
+            RunManagerCursorHandle(&mgr.cursor_a);
+            mgr.cursor_a.maximum = 2; // +0x2c
+            Call40AD20(g_StageTextSprites[0], &mgr.cursor_a);
         }
         return 1;
     case 4:
-        if (static_cast<i32>(words[0x2b4 / 4]) >= 6) {
+        if (mgr.frame_timer.count >= 6) { // +0x2b4
             ReleaseManagerSlotEntity(game_manager, 0x62);
             SetManagerSlotEntityStopWord(game_manager, 0x5a, 8);
             SetManagerSlotEntityStopWord(game_manager, 0x5b, 8);
             ReleaseManagerSlotEntity(game_manager, 0x5e);
-            ReleaseHandleTargetByPointer(bytes + 0x5d0);
+            ReleaseHandleTargetByPointer(&mgr.ascii_work_handle); // +0x5d0
             SetGameManagerState(game_manager, 2);
-            selector[0] = (selector[0] >= 4) ? words[0x58f0 / 4]
-                                              : words[0x24 / 4];
-            Call44BE70(bytes + 0x24);
+            selector[0] = (selector[0] >= 4)
+                ? mgr.name_length // +0x58f0 previous-selector stash
+                : static_cast<u32>(mgr.cursor_a.value);
+            Call44BE70(&mgr.cursor_a);
         }
         break;
     default:
@@ -424,70 +424,66 @@ i32 RunManagerStateBody6(void *game_manager)
 // disabled list using the unlock bytes at DAT_00477c3c + 3*stage + 0x1d888.
 i32 RunManagerStateBody8(void *game_manager)
 {
-    u8 *const bytes = static_cast<u8 *>(game_manager);
-    u32 *const words = reinterpret_cast<u32 *>(bytes);
+    GameManager &mgr = *reinterpret_cast<GameManager *>(game_manager);
     const u32 stage = g_StageTextSprites[0];
     const u32 selector = g_StageScoreSelector[0];
-    u32 *const slot_word = &words[(0x51c + 4 * stage) / 4];
+    // Stage script id slot: +0x51c = 0x2c4 + 4*(0x96 + stage). The stage
+    // select only runs with a stage index 0..5, so 0x96 + stage stays well
+    // inside the modeled 180-entry script_entity_handles array.
+    u32 *const slot_word = &mgr.script_entity_handles[0x96 + stage];
     const u32 extra_slot = stage + 0x96;
 
-    const u32 sub_state = words[0x20 / 4];
+    const u32 sub_state = static_cast<u32>(mgr.sub_state); // +0x20
     if (sub_state > 4)
         return 1;
 
     switch (sub_state) {
     case 0: {
-        words[0x2c / 4] = 3;
+        mgr.cursor_a.maximum = 3; // +0x2c
         if (selector == 4) {
             u8 *const player = reinterpret_cast<u8 *>(0x47783cU);
-            const i32 step = static_cast<i32>(words[0x2c / 4]);
+            const i32 step = mgr.cursor_a.maximum; // +0x2c
             if (player[3 * stage + 0x1d888] == 0) {
-                if (words[0x24 / 4] == 0) {
+                if (mgr.cursor_a.value == 0) { // +0x24
                     if (player[3 * stage + 0x1d889] != 0) {
-                        words[0x24 / 4] = (step != 0)
-                            ? ((step > 1) ? 1U
-                                          : static_cast<u32>(step - 1))
-                            : 1U;
+                        mgr.cursor_a.value = (step != 0)
+                            ? ((step > 1) ? 1 : step - 1)
+                            : 1;
                     } else {
-                        words[0x24 / 4] = (step != 0)
-                            ? ((step > 2) ? 2U
-                                          : static_cast<u32>(step - 1))
-                            : 2U;
+                        mgr.cursor_a.value = (step != 0)
+                            ? ((step > 2) ? 2 : step - 1)
+                            : 2;
                     }
                 }
-                AppendDisabledMenuRow(words, 0);
+                AppendDisabledMenuRow(mgr, 0);
             }
             if (player[3 * stage + 0x1d889] == 0) {
-                if (words[0x24 / 4] == 1) {
+                if (mgr.cursor_a.value == 1) { // +0x24
                     if (player[3 * stage + 0x1d888] == 0) {
-                        words[0x24 / 4] = (step != 0)
-                            ? ((step > 2) ? 2U
-                                          : static_cast<u32>(step - 1))
-                            : 2U;
+                        mgr.cursor_a.value = (step != 0)
+                            ? ((step > 2) ? 2 : step - 1)
+                            : 2;
                     } else {
-                        words[0x24 / 4] = (step != 0)
-                            ? ((step > 0) ? 0U
-                                          : static_cast<u32>(step - 1))
-                            : 0U;
+                        mgr.cursor_a.value = (step != 0)
+                            ? ((step > 0) ? 0 : step - 1)
+                            : 0;
                     }
                 }
-                AppendDisabledMenuRow(words, 1);
+                AppendDisabledMenuRow(mgr, 1);
             }
             if (player[3 * stage + 0x1d88a] == 0) {
-                if (words[0x24 / 4] == 2) {
+                if (mgr.cursor_a.value == 2) { // +0x24
                     if (player[3 * stage + 0x1d888] == 0) {
-                        words[0x24 / 4] = (step != 0)
-                            ? ((step > 1) ? 1U
-                                          : static_cast<u32>(step - 1))
-                            : 1U;
+                        mgr.cursor_a.value = (step != 0)
+                            ? ((step > 1) ? 1 : step - 1)
+                            : 1;
                     } else {
-                        words[0x24 / 4] = (step != 0)
-                            ? ((step > 0) ? 0U
-                                          : static_cast<u32>(step - 1))
-                            : 0U;
+                        mgr.cursor_a.value = (step != 0)
+                            ? ((step > 0) ? 0 : step - 1)
+                            : 0;
                     }
                 }
-                AppendDisabledMenuRow(words, 2);
+                AppendDisabledMenuRow(mgr, 2);
             }
         }
         SpawnManagerEntityFromScript(game_manager, 0x64);
@@ -496,7 +492,7 @@ i32 RunManagerStateBody8(void *game_manager)
         SetEntityStopWordByIdAndRun(*slot_word, 3);
         SetManagerSlotEntityStopWord(
             game_manager, extra_slot,
-            static_cast<u16>(words[0x24 / 4]) + 0x11);
+            static_cast<u16>(mgr.cursor_a.value) + 0x11);
         SetGameManagerSubState(game_manager, 1);
 
         u32 *const player_words = reinterpret_cast<u32 *>(0x47783cU);
@@ -520,29 +516,29 @@ i32 RunManagerStateBody8(void *game_manager)
                 &child_handle);
             ClearEntityFlag2ByHandleSlot(&child_handle);
         }
-        if (static_cast<i32>(words[0x2b4 / 4]) > 6)
+        if (mgr.frame_timer.count > 6) // +0x2b4
             SetGameManagerSubState(game_manager, 2);
         break;
     }
     case 1:
-        if (static_cast<i32>(words[0x2b4 / 4]) > 6)
+        if (mgr.frame_timer.count > 6) // +0x2b4
             SetGameManagerSubState(game_manager, 2);
         break;
     case 2: {
-        words[0x28 / 4] = words[0x24 / 4];
+        mgr.cursor_a.previous = mgr.cursor_a.value; // +0x28 = +0x24
         if ((g_ManagerSubGateFlags & 0x10U) != 0 ||
             (g_MenuInputFlagsByte & 0x10U) != 0)
-            ShiftManagerSelector(bytes + 0x24, -1);
+            ShiftManagerSelector(&mgr.cursor_a, -1);
         if ((g_ManagerSubGateFlags & 0x20U) != 0 ||
             (g_MenuInputFlagsByte & 0x20U) != 0)
-            ShiftManagerSelector(bytes + 0x24, 1);
-        if (words[0x28 / 4] != words[0x24 / 4]) {
+            ShiftManagerSelector(&mgr.cursor_a, 1);
+        if (mgr.cursor_a.previous != mgr.cursor_a.value) {
             ReserveContextChannel(
                 reinterpret_cast<void *>(0x00492590), 0xc, 0);
             Call42C750(game_manager, extra_slot);
             SetManagerSlotEntityStopWord(
                 game_manager, extra_slot,
-                static_cast<u16>(words[0x24 / 4]) + 7);
+                static_cast<u16>(mgr.cursor_a.value) + 7);
         }
         if ((g_ManagerSubGateFlags & 0xaU) != 0) {
             SetGameManagerSubState(game_manager, 4);
@@ -557,7 +553,7 @@ i32 RunManagerStateBody8(void *game_manager)
                 reinterpret_cast<void *>(0x00492590), 0xa, 0);
             ResolveChildEntityByKind(
                 slot_word,
-                static_cast<i32>(words[0x24 / 4]) + 6 * stage + 0x7e,
+                static_cast<i32>(mgr.cursor_a.value) + 6 * stage + 0x7e,
                 &child_handle);
             SetEntityStateWordByHandleSlot(&child_handle, 6);
             return 1;
@@ -565,10 +561,10 @@ i32 RunManagerStateBody8(void *game_manager)
         break;
     }
     case 3:
-        if (static_cast<i32>(words[0x2b4 / 4]) == 10) {
+        if (mgr.frame_timer.count == 10) { // +0x2b4
             if ((*reinterpret_cast<u8 *>(0x474ca0U) & 0x10) != 0) {
-                g_StageTextSprites[1] = words[0x24 / 4];
-                RunManagerCursorHandle(bytes + 0x24);
+                g_StageTextSprites[1] = static_cast<u32>(mgr.cursor_a.value);
+                RunManagerCursorHandle(&mgr.cursor_a);
                 ReleaseManagerSlotEntity(game_manager, 0x64);
                 SetGameManagerState(game_manager, 9);
             } else {
@@ -576,10 +572,10 @@ i32 RunManagerStateBody8(void *game_manager)
                 Call43C8B0(5, 0x20, 0, 0, 0);
             }
         }
-        if (static_cast<i32>(words[0x2b4 / 4]) < 40)
+        if (mgr.frame_timer.count < 40) // +0x2b4
             return 1;
-        g_StageTextSprites[1] = words[0x24 / 4];
-        RunManagerCursorHandle(bytes + 0x24);
+        g_StageTextSprites[1] = static_cast<u32>(mgr.cursor_a.value);
+        RunManagerCursorHandle(&mgr.cursor_a);
         if ((*reinterpret_cast<u8 *>(0x474ca0U) & 0x10) != 0) {
             ReleaseManagerSlotEntity(game_manager, 0x64);
             SetGameManagerState(game_manager, 9);
@@ -599,11 +595,11 @@ i32 RunManagerStateBody8(void *game_manager)
         Call420C30(6.0f);
         return 1;
     case 4:
-        if (static_cast<i32>(words[0x2b4 / 4]) >= 6) {
+        if (mgr.frame_timer.count >= 6) { // +0x2b4
             ReleaseManagerSlotEntity(game_manager, extra_slot);
             ReleaseManagerSlotEntity(game_manager, 0x64);
             SetGameManagerState(game_manager, 7);
-            Call44BE70(bytes + 0x24);
+            Call44BE70(&mgr.cursor_a);
         }
         break;
     default:
@@ -621,40 +617,37 @@ i32 RunManagerStateBody8(void *game_manager)
 // six unlock bytes at DAT_00477c3c + 0x1d888.
 i32 RunManagerStateBody7(void *game_manager)
 {
-    u8 *const bytes = static_cast<u8 *>(game_manager);
-    u32 *const words = reinterpret_cast<u32 *>(bytes);
+    GameManager &mgr = *reinterpret_cast<GameManager *>(game_manager);
     const u32 selector = g_StageScoreSelector[0];
-    u32 *const slot_word = &words[(0x4b8 / 4)]; // slot 0x7d id
+    u32 *const slot_word = &mgr.script_entity_handles[0x7d]; // +0x4b8 = 0x2c4 + 4*0x7d
 
-    const u32 sub_state = words[0x20 / 4];
+    const u32 sub_state = static_cast<u32>(mgr.sub_state); // +0x20
     if (sub_state > 4)
         return 1;
 
     switch (sub_state) {
     case 0: {
-        words[0x2c / 4] = 2;
+        mgr.cursor_a.maximum = 2; // +0x2c
         if (selector == 4) {
             u8 *const player = reinterpret_cast<u8 *>(0x47783cU);
-            const i32 step = static_cast<i32>(words[0x2c / 4]);
+            const i32 step = mgr.cursor_a.maximum; // +0x2c
             if (player[0x1d888] == 0 && player[0x1d889] == 0 &&
                 player[0x1d88a] == 0) {
-                if (words[0x24 / 4] == 0) {
-                    words[0x24 / 4] = (step != 0)
-                        ? ((step > 1) ? 1U
-                                      : static_cast<u32>(step - 1))
-                        : 1U;
+                if (mgr.cursor_a.value == 0) { // +0x24
+                    mgr.cursor_a.value = (step != 0)
+                        ? ((step > 1) ? 1 : step - 1)
+                        : 1;
                 }
-                AppendDisabledMenuRow(words, 0);
+                AppendDisabledMenuRow(mgr, 0);
             }
             if (player[0x1d88b] == 0 && player[0x1d88c] == 0 &&
                 player[0x1d88d] == 0) {
-                if (words[0x24 / 4] == 1) {
-                    words[0x24 / 4] = (step != 0)
-                        ? ((step > 0) ? 0U
-                                      : static_cast<u32>(step - 1))
-                        : 0U;
+                if (mgr.cursor_a.value == 1) { // +0x24
+                    mgr.cursor_a.value = (step != 0)
+                        ? ((step > 0) ? 0 : step - 1)
+                        : 0;
                 }
-                AppendDisabledMenuRow(words, 1);
+                AppendDisabledMenuRow(mgr, 1);
             }
         }
         SpawnManagerEntityFromScript(game_manager, 0x63);
@@ -663,31 +656,31 @@ i32 RunManagerStateBody7(void *game_manager)
         SetEntityStopWordByIdAndRun(*slot_word, 3);
         SetManagerSlotEntityStopWord(
             game_manager, 0x7d,
-            static_cast<u16>(words[0x24 / 4]) + 0x11);
+            static_cast<u16>(mgr.cursor_a.value) + 0x11);
         SetGameManagerSubState(game_manager, 1);
-        if (static_cast<i32>(words[0x2b4 / 4]) > 6)
+        if (mgr.frame_timer.count > 6) // +0x2b4
             SetGameManagerSubState(game_manager, 2);
         break;
     }
     case 1:
-        if (static_cast<i32>(words[0x2b4 / 4]) > 6)
+        if (mgr.frame_timer.count > 6) // +0x2b4
             SetGameManagerSubState(game_manager, 2);
         break;
     case 2: {
-        words[0x28 / 4] = words[0x24 / 4];
+        mgr.cursor_a.previous = mgr.cursor_a.value; // +0x28 = +0x24
         if ((g_ManagerSubGateFlags & 0x40U) != 0 ||
             (g_MenuInputFlagsByte & 0x40U) != 0)
-            ShiftManagerSelector(bytes + 0x24, -1);
+            ShiftManagerSelector(&mgr.cursor_a, -1);
         if ((g_ManagerSubGateFlags & 0x80U) != 0 ||
             (g_MenuInputFlagsByte & 0x80U) != 0)
-            ShiftManagerSelector(bytes + 0x24, 1);
-        if (words[0x28 / 4] != words[0x24 / 4]) {
+            ShiftManagerSelector(&mgr.cursor_a, 1);
+        if (mgr.cursor_a.previous != mgr.cursor_a.value) {
             ReserveContextChannel(
                 reinterpret_cast<void *>(0x00492590), 0xc, 0);
             Call42C750(game_manager, 0x7d);
             SetManagerSlotEntityStopWord(
                 game_manager, 0x7d,
-                static_cast<u16>(words[0x24 / 4]) + 7);
+                static_cast<u16>(mgr.cursor_a.value) + 7);
         }
         if ((g_ManagerSubGateFlags & 0xaU) != 0) {
             SetGameManagerSubState(game_manager, 4);
@@ -696,22 +689,22 @@ i32 RunManagerStateBody7(void *game_manager)
             return 1;
         }
         if ((g_ManagerSubGateFlags & 0x1001U) != 0) {
-            const u32 cursor = words[0x24 / 4];
+            const i32 cursor = mgr.cursor_a.value; // +0x24
             u32 child_handle = 0;
             ResolveChildEntityByKind(
-                slot_word, static_cast<i32>(cursor) + 0x79,
+                slot_word, cursor + 0x79,
                 &child_handle);
             SetEntityStateWordByHandleSlot(&child_handle, 6);
             ResolveChildEntityByKind(
-                slot_word, static_cast<i32>(cursor) + 0x7b,
+                slot_word, cursor + 0x7b,
                 &child_handle);
             SetEntityStateWordByHandleSlot(&child_handle, 6);
             ResolveChildEntityByKind(
-                slot_word, 0x7a - static_cast<i32>(cursor),
+                slot_word, 0x7a - cursor,
                 &child_handle);
             SetEntityStateWordByHandleSlot(&child_handle, 1);
             ResolveChildEntityByKind(
-                slot_word, 0x7c - static_cast<i32>(cursor),
+                slot_word, 0x7c - cursor,
                 &child_handle);
             SetEntityStateWordByHandleSlot(&child_handle, 1);
             ReserveContextChannel(
@@ -722,33 +715,32 @@ i32 RunManagerStateBody7(void *game_manager)
         break;
     }
     case 3:
-        if (static_cast<i32>(words[0x2b4 / 4]) < 14)
+        if (mgr.frame_timer.count < 14) // +0x2b4
             return 1;
         ReleaseManagerSlotEntity(game_manager, 0x63);
         SetGameManagerState(game_manager, 8);
         {
             const u32 previous_stage = g_StageTextSprites[0];
-            const u32 new_stage = words[0x24 / 4];
+            const u32 new_stage = static_cast<u32>(mgr.cursor_a.value);
             g_StageTextSprites[0] = new_stage;
-            void *const handle = RunManagerCursorHandle(bytes + 0x24);
-            words[0x2c / 4] = 3;
+            RunManagerCursorHandle(&mgr.cursor_a);
+            mgr.cursor_a.maximum = 3; // +0x2c
             if (previous_stage == new_stage) {
-                Call40AD20(g_StageTextSprites[1], handle);
+                Call40AD20(g_StageTextSprites[1], &mgr.cursor_a);
                 return 1;
             }
-            i32 *const handle_words = static_cast<i32 *>(handle);
-            const i32 previous_value = handle_words[2];
-            handle_words[0] =
+            const i32 previous_value = mgr.cursor_a.maximum; // +0x2c
+            mgr.cursor_a.value = // +0x24
                 (previous_value > 0) ? 0 : previous_value - 1;
             return 1;
         }
     case 4:
-        if (static_cast<i32>(words[0x2b4 / 4]) >= 6) {
+        if (mgr.frame_timer.count >= 6) { // +0x2b4
             ReleaseManagerSlotEntity(game_manager, 0x7d);
             ReleaseManagerSlotEntity(game_manager, 0x63);
             SetGameManagerState(game_manager, 6);
-            g_StageTextSprites[0] = words[0x24 / 4];
-            Call44BE70(bytes + 0x24);
+            g_StageTextSprites[0] = static_cast<u32>(mgr.cursor_a.value);
+            Call44BE70(&mgr.cursor_a);
         }
         break;
     default:
@@ -842,41 +834,46 @@ void RunExtraUnlockCodeListener()
 // handles at +0x5d4; the opaque boundary calls remain explicit below.
 i32 RunManagerStateBodyB(void *game_manager)
 {
+    GameManager &mgr = *reinterpret_cast<GameManager *>(game_manager);
     u8 *const bytes = static_cast<u8 *>(game_manager);
-    u32 *const words = reinterpret_cast<u32 *>(bytes);
-    u32 *const primary_cursor = words + 9;
-    u32 *const secondary_cursor = words + 63;
-    const u32 sub_state = words[8];
+    // The secondary cursor record at +0xfc keeps a raw view: only its
+    // value/previous/maximum prefix is named (cursor_b_*), while
+    // ShiftManagerSelector also walks its disabled list/count (+0x18c/
+    // +0x1d0) and wrap flag (+0x1cc = state_b_flag_01cc, dual duty).
+    u32 *const secondary_cursor = reinterpret_cast<u32 *>(bytes + 0xfc);
+    const u32 sub_state = static_cast<u32>(mgr.sub_state); // +0x20
 
     switch (sub_state) {
     case 0: {
-        words[0x2c / 4] = 6;
-        primary_cursor[0] = 0;
-        words[0x104 / 4] = 5;
-        secondary_cursor[0] = (words[0x104 / 4] > 1)
-            ? 1U : words[0x104 / 4] - 1U;
-        words[0x1cc / 4] = 1;
+        mgr.cursor_a.maximum = 6; // +0x2c
+        mgr.cursor_a.value = 0; // +0x24
+        mgr.cursor_b_maximum = 5; // +0x104
+        mgr.cursor_b_value = // +0xfc
+            (mgr.cursor_b_maximum > 1) ? 1 : mgr.cursor_b_maximum - 1;
+        mgr.state_b_flag_01cc = 1; // +0x1cc
         const i32 difficulty = GetManagerDifficultyValue(
-            g_MainChainRenderOwner, static_cast<i32>(secondary_cursor[0]));
+            g_MainChainRenderOwner, mgr.cursor_b_value);
         const i32 option_count = (difficulty + 9) / 10 + 1;
-        words[0x1dc / 4] = static_cast<u32>(option_count);
-        words[0x1d4 / 4] = (option_count > 0) ? 0U : static_cast<u32>(
-            (difficulty + 9) / 10);
-        words[0x2a4 / 4] = 1;
+        mgr.state_b_page_count = option_count; // +0x1dc
+        mgr.state_b_page_cursor = // +0x1d4
+            (option_count > 0) ? 0 : (difficulty + 9) / 10;
+        mgr.state_b_flag_02a4 = 1; // +0x2a4
         if (FindStateBEntityByHandle(g_MainChainRenderOwner,
-                                     words[0x43c / 4]) == 0) {
+                                     mgr.script_entity_handles[94])
+            == 0) { // +0x43c = 0x2c4 + 4*94
             SpawnManagerEntityFromScript(game_manager, 0x5e);
             u32 *const work_cell = ResolveManagerWorkCell(
                 static_cast<u8 *>(g_AsciiManagerHost) + 0x8994, 8, 0xf);
-            words[0x5d0 / 4] = *work_cell;
+            mgr.ascii_work_handle = *work_cell; // +0x5d0
         }
         SpawnManagerEntityFromScript(game_manager, 0x66);
         SetGameManagerSubState(game_manager, 1);
         SpawnManagerEntityFromScript(game_manager,
-                                     primary_cursor[0] / 3 + 152);
-        SpawnManagerEntityFromScript(game_manager, primary_cursor[0] + 154);
+            static_cast<u32>(mgr.cursor_a.value) / 3 + 152);
         SpawnManagerEntityFromScript(game_manager,
-                                     secondary_cursor[0] + 160);
+            static_cast<u32>(mgr.cursor_a.value) + 154);
+        SpawnManagerEntityFromScript(game_manager,
+            static_cast<u32>(mgr.cursor_b_value) + 160);
         for (u32 script_id = 168; script_id <= 172; ++script_id)
             SpawnManagerEntityFromScript(game_manager, script_id);
         for (u32 script_id = 165; script_id <= 167; ++script_id)
@@ -885,91 +882,95 @@ i32 RunManagerStateBodyB(void *game_manager)
         // fallthrough
     }
     case 1:
-        if (static_cast<i32>(words[0x2b4 / 4]) > 6)
+        if (mgr.frame_timer.count > 6) // +0x2b4
             SetGameManagerSubState(game_manager, 2);
         break;
     case 2: {
-        const u32 old_secondary = secondary_cursor[0];
-        const u32 old_primary = primary_cursor[0];
-        secondary_cursor[1] = old_secondary;
-        words[0x1d8 / 4] = words[0x1d4 / 4];
+        const u32 old_secondary = static_cast<u32>(mgr.cursor_b_value);
+        const u32 old_primary = static_cast<u32>(mgr.cursor_a.value);
+        mgr.cursor_b_previous = mgr.cursor_b_value; // +0x100 = +0xfc
+        mgr.state_b_page_previous = mgr.state_b_page_cursor; // +0x1d8 = +0x1d4
         if ((g_ManagerSubGateFlags & 0x10U) != 0 ||
             (g_MenuInputFlagsByte & 0x10U) != 0) {
             ShiftManagerSelector(secondary_cursor, -1);
-            SetEntityStopWordByIdAndRun(words[0x56c / 4], 2);
+            SetEntityStopWordByIdAndRun(mgr.script_entity_handles[170], 2); // +0x56c
         }
         if ((g_ManagerSubGateFlags & 0x20U) != 0 ||
             (g_MenuInputFlagsByte & 0x20U) != 0) {
             ShiftManagerSelector(secondary_cursor, 1);
-            SetEntityStopWordByIdAndRun(words[0x570 / 4], 2);
+            SetEntityStopWordByIdAndRun(mgr.script_entity_handles[171], 2); // +0x570
         }
-        if (old_secondary != secondary_cursor[0]) {
+        if (old_secondary != static_cast<u32>(mgr.cursor_b_value)) {
             ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0xc, 0);
             ReleaseManagerSlotEntity(game_manager, old_secondary + 160);
             SpawnManagerEntityFromScript(game_manager,
-                                         secondary_cursor[0] + 160);
+                                         static_cast<u32>(mgr.cursor_b_value) + 160);
             // Reload the page cursor toward one (native sign-split on the
             // +0x1dc page count: zero or > 1 -> 1, == 1 -> 0).
-            if (words[0x1d4 / 4] > 0) {
-                const u32 page_count = words[0x1dc / 4];
-                words[0x1d4 / 4] =
+            if (mgr.state_b_page_cursor > 0) { // +0x1d4
+                const u32 page_count = static_cast<u32>(mgr.state_b_page_count);
+                mgr.state_b_page_cursor = // +0x1d4
                     (page_count == 0 || page_count > 1)
-                        ? 1U : page_count - 1U;
+                        ? 1 : static_cast<i32>(page_count - 1U);
                 RefreshStateBSelection(game_manager);
             }
-            words[0x1dc / 4] = static_cast<u32>(
+            mgr.state_b_page_count = static_cast<i32>( // +0x1dc
                 (GetManagerDifficultyValue(g_MainChainRenderOwner,
-                                            static_cast<i32>(secondary_cursor[0])) + 9) / 10 + 1);
+                                           mgr.cursor_b_value) + 9) / 10 + 1);
         }
         if ((g_ManagerSubGateFlags & 0x40U) != 0 ||
             (g_MenuInputFlagsByte & 0x40U) != 0) {
-            ShiftManagerSelector(primary_cursor, -1);
-            SetEntityStopWordByIdAndRun(words[0x564 / 4], 2);
+            ShiftManagerSelector(&mgr.cursor_a, -1);
+            SetEntityStopWordByIdAndRun(mgr.script_entity_handles[168], 2); // +0x564
         }
         if ((g_ManagerSubGateFlags & 0x80U) != 0 ||
             (g_MenuInputFlagsByte & 0x80U) != 0) {
-            ShiftManagerSelector(primary_cursor, 1);
-            SetEntityStopWordByIdAndRun(words[0x568 / 4], 2);
+            ShiftManagerSelector(&mgr.cursor_a, 1);
+            SetEntityStopWordByIdAndRun(mgr.script_entity_handles[169], 2); // +0x568
         }
-        if (old_primary != primary_cursor[0]) {
+        if (old_primary != static_cast<u32>(mgr.cursor_a.value)) {
             ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0xc, 0);
-            if (old_primary / 3 != primary_cursor[0] / 3) {
+            if (old_primary / 3 != static_cast<u32>(mgr.cursor_a.value) / 3) {
                 ReleaseManagerSlotEntity(game_manager,
                                          old_primary / 3 + 152);
                 SpawnManagerEntityFromScript(game_manager,
-                                             primary_cursor[0] / 3 + 152);
+                                             static_cast<u32>(mgr.cursor_a.value) / 3 + 152);
             }
             ReleaseManagerSlotEntity(game_manager, old_primary + 154);
             SpawnManagerEntityFromScript(game_manager,
-                                         primary_cursor[0] + 154);
-            if (words[0x1d4 / 4] > 0)
+                                         static_cast<u32>(mgr.cursor_a.value) + 154);
+            if (mgr.state_b_page_cursor > 0) // +0x1d4
                 RefreshStateBSelection(game_manager);
         }
         if ((g_ManagerSubGateFlags & 0x1001U) != 0) {
-            if (words[0x1d4 / 4] == 0) {
+            if (mgr.state_b_page_cursor == 0) { // +0x1d4
                 for (u32 option_index = 0; option_index < 10; ++option_index)
-                    words[(0x5d4 + 4 * option_index) / 4] =
+                    mgr.state_b_option_handles[option_index] = // +0x5d4
                         *ResolveManagerWorkCell(
                             static_cast<u8 *>(g_AsciiManagerHost) + 0x899c,
                             option_index + 23, 15);
             }
-            ShiftManagerSelector(words + 117, 1);
+            // Raw view: the page-cursor record at +0x1d4 extends past the
+            // struct's named trio; ShiftManagerSelector reads its wrap flag
+            // at +0x2a4 (= state_b_flag_02a4) and disabled count at +0x2a8.
+            ShiftManagerSelector(bytes + 0x1d4, 1);
             // On a page above zero the list render is refreshed; on the
             // first page the ten just-loaded option handles expire instead
             // (native 0x00409e50 loop over +0x5d4).
-            if (words[0x1d4 / 4] != 0) {
+            if (mgr.state_b_page_cursor != 0) { // +0x1d4
                 RefreshStateBSelection(game_manager);
             } else {
                 for (u32 option_index = 0; option_index < 10; ++option_index)
                     ReleaseHandleTargetByPointer(
-                        bytes + 0x5d4 + 4 * option_index);
+                        &mgr.state_b_option_handles[option_index]); // +0x5d4
             }
             ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0xa, 0);
         }
         // Extra-unlock code listener: active only while the difficulty
         // cursor sits on row 4 and the shot-type cursor on row 2 (native
         // 0x43237f..0x4324ce).
-        if (secondary_cursor[0] == 4 && primary_cursor[0] == 2)
+        if (static_cast<u32>(mgr.cursor_b_value) == 4 &&
+            static_cast<u32>(mgr.cursor_a.value) == 2)
             RunExtraUnlockCodeListener();
         if ((g_ManagerSubGateFlags & 0xaU) != 0) {
             SetGameManagerSubState(game_manager, 3);
@@ -977,19 +978,20 @@ i32 RunManagerStateBodyB(void *game_manager)
             for (u32 script_id = 152; script_id <= 172; ++script_id)
                 ReleaseManagerSlotEntity(game_manager, script_id);
             for (u32 option_index = 0; option_index < 10; ++option_index)
-                ReleaseHandleTargetByPointer(bytes + 0x5d4 + 4 * option_index);
+                ReleaseHandleTargetByPointer(
+                    &mgr.state_b_option_handles[option_index]); // +0x5d4
         }
         break;
     }
     case 3:
-        if (static_cast<i32>(words[0x2b4 / 4]) >= 6) {
+        if (mgr.frame_timer.count >= 6) { // +0x2b4
             ReleaseManagerSlotEntity(game_manager, 0x66);
             SetManagerSlotEntityStopWord(game_manager, 0x5a, 8);
             SetManagerSlotEntityStopWord(game_manager, 0x5b, 8);
             ReleaseManagerSlotEntity(game_manager, 0x5e);
-            ReleaseHandleTargetByPointer(bytes + 0x5d0);
+            ReleaseHandleTargetByPointer(&mgr.ascii_work_handle); // +0x5d0
             SetGameManagerState(game_manager, 2);
-            Call44BE70(bytes + 0x24);
+            Call44BE70(&mgr.cursor_a);
         }
         break;
     default:
@@ -1004,85 +1006,89 @@ i32 RunManagerStateBodyB(void *game_manager)
 // reserved for the numbered replay names.
 i32 RunManagerStateBodyC(void *game_manager)
 {
+    GameManager &mgr = *reinterpret_cast<GameManager *>(game_manager);
     u8 *const bytes = static_cast<u8 *>(game_manager);
     u32 *const words = reinterpret_cast<u32 *>(bytes);
-    u32 *const cursor = words + 9;
-    const u32 sub_state = words[8];
+    const u32 sub_state = static_cast<u32>(mgr.sub_state); // +0x20
 
     switch (sub_state) {
     case 0: {
-        words[0x2c / 4] = 25;
-        words[0x2c / 4] = 25;
-        Call40AD20(0, cursor);
+        mgr.cursor_a.maximum = 25; // +0x2c (native stores this twice)
+        mgr.cursor_a.maximum = 25; // +0x2c
+        Call40AD20(0, &mgr.cursor_a);
         SetGameManagerSubState(game_manager, 1);
         for (u32 replay_index = 1; replay_index <= 25; ++replay_index) {
             char replay_name[32];
             sprintf(replay_name, "th10_%.2d.rpy", replay_index);
+            // Kept raw: the state-C parse-handle array at +0x59d4 overlaps
+            // the result_stats modeling and has no named GameManager field.
             words[(0x59d4 + 4 * (replay_index - 1)) / 4] =
                 reinterpret_cast<u32>(ParseDemoRecord(replay_name));
         }
-        words[5750] = 0;
+        words[5750] = 0; // +0x59d8, unnamed
         break;
     }
     case 1:
-        if (static_cast<i32>(words[0x2b4 / 4]) > 6) {
+        if (mgr.frame_timer.count > 6) { // +0x2b4
             SetGameManagerSubState(game_manager, 2);
-            words[0x2b4 / 4] = 0;
-            words[0x2ac / 4] = static_cast<u32>(-1);
-            words[0x2b8 / 4] = 0;
+            mgr.frame_timer.count = 0; // +0x2b4
+            mgr.state_row_counter = -1; // +0x2ac
+            mgr.frame_timer.accum = 0; // +0x2b8
         }
         break;
     case 2: {
-        cursor[1] = cursor[0];
+        mgr.cursor_a.previous = mgr.cursor_a.value; // +0x28 = +0x24
         if ((g_ManagerSubGateFlags & 0x10U) != 0 ||
             (g_MenuInputFlagsByte & 0x10U) != 0)
-            ShiftManagerSelector(cursor, -1);
+            ShiftManagerSelector(&mgr.cursor_a, -1);
         if ((g_ManagerSubGateFlags & 0x20U) != 0 ||
             (g_MenuInputFlagsByte & 0x20U) != 0)
-            ShiftManagerSelector(cursor, 1);
-        if (cursor[1] != cursor[0])
+            ShiftManagerSelector(&mgr.cursor_a, 1);
+        if (mgr.cursor_a.previous != mgr.cursor_a.value)
             ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0xc, 0);
         if ((g_ManagerSubGateFlags & 0xaU) != 0) {
             SetGameManagerSubState(game_manager, 5);
             ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0xb, 0);
         } else if ((g_ManagerSubGateFlags & 0x1001U) != 0 &&
-                   words[(0x59d4 + 4 * cursor[0]) / 4] != 0) {
+                   words[(0x59d4 + 4 * static_cast<u32>(mgr.cursor_a.value)) / 4]
+                       != 0) { // raw +0x59d4 handle array
             SetGameManagerSubState(game_manager, 4);
-            words[5751] = cursor[0];
-            RunManagerCursorHandle(cursor);
-            words[0x2c / 4] = 7;
+            mgr.selected_replay_index = // +0x59dc
+                static_cast<u32>(mgr.cursor_a.value);
+            RunManagerCursorHandle(&mgr.cursor_a);
+            mgr.cursor_a.maximum = 7; // +0x2c
             ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0xa, 0);
         }
         break;
     }
     case 3:
-        if (static_cast<i32>(words[0x2b4 / 4]) >= 32) {
+        if (mgr.frame_timer.count >= 32) { // +0x2b4
             SetGameManagerState(game_manager, 3);
             *reinterpret_cast<u32 *>(0x00477848U) =
-                0x474788U + 48 * (words[5751] + 1);
-            *reinterpret_cast<u32 *>(0x474c7cU) = words[5751] + 1;
-            *reinterpret_cast<u32 *>(0x474c80U) = words[5751] + 1;
+                0x474788U + 48 * (mgr.selected_replay_index + 1); // +0x59dc
+            *reinterpret_cast<u32 *>(0x474c7cU) = mgr.selected_replay_index + 1;
+            *reinterpret_cast<u32 *>(0x474c80U) = mgr.selected_replay_index + 1;
             Call420C30(6.0f);
             g_SharedStatusGate = 12;
         }
         break;
     case 4:
-        if (static_cast<i32>(words[0x2b4 / 4]) >= 15) {
+        if (mgr.frame_timer.count >= 15) { // +0x2b4
             SetGameManagerSubState(game_manager, 2);
-            Call44BE70(cursor);
+            Call44BE70(&mgr.cursor_a);
         }
         break;
     case 5:
-        if (static_cast<i32>(words[0x2b4 / 4]) >= 6) {
+        if (mgr.frame_timer.count >= 6) { // +0x2b4
             for (u32 replay_index = 0; replay_index < 50; ++replay_index) {
                 void *const replay = reinterpret_cast<void *>(
-                    words[(0x59d4 + 4 * replay_index) / 4]);
+                    words[(0x59d4 + 4 * replay_index) / 4]); // raw +0x59d4
                 if (replay != 0)
                     DestroyDemoParseObject(replay);
                 words[(0x59d4 + 4 * replay_index) / 4] = 0;
             }
             SetGameManagerState(game_manager, 2);
-            Call44BE70(cursor);
+            Call44BE70(&mgr.cursor_a);
         }
         break;
     default:
@@ -1096,24 +1102,26 @@ i32 RunManagerStateBodyC(void *game_manager)
 // buffer at manager+0x58dc; the active grid cursor lives at +0x58f4.
 i32 RunManagerStateBodyF(void *game_manager)
 {
-    u8 *const bytes = static_cast<u8 *>(game_manager);
-    u32 *const words = reinterpret_cast<u32 *>(bytes);
-    u32 *const primary_cursor = words + 9;
-    u32 *const grid_cursor = words + (0x58f4 / 4);
-    char *const name_buffer = reinterpret_cast<char *>(bytes + 0x58dc);
+    GameManager &mgr = *reinterpret_cast<GameManager *>(game_manager);
+    // The 13-column grid cursor record at +0x58f4 keeps a raw view: only its
+    // value/previous pair is named (alphabet_cursor/previous) while
+    // ShiftManagerSelector walks its wrap/disabled words past that prefix.
+    u32 *const grid_cursor = reinterpret_cast<u32 *>(&mgr.alphabet_cursor);
+    char *const name_buffer = reinterpret_cast<char *>(mgr.name_buffer); // +0x58dc
     const char *const alphabet = reinterpret_cast<const char *>(0x4746d8U);
 
-    switch (words[8]) {
+    switch (static_cast<u32>(mgr.sub_state)) { // +0x20
     case 0: {
-        words[0x2c / 4] = 30;
+        mgr.cursor_a.maximum = 30; // +0x2c
         StartBgmQueue(0, "bgm/th10_17.wav");
         ResetBgmQueue(0, 17);
         if (FindEntityEdxStackAbi(g_MainChainRenderOwner,
-                                  words[0x43c / 4]) == 0) {
+                                  mgr.script_entity_handles[94])
+            == 0) { // +0x43c = 0x2c4 + 4*94
             SpawnManagerEntityFromScript(game_manager, 0x5e);
             u32 *const work_cell = ResolveManagerWorkCell(
                 static_cast<u8 *>(g_AsciiManagerHost) + 0x8994, 8, 0xf);
-            words[0x5d0 / 4] = *work_cell;
+            mgr.ascii_work_handle = *work_cell; // +0x5d0
         }
         SpawnManagerEntityFromScript(game_manager, 0x68);
         SetGameManagerSubState(game_manager, 1);
@@ -1134,53 +1142,53 @@ i32 RunManagerStateBodyF(void *game_manager)
             8U + 0x437CU * score_slot;
         const i32 initial_cursor = InsertScoreRecordEdi(score_table);
         if (initial_cursor < 0) {
-            Call40AD20(0, primary_cursor);
-            words[0x58ec / 4] = 1;
+            Call40AD20(0, &mgr.cursor_a);
+            mgr.name_entry_done = 1; // +0x58ec
         } else {
             ResetNameInputPresentation(0);
-            Call40AD20(static_cast<u32>(initial_cursor), primary_cursor);
-            words[0x590c / 4] = static_cast<u32>(strlen(alphabet));
+            Call40AD20(static_cast<u32>(initial_cursor), &mgr.cursor_a);
+            mgr.alphabet_length = static_cast<u32>(strlen(alphabet)); // +0x590c
             strncpy(name_buffer,
                     reinterpret_cast<const char *>(0x47783cU + 120952), 8);
             name_buffer[8] = '\0';
-            words[0x58f0 / 4] = static_cast<u32>(strlen(name_buffer));
-            words[0x58ec / 4] = 0;
+            mgr.name_length = static_cast<u32>(strlen(name_buffer)); // +0x58f0
+            mgr.name_entry_done = 0; // +0x58ec
         }
         break;
     }
     case 1:
-        if (static_cast<i32>(words[0x2b4 / 4]) > 6)
+        if (mgr.frame_timer.count > 6) // +0x2b4
             SetGameManagerSubState(game_manager, 2);
         break;
     case 2: {
-        if (words[0x58ec / 4] == 0) {
-            grid_cursor[1] = grid_cursor[0];
+        if (mgr.name_entry_done == 0) { // +0x58ec
+            mgr.alphabet_cursor_previous = mgr.alphabet_cursor; // +0x58f8 = +0x58f4
             if (PollMenuInputState(0x10))
                 ShiftManagerSelector(grid_cursor, -13);
             if (PollMenuInputState(0x20))
                 ShiftManagerSelector(grid_cursor, 13);
             if (PollMenuInputState(0x40))
                 ShiftManagerSelector(grid_cursor,
-                    (grid_cursor[0] % 13 != 0) ? -1 : 12);
+                    (mgr.alphabet_cursor % 13 != 0) ? -1 : 12);
             if (PollMenuInputState(0x80))
                 ShiftManagerSelector(grid_cursor,
-                    (grid_cursor[0] % 13 == 12) ? -12 : 1);
-            if (grid_cursor[1] != grid_cursor[0])
+                    (mgr.alphabet_cursor % 13 == 12) ? -12 : 1);
+            if (mgr.alphabet_cursor_previous != mgr.alphabet_cursor)
                 ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0xc, 0);
         }
 
         if ((g_ManagerSubGateFlags & 0x1001U) != 0) {
             const u32 alphabet_length = static_cast<u32>(strlen(alphabet));
-            const u32 selection = grid_cursor[0];
-            u32 name_length = words[0x58f0 / 4];
-            if (words[0x58ec / 4] != 0) {
+            const u32 selection = mgr.alphabet_cursor; // +0x58f4
+            u32 name_length = mgr.name_length; // +0x58f0
+            if (mgr.name_entry_done != 0) { // +0x58ec
                 SetGameManagerSubState(game_manager, 3);
             } else if (selection < alphabet_length - 3) {
                 if (name_length < 8) {
                     name_buffer[name_length] = alphabet[selection];
                     ++name_length;
                     name_buffer[name_length] = '\0';
-                    words[0x58f0 / 4] = name_length;
+                    mgr.name_length = name_length; // +0x58f0
                     if (name_length == 8)
                         Call40AD20(alphabet_length - 1, grid_cursor);
                 }
@@ -1189,13 +1197,13 @@ i32 RunManagerStateBodyF(void *game_manager)
                     name_buffer[name_length] = ' ';
                     ++name_length;
                     name_buffer[name_length] = '\0';
-                    words[0x58f0 / 4] = name_length;
+                    mgr.name_length = name_length; // +0x58f0
                 }
             } else if (selection == alphabet_length - 2) {
                 if (name_length != 0) {
                     --name_length;
                     name_buffer[name_length] = '\0';
-                    words[0x58f0 / 4] = name_length;
+                    mgr.name_length = name_length; // +0x58f0
                 }
             } else if (selection == alphabet_length - 1) {
                 SetGameManagerSubState(game_manager, 3);
@@ -1204,12 +1212,12 @@ i32 RunManagerStateBodyF(void *game_manager)
         }
 
         if ((g_ManagerSubGateFlags & 0xaU) != 0) {
-            if (words[0x58ec / 4] != 0) {
+            if (mgr.name_entry_done != 0) { // +0x58ec
                 SetGameManagerSubState(game_manager, 3);
                 ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0xa, 0);
-            } else if (words[0x58f0 / 4] != 0) {
-                const u32 name_length = words[0x58f0 / 4] - 1;
-                words[0x58f0 / 4] = name_length;
+            } else if (mgr.name_length != 0) { // +0x58f0
+                const u32 name_length = mgr.name_length - 1;
+                mgr.name_length = name_length; // +0x58f0
                 name_buffer[name_length] = '\0';
                 ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0xb, 0);
             }
@@ -1217,7 +1225,7 @@ i32 RunManagerStateBodyF(void *game_manager)
         break;
     }
     case 3:
-        if (static_cast<i32>(words[0x2b4 / 4]) >= 6) {
+        if (mgr.frame_timer.count >= 6) { // +0x2b4
             ReleaseManagerSlotEntity(game_manager, 0x68);
             ReleaseManagerSlotEntity(game_manager, g_StageTextSprites[0] + 152);
             ReleaseManagerSlotEntity(game_manager,
@@ -1239,85 +1247,95 @@ i32 RunManagerStateBodyF(void *game_manager)
 // leaving record decoding and text rasterization at their dedicated leaves.
 i32 RunManagerStateBodyE(void *game_manager)
 {
+    GameManager &mgr = *reinterpret_cast<GameManager *>(game_manager);
     u8 *const bytes = static_cast<u8 *>(game_manager);
     u32 *const words = reinterpret_cast<u32 *>(bytes);
-    u32 *const cursor = words + 9;
+    // Raw views: the row/header entity id slots at +0x614/+0x664 correspond
+    // to script ids 212+ / 232+, past the modeled 180-entry
+    // script_entity_handles array, and have no named fields.
     u32 *const row_entities = words + (0x614 / 4);
     u32 *const header_entities = words + (0x664 / 4);
-    const u32 sub_state = words[8];
+    const u32 sub_state = static_cast<u32>(mgr.sub_state); // +0x20
 
     switch (sub_state) {
     case 0:
-        if (words[0x2b4 / 4] == 1) {
-            words[0x2c / 4] = 6;
-            Call40AD20(0, cursor);
+        if (mgr.frame_timer.count == 1) { // +0x2b4
+            mgr.cursor_a.maximum = 6; // +0x2c
+            Call40AD20(0, &mgr.cursor_a);
             if (FindEntityEdxStackAbi(g_MainChainRenderOwner,
-                                      words[0x440 / 4]) == 0) {
+                                      mgr.script_entity_handles[95])
+                == 0) { // +0x440 = 0x2c4 + 4*95
                 SpawnManagerEntityFromScript(game_manager, 0x5f);
                 u32 *const work_cell = ResolveManagerWorkCell(
                     static_cast<u8 *>(g_AsciiManagerHost) + 0x8994, 8, 0xf);
-                words[0x5d0 / 4] = *work_cell;
+                mgr.ascii_work_handle = *work_cell; // +0x5d0
             }
             SpawnManagerEntityFromScript(game_manager, 0x67);
             void *score_records = 0;
             const i32 record_count = LoadScoreDisplayRecords(&score_records, 0);
-            words[0x5aac / 4] = reinterpret_cast<u32>(score_records);
-            words[0x2c / 4] = (record_count > 0) ?
-                static_cast<u32>(record_count) : 0;
-            words[0x594 / 4] = words[0x2c / 4];
-            words[0x58d8 / 4] = 0;
+            mgr.owned_buffer = score_records; // +0x5aac
+            mgr.cursor_a.maximum = // +0x2c
+                (record_count > 0) ? record_count : 0;
+            mgr.state_e_row_count = mgr.cursor_a.maximum; // +0x594
+            mgr.state_e_window_start = 0; // +0x58d8
             for (u32 header_index = 0; header_index < 8; ++header_index) {
                 SpawnManagerEntityFromScript(game_manager, header_index + 39);
                 header_entities[header_index] =
-                    words[(0x2c4 + 4 * (header_index + 39)) / 4];
+                    mgr.script_entity_handles[header_index + 39];
             }
             SetGameManagerSubState(game_manager, 1);
         }
         break;
     case 1:
-        if ((words[0x2b4 / 4] & 1U) == 0 && words[0x68c / 4] < 8) {
+        if ((static_cast<u32>(mgr.frame_timer.count) & 1U) == 0 &&
+            mgr.staged_text_counter < 8) { // +0x68c
             SpawnScoreDisplayText();
-            ++words[0x68c / 4];
+            ++mgr.staged_text_counter; // +0x68c
         }
-        if (static_cast<i32>(words[0x2b4 / 4]) > 4)
+        if (mgr.frame_timer.count > 4) // +0x2b4
             SetGameManagerSubState(game_manager, 2);
         break;
     case 2: {
-        if ((words[0x2b4 / 4] & 1U) == 0 && words[0x68c / 4] < 8) {
+        if ((static_cast<u32>(mgr.frame_timer.count) & 1U) == 0 &&
+            mgr.staged_text_counter < 8) { // +0x68c
             SpawnScoreDisplayText();
-            ++words[0x68c / 4];
+            ++mgr.staged_text_counter; // +0x68c
         }
-        const u32 previous = cursor[0];
-        cursor[1] = previous;
+        const u32 previous = static_cast<u32>(mgr.cursor_a.value);
+        mgr.cursor_a.previous = mgr.cursor_a.value; // +0x28 = +0x24
         if ((g_ManagerSubGateFlags & 0x10U) != 0 ||
             (g_MenuInputFlagsByte & 0x10U) != 0)
-            ShiftManagerSelector(cursor, -1);
+            ShiftManagerSelector(&mgr.cursor_a, -1);
         if ((g_ManagerSubGateFlags & 0x20U) != 0 ||
             (g_MenuInputFlagsByte & 0x20U) != 0)
-            ShiftManagerSelector(cursor, 1);
-        if (previous != cursor[0]) {
+            ShiftManagerSelector(&mgr.cursor_a, 1);
+        if (previous != static_cast<u32>(mgr.cursor_a.value)) {
             ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0xc, 0);
-            u32 window_start = words[0x58d8 / 4];
-            if (cursor[0] < window_start)
-                window_start = cursor[0];
-            else if (cursor[0] >= window_start + 10)
-                window_start = cursor[0] - 9;
-            words[0x58d8 / 4] = window_start;
-            for (u32 row_index = 0; row_index < words[0x594 / 4]; ++row_index) {
+            u32 window_start = mgr.state_e_window_start; // +0x58d8
+            if (static_cast<u32>(mgr.cursor_a.value) < window_start)
+                window_start = static_cast<u32>(mgr.cursor_a.value);
+            else if (static_cast<u32>(mgr.cursor_a.value) >= window_start + 10)
+                window_start = static_cast<u32>(mgr.cursor_a.value) - 9;
+            mgr.state_e_window_start = window_start; // +0x58d8
+            for (u32 row_index = 0;
+                 row_index < static_cast<u32>(mgr.state_e_row_count);
+                 ++row_index) { // +0x594
                 u8 *const entity = FindEntityEdxStackAbi(
                     g_MainChainRenderOwner, row_entities[row_index]);
                 if (entity != 0)
                     UpdateScoreDisplayEntity(entity,
-                        (row_index == cursor[0]) ? 2U : 3U);
+                        (row_index == static_cast<u32>(mgr.cursor_a.value))
+                            ? 2U : 3U);
             }
         }
         if ((g_ManagerSubGateFlags & 0xaU) != 0) {
-            void *const score_records = reinterpret_cast<void *>(words[0x5aac / 4]);
-            if (score_records != 0)
-                ReleaseScoreDisplayRecord(score_records);
-            words[0x5aac / 4] = 0;
-            Call44BE70(cursor);
-            for (u32 row_index = 0; row_index < words[0x594 / 4]; ++row_index)
+            if (mgr.owned_buffer != 0) // +0x5aac
+                ReleaseScoreDisplayRecord(mgr.owned_buffer);
+            mgr.owned_buffer = 0; // +0x5aac
+            Call44BE70(&mgr.cursor_a);
+            for (u32 row_index = 0;
+                 row_index < static_cast<u32>(mgr.state_e_row_count);
+                 ++row_index) // +0x594
                 ReleaseManagerSlotEntity(game_manager, row_index + 173);
             for (u32 header_index = 0; header_index < 8; ++header_index)
                 ReleaseManagerSlotEntity(game_manager, header_index + 39);
@@ -1337,61 +1355,62 @@ i32 RunManagerStateBodyE(void *game_manager)
 // reparses its slot, and then returns to replay selection.
 i32 RunManagerStateBody10(void *game_manager)
 {
-    u8 *const bytes = static_cast<u8 *>(game_manager);
-    u32 *const words = reinterpret_cast<u32 *>(bytes);
-    u32 *const replay_cursor = words + 9;
-    u32 *const grid_cursor = words + (0x58f4 / 4);
-    char *const name_buffer = reinterpret_cast<char *>(bytes + 0x58dc);
+    GameManager &mgr = *reinterpret_cast<GameManager *>(game_manager);
+    // Grid cursor raw view (see RunManagerStateBodyF): the 13-column record
+    // at +0x58f4 extends past the named alphabet_cursor/previous pair.
+    u32 *const grid_cursor = reinterpret_cast<u32 *>(&mgr.alphabet_cursor);
+    char *const name_buffer = reinterpret_cast<char *>(mgr.name_buffer); // +0x58dc
     const char *const alphabet = reinterpret_cast<const char *>(0x4746d8U);
 
-    switch (words[8]) {
+    switch (static_cast<u32>(mgr.sub_state)) { // +0x20
     case 0:
-        words[0x2c / 4] = 25;
-        words[0xf4 / 4] = 1;
-        Call40AD20(0, replay_cursor);
+        mgr.cursor_a.maximum = 25; // +0x2c
+        mgr.cursor_a.wrap_flag = 1; // +0xf4 cursor-record wrap duty
+        Call40AD20(0, &mgr.cursor_a);
         *reinterpret_cast<u32 *>(0x477848U) = 0x474908U;
         *reinterpret_cast<u32 *>(0x474c7cU) = 8;
         *reinterpret_cast<u32 *>(0x474c80U) = 8;
         for (u32 replay_index = 1; replay_index <= 25; ++replay_index) {
             char replay_name[32];
             sprintf(replay_name, "th10_%.2d.rpy", replay_index);
-            words[(0x59e4 + 4 * (replay_index - 1)) / 4] =
+            mgr.replay_parse_handles[replay_index - 1] = // +0x59e4
                 reinterpret_cast<u32>(ParseDemoRecord(replay_name));
         }
         SpawnManagerEntityFromScript(game_manager, 0x69);
         SetGameManagerSubState(game_manager, 1);
         break;
     case 1:
-        if (static_cast<i32>(words[0x2b4 / 4]) > 6)
+        if (mgr.frame_timer.count > 6) // +0x2b4
             SetGameManagerSubState(game_manager, 2);
         break;
     case 2:
-        replay_cursor[1] = replay_cursor[0];
+        mgr.cursor_a.previous = mgr.cursor_a.value; // +0x28 = +0x24
         if ((g_ManagerSubGateFlags & 0x10U) != 0 ||
             (g_MenuInputFlagsByte & 0x10U) != 0)
-            ShiftManagerSelector(replay_cursor, -1);
+            ShiftManagerSelector(&mgr.cursor_a, -1);
         if ((g_ManagerSubGateFlags & 0x20U) != 0 ||
             (g_MenuInputFlagsByte & 0x20U) != 0)
-            ShiftManagerSelector(replay_cursor, 1);
-        if (replay_cursor[1] != replay_cursor[0])
+            ShiftManagerSelector(&mgr.cursor_a, 1);
+        if (mgr.cursor_a.previous != mgr.cursor_a.value)
             ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0xc, 0);
         if ((g_ManagerSubGateFlags & 0xaU) != 0) {
             SetGameManagerSubState(game_manager, 4);
             ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0xb, 0);
         } else if ((g_ManagerSubGateFlags & 0x1001U) != 0) {
-            words[0x59c4 / 4] = replay_cursor[0];
+            mgr.selected_replay_slot = // +0x59c4
+                static_cast<u32>(mgr.cursor_a.value);
             Call40AD20(0, grid_cursor);
-            words[0x590c / 4] = static_cast<u32>(strlen(alphabet));
+            mgr.alphabet_length = static_cast<u32>(strlen(alphabet)); // +0x590c
             strncpy(name_buffer,
                     reinterpret_cast<const char *>(0x47783cU + 120952), 8);
             name_buffer[8] = '\0';
-            words[0x58f0 / 4] = static_cast<u32>(strlen(name_buffer));
+            mgr.name_length = static_cast<u32>(strlen(name_buffer)); // +0x58f0
             SetGameManagerSubState(game_manager, 3);
             ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0xa, 0);
         }
         break;
     case 3: {
-        grid_cursor[1] = grid_cursor[0];
+        mgr.alphabet_cursor_previous = mgr.alphabet_cursor; // +0x58f8 = +0x58f4
         if ((g_ManagerSubGateFlags & 0x10U) != 0 ||
             (g_MenuInputFlagsByte & 0x10U) != 0)
             ShiftManagerSelector(grid_cursor, -13);
@@ -1401,17 +1420,17 @@ i32 RunManagerStateBody10(void *game_manager)
         if ((g_ManagerSubGateFlags & 0x40U) != 0 ||
             (g_MenuInputFlagsByte & 0x40U) != 0)
             ShiftManagerSelector(grid_cursor,
-                (grid_cursor[0] % 13 != 0) ? -1 : 12);
+                (mgr.alphabet_cursor % 13 != 0) ? -1 : 12);
         if ((g_ManagerSubGateFlags & 0x80U) != 0 ||
             (g_MenuInputFlagsByte & 0x80U) != 0)
             ShiftManagerSelector(grid_cursor,
-                (grid_cursor[0] % 13 == 12) ? -12 : 1);
-        if (grid_cursor[1] != grid_cursor[0])
+                (mgr.alphabet_cursor % 13 == 12) ? -12 : 1);
+        if (mgr.alphabet_cursor_previous != mgr.alphabet_cursor)
             ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0xc, 0);
 
         const u32 alphabet_length = static_cast<u32>(strlen(alphabet));
-        const u32 selection = grid_cursor[0];
-        u32 name_length = words[0x58f0 / 4];
+        const u32 selection = mgr.alphabet_cursor; // +0x58f4
+        u32 name_length = mgr.name_length; // +0x58f0
         if ((g_ManagerSubGateFlags & 0x1001U) != 0) {
             if (selection < alphabet_length - 3 && name_length < 8) {
                 name_buffer[name_length++] = alphabet[selection];
@@ -1423,25 +1442,26 @@ i32 RunManagerStateBody10(void *game_manager)
                 name_buffer[--name_length] = '\0';
             } else if (selection == alphabet_length - 1) {
                 char replay_name[32];
-                sprintf(replay_name, "th10_%.2d.rpy", words[0x59c4 / 4] + 1);
+                sprintf(replay_name, "th10_%.2d.rpy",
+                        mgr.selected_replay_slot + 1); // +0x59c4
                 ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0x2c, 0);
                 SaveReplayNameInput();
                 // TH10 0x00429b60 (native ECX = DAT_00477838 game-mode
                 // object, EDX = file name, stack = player name).
                 CommitReplaySave(g_GameModeObject, replay_name, name_buffer);
                 DestroyDemoParseObject(reinterpret_cast<void *>(
-                    words[(0x59e4 + 4 * words[0x59c4 / 4]) / 4]));
-                words[(0x59e4 + 4 * words[0x59c4 / 4]) / 4] =
+                    mgr.replay_parse_handles[mgr.selected_replay_slot]));
+                mgr.replay_parse_handles[mgr.selected_replay_slot] = // +0x59e4
                     reinterpret_cast<u32>(ParseDemoRecord(replay_name));
                 SetGameManagerSubState(game_manager, 2);
             }
-            words[0x58f0 / 4] = name_length;
+            mgr.name_length = name_length; // +0x58f0
             ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0xa, 0);
         }
         if ((g_ManagerSubGateFlags & 0xaU) != 0) {
             if (name_length != 0) {
                 name_buffer[--name_length] = '\0';
-                words[0x58f0 / 4] = name_length;
+                mgr.name_length = name_length; // +0x58f0
                 ReserveContextChannel(reinterpret_cast<void *>(0x00492590), 0xb, 0);
             } else {
                 SetGameManagerSubState(game_manager, 2);
@@ -1450,22 +1470,22 @@ i32 RunManagerStateBody10(void *game_manager)
         break;
     }
     case 4:
-        if (static_cast<i32>(words[0x2b4 / 4]) >= 6) {
+        if (mgr.frame_timer.count >= 6) { // +0x2b4
             ReleaseManagerSlotEntity(game_manager, 0x69);
             SetManagerSlotEntityStopWord(game_manager, 0x5a, 8);
             SetManagerSlotEntityStopWord(game_manager, 0x5b, 8);
             ReleaseManagerSlotEntity(game_manager, 0x5e);
-            ReleaseHandleTargetByPointer(bytes + 0x5d0);
+            ReleaseHandleTargetByPointer(&mgr.ascii_work_handle); // +0x5d0
             SetGameManagerState(game_manager, 2);
-            Call44BE70(replay_cursor);
+            Call44BE70(&mgr.cursor_a);
             StartBgmQueue(0, "bgm/th10_02.wav");
             ResetBgmQueue(0, 0);
             for (u32 replay_index = 0; replay_index < 25; ++replay_index) {
                 void *const replay = reinterpret_cast<void *>(
-                    words[(0x59e4 + 4 * replay_index) / 4]);
+                    mgr.replay_parse_handles[replay_index]); // +0x59e4
                 if (replay != 0)
                     DestroyDemoParseObject(replay);
-                words[(0x59e4 + 4 * replay_index) / 4] = 0;
+                mgr.replay_parse_handles[replay_index] = 0; // +0x59e4
             }
         }
         break;
@@ -1485,57 +1505,57 @@ i32 RunManagerStateBody10(void *game_manager)
 // or the alternate bank) into DAT_00474cac.
 i32 RunManagerStateBody9(void *game_manager)
 {
-    u8 *const bytes = static_cast<u8 *>(game_manager);
-    u32 *const words = reinterpret_cast<u32 *>(bytes);
+    GameManager &mgr = *reinterpret_cast<GameManager *>(game_manager);
     const u32 stage_script = g_StageTextSprites[0];
     const u32 difficulty = g_StageTextSprites[1];
     const u32 selector = g_StageScoreSelector[0];
 
-    switch (words[0x20 / 4]) {
+    switch (static_cast<u32>(mgr.sub_state)) { // +0x20
     case 0: {
         const u32 maximum = 6;
-        words[0x2c / 4] = maximum;
+        mgr.cursor_a.maximum = static_cast<i32>(maximum); // +0x2c
         const i32 saved = static_cast<i32>(g_StageSelectMemory);
         if (maximum != 0) {
-            words[0x24 / 4] = (saved < static_cast<i32>(maximum))
-                ? ((saved < 0) ? 0U : static_cast<u32>(saved))
-                : maximum - 1;
+            mgr.cursor_a.value = // +0x24
+                (saved < static_cast<i32>(maximum))
+                    ? ((saved < 0) ? 0 : saved)
+                    : static_cast<i32>(maximum - 1U);
         } else {
-            words[0x24 / 4] = static_cast<u32>(saved);
+            mgr.cursor_a.value = saved; // +0x24
         }
         SpawnManagerEntityFromScript(game_manager, 0x6a);
         SpawnManagerEntityFromScript(game_manager, stage_script + 0x6b);
         SetGameManagerSubState(game_manager, 1);
-        if (static_cast<i32>(words[0x2b4 / 4]) > 10)
+        if (mgr.frame_timer.count > 10) // +0x2b4
             SetGameManagerSubState(game_manager, 2);
         break;
     }
     case 1:
-        if (static_cast<i32>(words[0x2b4 / 4]) > 10)
+        if (mgr.frame_timer.count > 10) // +0x2b4
             SetGameManagerSubState(game_manager, 2);
         break;
     case 2: {
-        words[0x28 / 4] = words[0x24 / 4];
+        mgr.cursor_a.previous = mgr.cursor_a.value; // +0x28 = +0x24
         if ((g_ManagerSubGateFlags & 0x10U) != 0 ||
             (g_MenuInputFlagsByte & 0x10U) != 0)
-            ShiftManagerSelector(bytes + 0x24, -1);
+            ShiftManagerSelector(&mgr.cursor_a, -1);
         if ((g_ManagerSubGateFlags & 0x20U) != 0 ||
             (g_MenuInputFlagsByte & 0x20U) != 0)
-            ShiftManagerSelector(bytes + 0x24, 1);
-        if (words[0x28 / 4] != words[0x24 / 4])
+            ShiftManagerSelector(&mgr.cursor_a, 1);
+        if (mgr.cursor_a.previous != mgr.cursor_a.value)
             ReserveContextChannel(
                 reinterpret_cast<void *>(0x00492590), 0xc, 0);
         if ((g_ManagerSubGateFlags & 0xaU) != 0) {
             SetGameManagerSubState(game_manager, 4);
             ReserveContextChannel(
                 reinterpret_cast<void *>(0x00492590), 0xb, 0);
-            g_StageSelectMemory = words[0x24 / 4];
+            g_StageSelectMemory = static_cast<u32>(mgr.cursor_a.value);
             return 1;
         }
         if ((g_ManagerSubGateFlags & 0x1001U) == 0)
             return 1;
 
-        const u32 cursor = words[0x24 / 4];
+        const u32 cursor = static_cast<u32>(mgr.cursor_a.value); // +0x24
         const u8 *const player = reinterpret_cast<const u8 *>(0x47783cU);
         const u32 combo_index = 3 * stage_script + difficulty;
         const u8 clear_flag = player[0x437c * combo_index + 8 * cursor +
@@ -1567,16 +1587,16 @@ i32 RunManagerStateBody9(void *game_manager)
         return 1;
     }
     case 3:
-        if (static_cast<i32>(words[0x2b4 / 4]) == 10) {
+        if (mgr.frame_timer.count == 10) { // +0x2b4
             Call40C540(480.0f, 392.0f);
             Call43C8B0(5, 0x20, 0, 0, 0);
         }
-        if (static_cast<i32>(words[0x2b4 / 4]) < 40)
+        if (mgr.frame_timer.count < 40) // +0x2b4
             return 1;
-        RunManagerCursorHandle(bytes + 0x24);
+        RunManagerCursorHandle(&mgr.cursor_a);
         SetGameManagerState(game_manager, 3);
         {
-            const u32 next_stage = words[0x24 / 4] + 1;
+            const u32 next_stage = static_cast<u32>(mgr.cursor_a.value) + 1; // +0x24
             *reinterpret_cast<u32 *>(0x477848U) =
                 0x474788U + 0x30 * next_stage;
             *reinterpret_cast<u32 *>(0x474c7cU) = next_stage;
@@ -1586,11 +1606,11 @@ i32 RunManagerStateBody9(void *game_manager)
         }
         return 1;
     case 4:
-        if (static_cast<i32>(words[0x2b4 / 4]) >= 6) {
+        if (mgr.frame_timer.count >= 6) { // +0x2b4
             ReleaseManagerSlotEntity(game_manager, 0x6a);
             ReleaseManagerSlotEntity(game_manager, stage_script + 0x6b);
             SetGameManagerState(game_manager, 8);
-            Call44BE70(bytes + 0x24);
+            Call44BE70(&mgr.cursor_a);
         }
         break;
     default:

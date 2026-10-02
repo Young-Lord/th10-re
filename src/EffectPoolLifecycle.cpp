@@ -1,6 +1,7 @@
 #include "EffectPoolLifecycle.hpp"
 
 #include "EffectPoolEntityUpdate.hpp"
+#include "TitleScreenObject.hpp"
 
 #include <string.h>
 
@@ -132,10 +133,14 @@ void *CreateEffectPoolManagerEbxAbi(void *manager)
 
 i32 TickEffectPoolSlotsGuarded(void)
 {
-    u8 *main_chain = static_cast<u8 *>(g_MainChainContext);
-    if (main_chain != 0 &&
-        (*reinterpret_cast<const u8 *>(main_chain + 0x58) & 4U) != 0U)
-        return 1;
+    // Native 0x0041ba30: null-checked byte test of the title screen's
+    // +0x58 flags (bit 0x4).
+    if (g_MainChainContext != 0) {
+        const TitleScreen &ts =
+            *reinterpret_cast<const TitleScreen *>(g_MainChainContext);
+        if ((*reinterpret_cast<const u8 *>(&ts.flags) & 4U) != 0U)
+            return 1;
+    }
     return TickEffectPoolSlots(g_EffectPoolManager);
 }
 

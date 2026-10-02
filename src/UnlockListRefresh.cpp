@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "EntityHelpers.hpp"
+#include "GameManagerObject.hpp"
 #include "Th10Types.hpp"
 #include "UnlockListRefresh.hpp"
 
@@ -69,17 +70,16 @@ void BlankRow(void *entity)
 // TH10 0x00432690. Native ECX = game manager; always returns 0.
 void RefreshStateBSelection(void *game_manager)
 {
-    u8 *const manager = static_cast<u8 *>(game_manager);
+    GameManager &mgr = *reinterpret_cast<GameManager *>(game_manager);
 
     // Skip the first 10*N-10 category matches (10 rows per category; the
     // scan never bounds-checks the 110-byte table — native quirk kept).
-    const i32 target = 10 * LoadI32At(manager, 0x1D4U) - 10;
+    const i32 target = 10 * mgr.state_b_page_cursor - 10;
     u32 index = 0;
     if (target > 0) {
         i32 matches = 0;
         while (matches < target) {
-            if (LoadByteAt(kCategoryTable, index)
-                == LoadI32At(manager, 0xFCU)) {
+            if (LoadByteAt(kCategoryTable, index) == mgr.cursor_b_value) {
                 ++matches;
             }
             ++index;
@@ -87,14 +87,14 @@ void RefreshStateBSelection(void *game_manager)
     }
 
     u32 row = 0;
-    u32 *handle_slot = reinterpret_cast<u32 *>(manager + 0x5D4U);
-    *reinterpret_cast<u32 *>(manager + 0x2ACU) = 0;
+    u32 *handle_slot = mgr.state_b_option_handles;
+    mgr.state_row_counter = 0;
 
     for (;;) {
         // Advance to the next category match.
         while (index < kTableEntries
                && LoadByteAt(kCategoryTable, index)
-                      != LoadI32At(manager, 0xFCU)) {
+                      != mgr.cursor_b_value) {
             ++index;
         }
         if (row >= 10U) {
@@ -133,7 +133,7 @@ void RefreshStateBSelection(void *game_manager)
         // mgr+0x24*0x437c); the row dwords live at +0x61c / +0x620 of the
         // 0x90-stride entry.
         const u32 block_offset =
-            LoadU32At(manager, 0x24U) * 0x437CU + 8U;
+            static_cast<u32>(mgr.cursor_a.value) * 0x437CU + 8U;
 
         char name[43];
         if (has_entry) {
@@ -203,7 +203,7 @@ void RefreshStateBSelection(void *game_manager)
         ++index;
         ++handle_slot;
         ++row;
-        *reinterpret_cast<u32 *>(manager + 0x2ACU) += 1U;
+        mgr.state_row_counter += 1U;
     }
 }
 

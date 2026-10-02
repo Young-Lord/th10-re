@@ -16,6 +16,7 @@
 #include "ReplaySceneReuse.hpp"
 #include "Th10Platform.hpp"
 #include "Th10Types.hpp"
+#include "TitleScreenObject.hpp"
 
 namespace th10 {
 
@@ -96,9 +97,9 @@ extern void SleepMilliseconds(u32 milliseconds); // Win32 Sleep boundary
 // TH10 0x00417870. Native stdcall with one stack argument.
 int SetupGameSceneFromTitle(void *title_state)
 {
-    u32 *const state = static_cast<u32 *>(title_state);
+    TitleScreen &ts = *reinterpret_cast<TitleScreen *>(title_state);
 
-    state[22] |= 4U; // +0x58 scene-setup busy flag
+    ts.flags |= 4U; // +0x58 scene-setup busy flag
 
     // Wait until the render owner reports the handover: loop while either
     // of its first two signed words is still non-negative. The 0x491ff4
@@ -150,7 +151,7 @@ int SetupGameSceneFromTitle(void *title_state)
             }
             g_SceneWord48 = (g_SceneModeSelector != 1U) ? 0x50U : 0U;
             g_GlobalModeFlags &= ~4U;
-            if (state[23] == 0U) {
+            if (ts.mode == 0U) {
                 u8 *const play_count_row = save
                     + 17276U * (g_SceneStageIndexA + g_SceneStageIndexB
                                 + 2U * g_SceneStageIndexA);
@@ -180,23 +181,23 @@ int SetupGameSceneFromTitle(void *title_state)
         calc->arg = title_state;
         CallbackSchedulerApi::AddToCalculationChain(g_CallbackScheduler,
                                                     calc, 10);
-        state[2] = reinterpret_cast<u32>(calc);
+        ts.calc_element = calc;
 
         ChainElem *draw =
             CallbackSchedulerApi::Create(TitleScreenDrawCallback);
         draw->flags &= ~ChainElemFlag_Enabled;
         draw->arg = title_state;
         CallbackSchedulerApi::AddToDrawChain(g_CallbackScheduler, draw, 4);
-        state[3] = reinterpret_cast<u32>(draw);
+        ts.draw_element = draw;
 
         // 52-byte manager-state defaults from DAT_00491d48 into +0x24, and
         // the published mode record pointer into +0x04.
         const u8 *const defaults =
             reinterpret_cast<const u8 *>(g_TitleStateDefaults);
-        u8 *const target = reinterpret_cast<u8 *>(state) + 0x24U;
+        u8 *const target = ts.sub_object;
         for (u32 i = 0; i < 52U; ++i)
             target[i] = defaults[i];
-        state[1] = *static_cast<u32 *>(g_PublishedModeRecord);
+        ts.mode_record = *static_cast<void **>(g_PublishedModeRecord);
 
         // Scene build: the replay/continue reuse path (mode flags bit 1)
         // skips the manager creation cascade.
@@ -208,7 +209,7 @@ int SetupGameSceneFromTitle(void *title_state)
                 *reinterpret_cast<void **>(
                     static_cast<u8 *>(g_PublishedModeRecord) + 4),
                 0U);
-        } else if (CopyReplayStageName(state[23], &g_SceneNameBuffer) != 0
+        } else if (CopyReplayStageName(ts.mode, &g_SceneNameBuffer) != 0
                    && OpenModeRecordBank(
                           *reinterpret_cast<void **>(
                               static_cast<u8 *>(g_PublishedModeRecord) + 4),
@@ -268,22 +269,20 @@ int SetupGameSceneFromTitle(void *title_state)
 
     if (failed) {
         // Native failure tail (0x00417b3e..0x00417b7e).
-        state[22] |= 8U;
+        ts.flags |= 8U;
         EnterGameManagerGateStackAbi(&g_GameManagerSlot);
         g_ManagerGateReady = 0U;
         g_ManagerGateRun = 1U;
-        if (state[2] != 0U)
-            reinterpret_cast<ChainElem *>(state[2])->flags
-                |= ChainElemFlag_Enabled;
-        if (state[3] != 0U)
-            reinterpret_cast<ChainElem *>(state[3])->flags
-                |= ChainElemFlag_Enabled;
+        if (ts.calc_element != 0)
+            ts.calc_element->flags |= ChainElemFlag_Enabled;
+        if (ts.draw_element != 0)
+            ts.draw_element->flags |= ChainElemFlag_Enabled;
         return -1;
     }
 
     // Native success tail (0x00417c2b..0x00417b77).
     LeaveGameManagerGateStackAbi(&g_GameManagerSlot);
-    state[22] &= ~4U;
+    ts.flags &= ~4U;
     g_GlobalModeFlags &= 0xFFFFFFF4U; // clear bits 0x4 and 0x8
     g_ManagerGateReady = 0U;
     g_ManagerGateRun = 1U;
