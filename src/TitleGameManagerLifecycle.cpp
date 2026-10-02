@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "AsciiHudOwner.hpp"
 #include "CallbackScheduler.hpp"
 #include "EntityHelpers.hpp"
 #include "GameManagerState.hpp"
@@ -18,6 +19,7 @@
 #include "ScoreSave.hpp"
 #include "TitleCalcCluster.hpp"
 #include "TitleScreenCalcBody.hpp"
+#include "TitleStateAccessors.hpp"
 
 namespace th10 {
 
@@ -700,8 +702,6 @@ extern void DestroyAsciiHudConditionalStateEax(void *state); // TH10 0x0040d530,
 extern void DestroyMainChainObject6fcInPlace(void *object); // TH10 0x0040af00 (DAT_004776fc)
 extern void DestroyGameContextInPlace(void *object); // TH10 0x00405620 (DAT_004776ec)
 extern void DestroySpellBulletBaseInPlace(void *object); // TH10 0x00408af0 (DAT_004776f4)
-// Native EAX argument: the shared DAT_00474c40 frame-state block.
-extern void ResetMainChainFrameStateBlockEax(void *block); // TH10 0x00418a90
 // Native EBX argument: the score-save record image (scoreth10.dat writer).
 // Semantic body reconstructed in src/ScoreSave.cpp (header included above).
 // Pointer variable whose value 0x00417c80 hands to 0x0042b1e0 in EBX.
@@ -792,7 +792,7 @@ void ClearChainRecordEnabledBit(void *base, u32 offset)
 // 0x21cea0 bytes at DAT_00477818+0x14. Everything else (HUD conditional
 // state, slot releases, callback-record removal, title global clear, BGM
 // stop command, release gate and clear-color publication) is unconditional.
-// TH10 0x00402440. In-place destructor of the 0x2a78-byte title-screen state
+// TH10 0x00402440. In-place destructor of the 0x2b64-byte title-screen state
 // object (DAT_004776e4/e8). Removes the three scheduler records at +0x08,
 // +0x0c and +0x2a40 under the scheduler lock (records are not cleared),
 // frees the three scratch buffers at +0x10 / +0x2a44 / +0x17c through the
@@ -870,26 +870,26 @@ void DestroyTitleScreenStateBufferInPlace(void *object)
 
 
 // TH10 0x004145f0. In-place destructor of the ASCII HUD owner (DAT_0047770c,
-// 0x9e90+ bytes). Runs the 0x414370 sub-block cleanup (boundary), removes the
-// two scheduler records at +0x08/+0x0c under the scheduler lock, soft-releases
-// the entity id at +0x9e90, walks the eight ids at +0x9da4 marking each found
-// entity (list A then list B) with the 0x4000000 release flag and propagating
-// it over the +0x14 child chain when the +0x18 count is zero, calls the
-// 0x4493e0 boundary with the last found entity and the +0x9e88 word, frees the
-// +0x9d60 buffer through the CRT free, clears the owner global, and finally
+// 0x9ed0 bytes). Runs the 0x414370 sub-block cleanup (boundary), removes the
+// two scheduler records at +0x08/+0x0c under the scheduler lock, clears the
+// calc element slot, soft-releases the entity id at +0x9e50, walks the eight
+// result-digit ids at +0x9df4 marking each found entity (list A then list B)
+// with the 0x4000000 release flag and propagating it over the +0x14 child
+// chain when the +0x18 count is zero, calls the 0x4493e0 boundary with the
+// last found entity and the +0x9ec8 front.anm work, frees the aux VM's
+// +0x9da0 buffer through the CRT free, clears the owner global, and finally
 // runs the six eh vector destructor iterators over the HUD glyph VM pools
-// (7 records at +0x8094, 2 at +0x793c, 4 at +0x6a8c, 9 at +0x4980, 10 at
-// +0x24c8 and 10 at +0x10; all 0x3ac-byte records, scalar dtor 0x00401ff0).
+// (pool_f 7 records, pool_e 2, pool_d 4, pool_c 9, pool_b 10 and pool_a 10;
+// scalar dtor 0x00401ff0).
 void DestroyAsciiHudOwnerInPlace(void *object)
 {
-    u32 *const owner = static_cast<u32 *>(object);
+    AsciiHudOwner &hud = *reinterpret_cast<AsciiHudOwner *>(object);
     CleanupAsciiHudOwnerSubBlocksStackAbi(object);
 
-    const u32 record_slots[2] = {0x08U, 0x0cU};
+    ChainElem *const chain_records[2] = {hud.calc_element,
+                                         hud.draw_element};
     for (u32 i = 0; i < 2U; ++i) {
-        ChainElem *const record =
-            *reinterpret_cast<ChainElem **>(reinterpret_cast<u8 *>(owner)
-                                            + record_slots[i]);
+        ChainElem *const record = chain_records[i];
         if (record == 0) {
             continue;
         }
@@ -899,13 +899,14 @@ void DestroyAsciiHudOwnerInPlace(void *object)
         LeaveCriticalSectionInternal(&g_CallbackSchedulerLock);
         --g_CallbackSchedulerActivityDepth;
     }
-    owner[2] = 0U;
+    hud.calc_element = 0;
 
-    ReleaseEntityById(g_MainChainRenderOwner, owner[10132]);
-    owner[10132] = 0U;
+    ReleaseEntityById(g_MainChainRenderOwner,
+                      hud.script_102_overlay_handle);
+    hud.script_102_overlay_handle = 0U;
 
     void *last_found = 0;
-    u32 *const ids = owner + 10109;
+    u32 *const ids = hud.result_digit_handles;
     for (u32 i = 0; i < 8U; ++i) {
         const u32 id = ids[i];
         last_found = 0;
@@ -931,24 +932,27 @@ void DestroyAsciiHudOwnerInPlace(void *object)
         }
         ids[i] = 0U;
     }
-    ReleaseAsciiHudOwnerTimelineSlotEaxStackAbi(last_found, owner[10162]);
+    ReleaseAsciiHudOwnerTimelineSlotEaxStackAbi(
+        last_found,
+        reinterpret_cast<u32>(hud.front_anm_work));
 
-    void *buffer = reinterpret_cast<void *>(owner[10088]);
+    void *buffer = hud.aux_vm.vertex_buffer;
     g_AsciiHudOwner = 0;
     if (buffer != 0) {
         ReleaseResourceBuffer(buffer);
     }
-    owner[10088] = 0U;
+    hud.aux_vm.vertex_buffer = 0;
 
-    const u32 array_slots[6] = {
-        0x8094U, 0x793cU, 0x6a8cU, 0x4980U, 0x24c8U, 0x10U
+    VmRecord *const pool_arrays[6] = {
+        hud.pool_f, hud.pool_e, hud.pool_d,
+        hud.pool_c, hud.pool_b, hud.pool_a
     };
-    const u32 array_counts[6] = {7U, 2U, 4U, 9U, 10U, 10U};
+    const u32 pool_counts[6] = {7U, 2U, 4U, 9U, 10U, 10U};
     for (u32 i = 0; i < 6U; ++i) {
-        u8 *record = reinterpret_cast<u8 *>(owner) + array_slots[i];
-        for (u32 j = 0; j < array_counts[i]; ++j) {
+        VmRecord *record = pool_arrays[i];
+        for (u32 j = 0; j < pool_counts[i]; ++j) {
             DestroyTitleScreenVmRecordInPlace(record);
-            record += 0x3acU;
+            ++record;
         }
     }
 }
@@ -970,7 +974,10 @@ i32 TH10_STDCALL TeardownTitleScreenStackAbi(void *title_screen)
         } else if (status == 13) {
             StartTimelineContinuation(480.0f, 392.0f);
             if (g_StageSelectorCurrent != g_StageSelectorIndex) {
-                ResetMainChainFrameStateBlockEax(g_MainChainFrameStateBlock);
+                // TH10 0x00418a90: advances the menu-item index at
+                // frame-state block +0x50 with the clamp at 9 (the frame-state
+                // reset body is 0x00418b80, a different function).
+                AdvanceTitleMenuItemIndexEaxAbi(g_MainChainFrameStateBlock);
                 g_GlobalModeFlags |= 8U;
             }
             g_GlobalModeFlags |= 1U;

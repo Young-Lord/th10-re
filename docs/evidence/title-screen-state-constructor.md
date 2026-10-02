@@ -1,7 +1,7 @@
 # Title-Screen State Constructor — 0x00402230
 
 Implemented as `CreateTitleScreenStateEaxEcxStackAbi` in
-`src/TitleScreenStateCtor.cpp/.hpp`. Native usercall: EAX = the 0x2a78-byte
+`src/TitleScreenStateCtor.cpp/.hpp`. Native usercall: EAX = the 0x2b64-byte
 title-screen state object (allocated and first-constructed by the 0x402640
 factory, which passes the mode-record's stage-data name in ECX and the
 priority base dword on the stack; `ret 4`). Returns 0 on success, -1 on the

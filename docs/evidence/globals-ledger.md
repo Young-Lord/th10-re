@@ -540,5 +540,20 @@ ABI 语法经验：__usercall 必须带返回位置注解（@<eax>），否则�
   IsTimerFrameMultiple 改传当前记录基址,handle 辅助传 &record.entity_id。
 - 改写:约 350 处,32 文件(slot 侧 8 文件 + player 侧 24 文件;PlayerDamageOutput
   亲自修复)。全量构建 exit 0(229 obj)。证据:docs/evidence/player-record-layout.md。
-- 剩余热点:HUD owner(DAT_0047770c,~0x9ed0 布局)、0x2a78 title state、
+- 剩余热点:HUD owner(DAT_0047770c,~0x9ed0 布局)、0x2b64 title state、
   ManagerWork/HUD 大对象、散点 gap 访问。
+
+## 第 6 轮:AsciiHudOwner / TitleScreenState 字段化(2026-10-02)
+
+- 结构体:AsciiHudOwner 0x9ed0(DAT_0047770c;6 个固定 VmRecord 池
+  10/10/9/4/2/7 + aux_vm@0x9a48 + 0xdc 结果/横幅/boss/符卡尾块)、
+  TitleScreenState 0x2b64(DAT_004776e4/e8 双实例;background_vms[8]@0x180、
+  aux_vms[3]@0x1f08、camera_snapshot@0x2a4c;0x2a78 旧注释全部改判 0x2b64)。
+  IDB 已声明并绑定三个全局。证据:docs/evidence/ascii-hud-owner-and-title-state.md。
+- 语义修复:TeardownTitleScreenStackAbi status-13 分支改调 0x418a90
+  (AdvanceTitleMenuItemIndexEaxAbi,菜单索引++,clamp 9;原误调
+  ResetMainChainFrameStateBlockEax);VmRecord +0x34/+0x38 裁决为旋转角速度
+  (0x40c960 "scale pair" 标签废弃);AsciiOwnerTraversal 子指针双解引用修正。
+- 改写:约 360 处,26 文件(HUD 20 + title state 6)。全量构建 exit 0(229 obj)。
+- 剩余热点:0x2a78 已清;下一批:game-manager 0x5acc 对象(DAT_0047784c)、
+  0x60 title screen(DAT_00477810)、散点 LoadU32At/LoadFloat 访问与 gap。

@@ -22,6 +22,7 @@
 #include "SpellBulletVtable.hpp"
 
 #include "AsciiAnimationVm.hpp"
+#include "AsciiHudOwner.hpp"
 #include "BgmRuntime.hpp"
 #include "EntityHelpers.hpp"
 #include "LargeRenderOwnerLayout.hpp"
@@ -514,12 +515,12 @@ i32 UpdateSpellCardStoryStateEcxAbi(void *base_memory)
         // part and VMs 3..7 land on entry 0x1e.
         i32 value = LoadI32At(base, 0x3790U);
         i32 divisor = 10000000;
+        AsciiHudOwner &hud = *reinterpret_cast<AsciiHudOwner *>(
+            LoadPointerAt(0x47770cU));
         for (u32 index = 0; index != 8U; ++index) {
             const i32 quotient = value / divisor;
             const i32 remainder = value % divisor;
-            void *const resource = LoadPointerAt(
-                reinterpret_cast<u32>(LoadPointerAt(0x47770cU))
-                + 0x9ec8U);
+            void *const resource = hud.front_anm_work;
             InitializeAsciiAnimationVmEntry(base + 0x778U + index * 0x3acU,
                                             static_cast<u32>(quotient
                                                              + 0x1e),
@@ -533,8 +534,7 @@ i32 UpdateSpellCardStoryStateEcxAbi(void *base_memory)
         // Per-card record digits: fields +0x624 and +0x628 of the current
         // card slot drive the five-VM tally cluster (+0x24d8/+0x2884/
         // +0x2fdc/+0x3388 initialized, +0x2c30 only ticked).
-        void *const resource = LoadPointerAt(
-            reinterpret_cast<u32>(LoadPointerAt(0x47770cU)) + 0x9ec8U);
+        void *const resource = hud.front_anm_work;
         u8 *const score_record = static_cast<u8 *>(
             LoadPointerAt(0x47783cU));
         const u32 card_offset = (g_PlayerShotType + 3U * g_PlayerCharacter)
@@ -648,8 +648,9 @@ void StartSpellCardPracticeEaxStackAbi(void *base, i32 spell_card_index,
 
     // Rebind the thirteen ASCII VMs: eight at +0x778 with scripts
     // 0x3a..0x41 and five at +0x24d8 with scripts 0x42..0x46.
-    void *const hud_resource = LoadPointerAt(
-        reinterpret_cast<u32>(LoadPointerAt(0x47770cU)) + 0x9ec8U);
+    AsciiHudOwner &hud = *reinterpret_cast<AsciiHudOwner *>(
+        LoadPointerAt(0x47770cU));
+    void *const hud_resource = hud.front_anm_work;
     for (u32 index = 0; index != 8U; ++index) {
         AssignAnmScriptToVmEcxEaxBbxAbi(hud_resource,
                                         state + 0x778U + index * 0x3acU,
@@ -872,12 +873,13 @@ void FinishSpellCardPracticeEaxAbi(void *base)
 
     // Not captured: release the HUD conditional's banner handle and respawn
     // its setup VM (script 0x47 in the shared body, script 0x48 here).
-    u8 *const hud = static_cast<u8 *>(LoadPointerAt(0x47770cU));
-    ReleaseEntityById(g_MainChainRenderOwner, LoadU32At(hud, 0x9e14U));
-    StoreU32At(hud, 0x9e14U, 0U);
+    AsciiHudOwner &hud = *reinterpret_cast<AsciiHudOwner *>(
+        LoadPointerAt(0x47770cU));
+    ReleaseEntityById(g_MainChainRenderOwner, hud.first_banner_handle);
+    hud.first_banner_handle = 0U;
     i32 *const respawn = SpawnSetupEffectVmListABack(0x48, 0xfU);
     // Unchecked dereference of the spawned record (native quirk).
-    StoreU32At(hud, 0x9e14U, static_cast<u32>(*respawn));
+    hud.first_banner_handle = static_cast<u32>(*respawn);
 }
 
 } // namespace th10

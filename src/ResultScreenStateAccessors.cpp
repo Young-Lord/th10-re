@@ -1,5 +1,7 @@
 #include "ResultScreenStateAccessors.hpp"
 
+#include "AsciiHudOwner.hpp"
+
 namespace th10 {
 
 namespace {
@@ -15,17 +17,16 @@ extern void *g_ResultScriptSlotCache;   // TH10 DAT_00474c8c
 
 i32 CreateResultScreenScriptSlotEdiEsiAbi(void *manager, i32 slot)
 {
+    AsciiHudOwner &hud = *reinterpret_cast<AsciiHudOwner *>(manager);
     void *state = AllocateHeapBlock(0x90);
     void *script = 0;
     if (state != 0) {
-        u8 *base = *reinterpret_cast<u8 **>(
-            static_cast<u8 *>(manager) + 0x9ebc);
+        u8 *base = static_cast<u8 *>(hud.result_script_blob);
         script = InitializeResultScreenScriptStateNative(
             state, base + *reinterpret_cast<u32 *>(
                              base + static_cast<u32>(slot) * 8U + 4U));
     }
-    *reinterpret_cast<void **>(
-        static_cast<u8 *>(manager) + 0x9eb8) = script;
+    hud.result_script_state = script;
     // Native quirk: the slot stamp runs on the raw result, so a failed
     // allocation would write through null; operator new aborts first.
     *reinterpret_cast<u32 *>(script) = static_cast<u32>(slot);

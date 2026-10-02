@@ -17,6 +17,7 @@
 #include "ResultScreenState.hpp"
 
 #include "AsciiAnimationVm.hpp"
+#include "AsciiHudOwner.hpp"
 #include "EntityHelpers.hpp"
 #include "GameManagerState.hpp"
 #include "TimelineRenderObjects.hpp"
@@ -68,19 +69,21 @@ void StoreU32At(void *base, u32 offset, u32 value)
 // digits have the +0x35c bit-2 visibility flag cleared, the rest set.
 void RunResultScreenScoreRebuild(u8 *owner, i32 bonus)
 {
-    ReleaseEntityById(g_MainChainRenderOwner, LoadU32At(owner, 0x9e14U));
-    StoreU32At(owner, 0x9e14U, 0U);
+    AsciiHudOwner &hud = *reinterpret_cast<AsciiHudOwner *>(owner);
+
+    ReleaseEntityById(g_MainChainRenderOwner, hud.first_banner_handle);
+    hud.first_banner_handle = 0U;
 
     i32 *const respawn = SpawnSetupEffectVmListABack(0x47, 0xfU);
     // Unchecked dereference of the spawned record (native quirk).
-    StoreU32At(owner, 0x9e14U, static_cast<u32>(*respawn));
+    hud.first_banner_handle = static_cast<u32>(*respawn);
 
     u32 nonzero_digit_seen = 0;
     i32 value = bonus;
     i32 divisor = 0x989680; // 10^7: the most significant of eight digits
 
     for (u32 digit = 0; digit != 8; ++digit) {
-        u32 *const slot = reinterpret_cast<u32 *>(owner + 0x9df4U + 4U * digit);
+        u32 *const slot = &hud.result_digit_handles[digit];
 
         ReleaseEntityById(g_MainChainRenderOwner, *slot);
         *slot = 0;
@@ -125,20 +128,22 @@ void RunResultScreenScoreRebuild(u8 *owner, i32 bonus)
 // +0x9e14 banner, respawn it from `script` (kind 0xf) and store its id.
 void RespawnFirstBanner(u8 *owner, i32 script)
 {
-    ReleaseEntityById(g_MainChainRenderOwner, LoadU32At(owner, 0x9e14U));
+    AsciiHudOwner &hud = *reinterpret_cast<AsciiHudOwner *>(owner);
+    ReleaseEntityById(g_MainChainRenderOwner, hud.first_banner_handle);
     i32 *const respawn = SpawnSetupEffectVmListABack(script, 0xfU);
-    StoreU32At(owner, 0x9e14U, 0U);
-    StoreU32At(owner, 0x9e14U, static_cast<u32>(*respawn));
+    hud.first_banner_handle = 0U;
+    hud.first_banner_handle = static_cast<u32>(*respawn);
 }
 
 // Modes 2/3/4 (0x417460/0x4174a0/0x4174e0): release the +0x9e18 banner,
 // respawn it from `script` (kind 0xf) and store its id.
 void RespawnSecondBanner(u8 *owner, i32 script)
 {
-    ReleaseEntityById(g_MainChainRenderOwner, LoadU32At(owner, 0x9e18U));
+    AsciiHudOwner &hud = *reinterpret_cast<AsciiHudOwner *>(owner);
+    ReleaseEntityById(g_MainChainRenderOwner, hud.second_banner_handle);
     i32 *const respawn = SpawnSetupEffectVmListABack(script, 0xfU);
-    StoreU32At(owner, 0x9e18U, 0U);
-    StoreU32At(owner, 0x9e18U, static_cast<u32>(*respawn));
+    hud.second_banner_handle = 0U;
+    hud.second_banner_handle = static_cast<u32>(*respawn);
 }
 
 } // namespace

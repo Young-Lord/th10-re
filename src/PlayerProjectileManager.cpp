@@ -1,5 +1,6 @@
 #include "PlayerProjectileManager.hpp"
 
+#include "AsciiHudOwner.hpp"
 #include "EntityHelpers.hpp"
 #include "PlayerMotionHelpers.hpp"
 #include "PlayerRecord.hpp"
@@ -96,9 +97,9 @@ i32 UpdatePlayerProjectilesStackAbi(void *player_memory)
     PlayerRecord &player = *reinterpret_cast<PlayerRecord *>(player_ptr);
     const i32 option_count = player.option_count;
     const bool aborted = (g_AsciiHudOwner != 0 &&
-                          *reinterpret_cast<const i32 *>(
-                              static_cast<u8 *>(g_AsciiHudOwner) +
-                              0x9eb8) != 0) ||
+                          reinterpret_cast<AsciiHudOwner *>(
+                              g_AsciiHudOwner)
+                                  ->result_script_state != 0) ||
         g_AsciiHudConditionalState == 0;
 
     for (u32 index = 0; index != 128; ++index) {

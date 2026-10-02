@@ -1,6 +1,7 @@
 #include "ResultScreenScript.hpp"
 
 #include "AsciiAnimationVm.hpp"
+#include "AsciiHudOwner.hpp"
 #include "AsciiOverlayFactory.hpp"
 #include "BgmRuntime.hpp"
 #include "EntityHelpers.hpp"
@@ -219,9 +220,10 @@ void BumpSpellPracticeCounter()
 // the branch entry; the post-overlay work clears +0x9ecc and latches 0x10.
 void RecordSpellCaptureFlags()
 {
-    u8 *owner = reinterpret_cast<u8 *>(g_AsciiHudOwner);
-    *reinterpret_cast<u32 *>(owner + 0x9ecc) = 0;
-    *reinterpret_cast<u32 *>(owner + 0x9eb4) |= 0x10;
+    AsciiHudOwner &hud =
+        *reinterpret_cast<AsciiHudOwner *>(g_AsciiHudOwner);
+    hud.render_mode_counter = 0;
+    hud.hud_mode_flags |= 0x10;
 }
 
 void SubmitBlankLine(u8 *entity, u32 owner)
@@ -304,6 +306,7 @@ i32 TH10_STDCALL RunResultScreenScriptStreamStackAbi(
             break;
 
         case 3: {
+            // Deliberately raw: +0x9ea8 overlaps spell_bars[2].color.
             const i32 script = *reinterpret_cast<const i32 *>(
                 reinterpret_cast<u8 *>(g_AsciiHudOwner) + 0x9ea8);
             state->handle_c = *SpawnResultScreenEffect(script, 90);
@@ -460,8 +463,10 @@ i32 TH10_STDCALL RunResultScreenScriptStreamStackAbi(
             SelectTimelineAudioMode(
                 1, *reinterpret_cast<const i32 *>(
                        reinterpret_cast<u8 *>(g_TitleTransitionRecord) + 0x28));
-            const i32 script = *reinterpret_cast<const i32 *>(
-                reinterpret_cast<u8 *>(g_AsciiHudOwner) + 0x9e80);
+            AsciiHudOwner &hud =
+                *reinterpret_cast<AsciiHudOwner *>(g_AsciiHudOwner);
+            const i32 script = static_cast<i32>(
+                reinterpret_cast<u32>(hud.stage_script_work));
             SpawnResultScreenEffect(script, 2);
             break;
         }
@@ -515,8 +520,8 @@ i32 TH10_STDCALL RunResultScreenScriptStreamStackAbi(
             }
 
             if (g_ActiveTextLayer == 6) {
-                *reinterpret_cast<u32 *>(
-                    reinterpret_cast<u8 *>(g_AsciiHudOwner) + 0x9eb4) |= 0x20;
+                (*reinterpret_cast<AsciiHudOwner *>(g_AsciiHudOwner))
+                    .hud_mode_flags |= 0x20;
                 AddScoreBlockValueEcxStackAbi(
                     reinterpret_cast<void *>(0x474c40u),
                     1000 * g_ScoreBonusBaseDword);
@@ -577,8 +582,8 @@ i32 TH10_STDCALL RunResultScreenScriptStreamStackAbi(
             }
 
             if (g_ActiveTextLayer == 7) {
-                *reinterpret_cast<u32 *>(
-                    reinterpret_cast<u8 *>(g_AsciiHudOwner) + 0x9eb4) |= 0x20;
+                (*reinterpret_cast<AsciiHudOwner *>(g_AsciiHudOwner))
+                    .hud_mode_flags |= 0x20;
                 AddScoreBlockValueEcxStackAbi(
                     reinterpret_cast<void *>(0x474c40u),
                     1000 * g_ScoreBonusBaseDword);
@@ -602,12 +607,14 @@ i32 TH10_STDCALL RunResultScreenScriptStreamStackAbi(
             // Any other character: recycle the result list handle, then
             // request the spell-card-list transition state (11).
             {
-                u8 *owner = reinterpret_cast<u8 *>(g_AsciiHudOwner);
-                u32 *handle_slot = reinterpret_cast<u32 *>(owner + 0x9e14);
+                AsciiHudOwner &hud =
+                    *reinterpret_cast<AsciiHudOwner *>(g_AsciiHudOwner);
+                u32 *handle_slot = &hud.first_banner_handle;
                 ReleaseEntityById(g_MainChainRenderOwner, *handle_slot);
                 *handle_slot = 0;
+                // Deliberately raw: +0x9ea8 overlaps spell_bars[2].color.
                 const i32 script = *reinterpret_cast<const i32 *>(
-                    owner + 0x9ea8);
+                    reinterpret_cast<u8 *>(g_AsciiHudOwner) + 0x9ea8);
                 *handle_slot = *SpawnResultScreenEffect(script, 0x4c);
                 RequestGameStateTransitionEaxStackAbi(&g_MainChainContext, 11);
                 UpdateScoreBlockEaxAbi(reinterpret_cast<void *>(0x474c40u));
@@ -766,10 +773,12 @@ i32 RecordSpellPracticeCaptureEdiAbi(void *spell_state)
         u32 out_id = 0U;
         AttachEffectVmToListB(&out_id, reinterpret_cast<void *>(vm), manager);
     }
+    // The HUD owner's +0x9ec8 glyph resource (read through the absolute
+    // global DAT_0047770c) is copied to +0x2c4.
+    AsciiHudOwner &hud_owner = *reinterpret_cast<AsciiHudOwner *>(
+        LoadU32From(reinterpret_cast<const void *>(0x47770cU)));
     StoreU32To(state + 0x2c4U,
-               LoadU32From(reinterpret_cast<const void *>(
-                   LoadU32From(reinterpret_cast<const void *>(0x47770cU))
-                   + 0x9ec8U)));
+               reinterpret_cast<u32>(hud_owner.front_anm_work));
 
     StartBgmTrack("bgm/th10_17.wav", 0);
     if ((g_MainChainRuntimeOptions & 0x10U) != 0U) {

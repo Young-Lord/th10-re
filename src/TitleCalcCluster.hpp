@@ -24,7 +24,7 @@ void ApplyOptionPositionStateEbxAbi(void *record);
 // and the life/power-of-life digit VMs, then checks the score-rank table.
 void UpdateInGameScoreDisplayEsiAbi(void *hud_owner);
 
-// TH10 0x00404450. Native one stack argument (the 0x2a78-byte secondary
+// TH10 0x00404450. Native one stack argument (the 0x2b64-byte secondary
 // title-screen state), __stdcall ret 4. Re-enables its three scheduler
 // records and initializes every per-stage player VM from the stage table.
 void InitializeTitleSecondaryStateStackAbi(void *state);

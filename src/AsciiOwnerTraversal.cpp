@@ -6,6 +6,7 @@
 #include "LargeRenderOwnerLayout.hpp"
 #include "MainChainRender.hpp"
 #include "MainChainRuntime.hpp"
+#include "TitleScreenState.hpp"
 #include "VmRecord.hpp"
 
 namespace th10 {
@@ -147,7 +148,8 @@ i32 CullAsciiOwnerChild(void *projection_memory, void *child_memory,
 
 i32 RenderAsciiSceneChannel(void *scene_memory, i32 channel)
 {
-    u8 *const scene = static_cast<u8 *>(scene_memory);
+    TitleScreenState &state =
+        *reinterpret_cast<TitleScreenState *>(scene_memory);
     g_MainChainActiveCameraWork = &g_AsciiCameraWork;
     UpdateMainChainCameraWorkEdiAbi(&g_AsciiCameraWork);
     SetD3D9Viewport(g_MainChainD3DDevice, &g_AsciiCameraWork.viewport);
@@ -156,18 +158,25 @@ i32 RenderAsciiSceneChannel(void *scene_memory, i32 channel)
         *static_cast<LargeRenderOwnerLayout *>(g_MainChainRenderOwner);
     render_owner.ascii_scene_active = 1;
 
+    // The outer descriptor stream pointer is read from the +0x18 script_base
+    // field (TH10 0x403a39: mov ebx,[ebp+18h]).
     const OuterTraversalRecord *outer =
-        *reinterpret_cast<const OuterTraversalRecord *const *>(scene + 0x18);
+        reinterpret_cast<const OuterTraversalRecord *>(state.script_base);
     while (outer->child_index >= 0) {
-        u8 *const child = *reinterpret_cast<u8 *const *>(scene + 0x14 +
-            static_cast<i32>(outer->child_index) * 4);
+        // TH10 0x403a90: mov edx,[ebp+14h]; mov esi,[edx+ecx*4] — the child
+        // pointer is selected through the +0x14 script_pointer_table (double
+        // dereference through the table pointer).
+        u8 *const child = reinterpret_cast<u8 *const *>(
+            state.script_pointer_table)[
+                static_cast<i32>(outer->child_index)];
         if (*(reinterpret_cast<const signed char *>(child + 2)) == channel) {
-            if (CullAsciiOwnerChild(&g_AsciiCameraWork, child, &outer->translation,
-                                    ReadFloat(scene, 0x1ee0)) == 0) {
+            if (CullAsciiOwnerChild(&g_AsciiCameraWork, child,
+                                    &outer->translation,
+                                    state.background_fade) == 0) {
                 child[3] |= 2;
                 u8 *operation = child + 0x1c;
                 while (ReadI16(operation, 0) >= 0) {
-                    u8 *const vm = scene + 0x17c +
+                    u8 *const vm = state.vm_heap_array +
                         static_cast<i32>(ReadI16(operation, 6)) * 0x3ac;
                     VmRecord &vm_record = *reinterpret_cast<VmRecord *>(vm);
                     if (ReadI16(operation, 0) == 0 &&
@@ -192,12 +201,12 @@ i32 RenderAsciiSceneChannel(void *scene_memory, i32 channel)
                         0x03c00000U) == 0x02000000U ? 1 : 0);
                     (void)DispatchAsciiAnimationVmRenderMode(vm,
                         g_MainChainRenderOwner);
-                    ++*reinterpret_cast<u32 *>(scene + 0x2a14);
+                    ++state.op_counter; // +0x2a14
                     operation += ReadI16(operation, 2);
                 }
-                ++*reinterpret_cast<u32 *>(scene + 0x2a0c);
+                ++state.scene_counter; // +0x2a0c
             } else {
-                ++*reinterpret_cast<u32 *>(scene + 0x2a10);
+                ++state.scene_counter_clear; // +0x2a10
             }
         }
         ++outer;

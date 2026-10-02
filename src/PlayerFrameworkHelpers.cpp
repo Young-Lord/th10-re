@@ -1,4 +1,5 @@
 #include "PlayerFrameworkHelpers.hpp"
+#include "AsciiHudOwner.hpp"
 #include "PlayerShotData.hpp"
 
 #include "EntityHelpers.hpp"
@@ -114,20 +115,19 @@ void AddMaximumScorePenalty(i32 amount)
         WriteInt(block, 0xc, 5000);
 }
 
-// TH10 0x00413790. Nine 0x3ac-stride slots at hud+0x4cdc; bit 1 of the
-// first dword of each slot is the life-icon visibility. count > 8 skips
-// the hide loop entirely.
+// TH10 0x00413790. Nine 0x3ac-stride slots at hud+0x4cdc (pool_c records:
+// the first dword of each is the record's +0x35c flags dword); bit 1 of
+// each is the life-icon visibility. count > 8 skips the hide loop entirely.
 void RefreshLifeIconsEaxStackAbi(i32 count)
 {
-    u8 *const hud = static_cast<u8 *>(g_AsciiHudOwner);
+    AsciiHudOwner &hud =
+        *reinterpret_cast<AsciiHudOwner *>(g_AsciiHudOwner);
     for (i32 index = 0; index < count && index < 9; ++index)
-        reinterpret_cast<VmRecord *>(hud + 0x4cdc + index * 0x3ac)
-            ->entity_id |= 2;
+        hud.pool_c[index].flags |= 2U;
     if (count > 8)
         return;
     for (i32 index = count < 0 ? 0 : count; index < 9; ++index)
-        reinterpret_cast<VmRecord *>(hud + 0x4cdc + index * 0x3ac)
-            ->entity_id &= ~2U;
+        hud.pool_c[index].flags &= ~2U;
 }
 
 // TH10 0x00424650. Shortens the lifetime of the texts already on the
@@ -306,9 +306,10 @@ void RunGameOverPathBStackAbi(void *manager_memory, i32 param)
         WriteInt(manager, pass == 0 ? 0x1d8 : 0x1d4, param);
     }
     (void)CreateGameOverOverlay(manager, param, 0x20, 0x10, 0x180, 0x1c0);
+    AsciiHudOwner &hud =
+        *reinterpret_cast<AsciiHudOwner *>(g_AsciiHudOwner);
     WriteInt(manager, 0x2c4,
-             *reinterpret_cast<const i32 *>(
-                 static_cast<u8 *>(g_AsciiHudOwner) + 0x9ec8));
+             static_cast<i32>(reinterpret_cast<u32>(hud.front_anm_work)));
     StartBgmTrack("bgm/th10_17.wav", 0);
     extern u32 g_SoundStopFlags; // TH10 DAT_00491d78
     extern TransitionRootPartial g_TransitionRoot; // TH10 DAT_00492590

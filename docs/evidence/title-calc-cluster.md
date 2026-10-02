@@ -82,7 +82,7 @@ Native ABI: ESI = the ASCII HUD owner (DAT_0047770c), plain `ret`.
 
 ## 0x00404450 InitializeTitleSecondaryStateStackAbi
 
-Native ABI: one stack argument (the 0x2a78-byte secondary title state,
+Native ABI: one stack argument (the 0x2b64-byte secondary title state,
 DAT_004776e8), `__stdcall ret 4`; returns `[state+0x1c]`.
 
 - Sets bit 1 of `record+4` for the records at `state+8`, `state+0xc`,

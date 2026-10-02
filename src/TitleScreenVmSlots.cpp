@@ -6,6 +6,7 @@
 // constructor iterator (0x45252d; scalar ctor 0x402050, dtor 0x401ff0).
 
 #include "Th10Types.hpp"
+#include "TitleScreenState.hpp"
 #include "TitleScreenStateCtor.hpp"
 #include "VmRecord.hpp"
 
@@ -68,28 +69,27 @@ void ClearTitleScreenVmRecordFlagsEaxAbi(void *record) {
 // clears and the pool construction), sets bit 1 of the first dword and
 // returns the host.
 void *InitTitleScreenVmHostStackAbi(void *host) {
+    TitleScreenState &state = *reinterpret_cast<TitleScreenState *>(host);
     u8 *bytes = static_cast<u8 *>(host);
-    static const u32 kHostFlagOffsets[5] = {0x34, 0x48, 0x90, 0xdc, 0x168};
-    for (int i = 0; i < 5; ++i) {
-        u32 *flag = reinterpret_cast<u32 *>(bytes + kHostFlagOffsets[i]);
-        *flag &= kFlagBit1Clear;
-    }
+    // Bit-1 clears on the timer flag dwords; the +0x34 slot belongs to the
+    // unnamed wave-mode timer block at +0x24 and stays a raw offset.
+    *reinterpret_cast<u32 *>(bytes + 0x34) &= kFlagBit1Clear;
+    state.wait_timer.flags &= kFlagBit1Clear;        // +0x48
+    state.interp_a_timer.flags &= kFlagBit1Clear;    // +0x90
+    state.interp_b_timer.flags &= kFlagBit1Clear;    // +0xdc
+    state.color_track_timer.flags &= kFlagBit1Clear; // +0x168
 
     // eh vector constructor iterator over the two record pools. The native
     // registers dtor 0x401ff0 / ctor 0x402050 with 0x45252d; the semantic
     // equivalent runs the scalar init over every record slot.
-    void *pool_a = bytes + 0x180;
     for (int i = 0; i < 8; ++i) {
-        InitTitleScreenVmRecordEcxAbi(
-            static_cast<u8 *>(pool_a) + i * 0x3ac);
+        InitTitleScreenVmRecordEcxAbi(&state.background_vms[i]);
     }
-    void *pool_b = bytes + 0x1f08;
     for (int i = 0; i < 3; ++i) {
-        InitTitleScreenVmRecordEcxAbi(
-            static_cast<u8 *>(pool_b) + i * 0x3ac);
+        InitTitleScreenVmRecordEcxAbi(&state.aux_vms[i]);
     }
 
-    *reinterpret_cast<u32 *>(bytes + 0x2a2c) &= kFlagBit1Clear;
+    state.score_anim_timer.flags &= kFlagBit1Clear; // +0x2a2c
 
     u32 *wipe = reinterpret_cast<u32 *>(bytes);
     for (int i = 0; i < 0xad9; ++i) {

@@ -1,5 +1,5 @@
 // TH10 0x00402230 — title-screen state constructor. Registers the three
-// scheduler records of the 0x2a78-byte title-screen state:
+// scheduler records of the 0x2b64-byte title-screen state:
 //
 //   record slot   adapter    target
 //   state+0x08    0x00403050 0x00402720 (calculation body, `mov eax,ecx; jmp`)
@@ -20,6 +20,7 @@
 #include "Th10Types.hpp"
 #include "TitleBackgroundScript.hpp"
 #include "TitleScreenDrawPasses.hpp"
+#include "TitleScreenState.hpp"
 #include "TitleScreenStateCtor.hpp"
 
 namespace th10 {
@@ -41,12 +42,6 @@ const char *const kStageDataCorruptText =
     reinterpret_cast<const char *>(0x46CC70U);
 
 // ------------------------------------------------------------ accessors
-
-inline u32 LoadU32At(const void *base, u32 offset)
-{
-    return *reinterpret_cast<const u32 *>(
-        static_cast<const u8 *>(base) + offset);
-}
 
 inline void StoreU32At(void *base, u32 offset, u32 value)
 {
@@ -109,27 +104,30 @@ i32 CreateTitleScreenStateEaxEcxStackAbi(void *state_arg,
                                          const char *stage_data_name,
                                          u32 priority_base)
 {
-    u8 *const state = static_cast<u8 *>(state_arg);
+    TitleScreenState &state =
+        *reinterpret_cast<TitleScreenState *>(state_arg);
 
     // Publication selector: base 0 -> secondary slot, nonzero -> primary.
     if (priority_base != 0U) {
-        g_TitleScreenStatePrimary = state;
+        g_TitleScreenStatePrimary = &state;
     } else {
-        g_TitleScreenStateSecondary = state;
+        g_TitleScreenStateSecondary = &state;
     }
 
-    StoreU32At(state, 0x2a30, g_SceneModeSelector);
+    state.scene_mode_copy = g_SceneModeSelector;
 
     // Stage background script load (native: EBX = state, stack = name via the
     // pushed ECX). Nonzero return is the failure path.
-    if (LoadTitleBackgroundScriptEbxStackAbi(state, stage_data_name) != 0) {
+    if (LoadTitleBackgroundScriptEbxStackAbi(&state, stage_data_name) != 0) {
         AppendStageDataLoadError(kStageDataCorruptText);
         return -1;
     }
 
     // Camera snapshot at +0x2a4c: 0x46 dwords copied from the startup camera
-    // block DAT_00491d7c, then the title camera pose is written over it.
-    u8 *const snapshot = state + 0x2a4c;
+    // block DAT_00491d7c, then the title camera pose is written over it
+    // (raw bit-pattern writes; the +0x18/+0x1c/+0x20 vec3 spans the `up`
+    // pointer plus the unnamed unknown_001c head, so it stays raw).
+    u8 *const snapshot = reinterpret_cast<u8 *>(&state.camera_snapshot);
     memcpy(snapshot, &g_AsciiCameraWork, 0x118U);
     // translation = (0, 0, -600.0)
     StoreU32At(snapshot, 0x00U, 0U);
@@ -150,42 +148,41 @@ i32 CreateTitleScreenStateEaxEcxStackAbi(void *state_arg,
     StoreU32At(snapshot, 0x44U, 0U);
 
     // Background script fade scalar (9610000.0f).
-    StoreU32At(state, 0x1ee0, 0x4B12A310U);
+    *reinterpret_cast<u32 *>(&state.background_fade) = 0x4B12A310U;
 
     // The three scheduler records (all created disabled).
-    StoreU32At(state, 0x08U, reinterpret_cast<u32>(RegisterStateRecord(
-        &TitleScreenCalcAdapter, state,
-        static_cast<i32>(priority_base + 12U), true)));
-    StoreU32At(state, 0x0cU, reinterpret_cast<u32>(RegisterStateRecord(
-        &TitleScreenDrawAdapter0, state,
-        static_cast<i32>(priority_base + 7U), false)));
-    StoreU32At(state, 0x2a40U, reinterpret_cast<u32>(RegisterStateRecord(
-        &TitleScreenDrawAdapter1, state,
-        static_cast<i32>(priority_base + 10U), false)));
+    state.calc_element = RegisterStateRecord(
+        &TitleScreenCalcAdapter, &state,
+        static_cast<i32>(priority_base + 12U), true);
+    state.draw_element = RegisterStateRecord(
+        &TitleScreenDrawAdapter0, &state,
+        static_cast<i32>(priority_base + 7U), false);
+    state.draw_pass1_element = RegisterStateRecord(
+        &TitleScreenDrawAdapter1, &state,
+        static_cast<i32>(priority_base + 10U), false);
 
-    StoreU32At(state, 0x2a34, 0U); // intro counter
+    state.intro_counter = 0U;
 
-    // The embedded frame-state timer at state+0x24 (its +0x14/+0x18/+0x1c/
-    // +0x20/+0x24 family lands at state+0x38/0x3c/0x40/0x44/0x48). The native
-    // writes the rate pointer and flag bit only when bit 0 was clear; the
-    // NaN-sentinel and zero stores of that branch are immediately overwritten
-    // by the unconditional tail (preserved verbatim).
-    if ((LoadU32At(state, 0x48) & 1U) == 0U) {
-        StoreU32At(state, 0x3c, 0U);
-        StoreU32At(state, 0x38, 0xFFF0BDC1U); // NaN sentinel
-        StoreU32At(state, 0x40, 0U);
-        StoreU32At(state, 0x44,
-                   reinterpret_cast<u32>(&g_FrameTimeScale));
-        StoreU32At(state, 0x48, LoadU32At(state, 0x48) | 1U);
+    // The embedded frame-state timer (native base +0x24) whose rate/flags
+    // family lands at state+0x38/0x3c/0x40/0x44/0x48 — the wait_timer
+    // TimerNode. The native writes the rate pointer and flag bit only when
+    // bit 0 was clear; the NaN-sentinel and zero stores of that branch are
+    // immediately overwritten by the unconditional tail (preserved verbatim).
+    if ((state.wait_timer.flags & 1U) == 0U) {
+        state.wait_timer.count = 0;
+        *reinterpret_cast<u32 *>(&state.wait_timer.prev) = 0xFFF0BDC1U; // NaN sentinel
+        state.wait_timer.accum = 0;
+        state.wait_timer.rate = &g_FrameTimeScale;
+        state.wait_timer.flags |= 1U;
     }
-    StoreU32At(state, 0x3c, 0U);
-    StoreU32At(state, 0x40, 0U);
-    StoreU32At(state, 0x38, 0xFFFFFFFFU); // -1 / NaN float
+    state.wait_timer.count = 0;
+    state.wait_timer.accum = 0;
+    *reinterpret_cast<u32 *>(&state.wait_timer.prev) = 0xFFFFFFFFU; // -1 / NaN float
 
     // Fade-in active latch and cleared scratch words.
-    StoreU32At(state, 0x2a18, LoadU32At(state, 0x2a18) | 1U);
-    StoreU32At(state, 0x94, 0U);
-    StoreU32At(state, 0xe0, 0U);
+    state.master_flags |= 1U;
+    state.interp_a_gate = 0U;
+    state.interp_b_gate_flag = 0U;
     return 0;
 }
 

@@ -1,6 +1,7 @@
 #include "TitleScoreAnimTriggers.hpp"
 
 #include "AsciiOverlayFactory.hpp"
+#include "TitleScreenState.hpp"
 
 namespace th10 {
 
@@ -8,59 +9,46 @@ namespace {
 
 const u32 k_rate_pointer = 0x476f78U; // &flt_476F78
 
-u32 LoadU32From(const void *address)
+// Seeds the score-anim block on first use (initialized-flag bit 0 of
+// score_anim_timer.flags at +0x2a2c) and arms it with the given counter,
+// float value and limit (the +0x2a1c limit lands in TimerNode.prev).
+u32 SeedAndArm(TitleScreenState &state, u32 counter, u32 value_bits,
+               u32 limit)
 {
-    const u8 *const bytes = static_cast<const u8 *>(address);
-    return static_cast<u32>(bytes[0]) | (static_cast<u32>(bytes[1]) << 8)
-         | (static_cast<u32>(bytes[2]) << 16)
-         | (static_cast<u32>(bytes[3]) << 24);
-}
-
-void StoreU32To(void *address, u32 value)
-{
-    u8 *const bytes = static_cast<u8 *>(address);
-    bytes[0] = static_cast<u8>(value);
-    bytes[1] = static_cast<u8>(value >> 8);
-    bytes[2] = static_cast<u8>(value >> 16);
-    bytes[3] = static_cast<u8>(value >> 24);
-}
-
-// Seeds the score-anim block on first use (initialized-flag bit 0 at
-// +0x2a3c) and arms it with the given counter, float value and limit.
-u32 SeedAndArm(u8 *state, u32 counter, u32 value_bits, u32 limit)
-{
-    u32 flag = LoadU32From(state + 0x2a2cU);
+    u32 flag = state.score_anim_timer.flags;
     if ((flag & 1U) == 0U) {
         flag |= 1U;
-        StoreU32To(state + 0x2a20U, 0U);
-        StoreU32To(state + 0x2a1cU, static_cast<u32>(-999999));
-        StoreU32To(state + 0x2a24U, 0U);
-        StoreU32To(state + 0x2a28U, k_rate_pointer);
-        StoreU32To(state + 0x2a2cU, flag);
+        state.score_anim_timer.count = 0;
+        *reinterpret_cast<u32 *>(&state.score_anim_timer.prev) =
+            static_cast<u32>(-999999); // 0xfff0bdc1 poison
+        state.score_anim_timer.accum = 0;
+        state.score_anim_timer.rate =
+            reinterpret_cast<const float *>(k_rate_pointer);
+        state.score_anim_timer.flags = flag;
     }
-    StoreU32To(state + 0x2a20U, counter);
-    StoreU32To(state + 0x2a24U, value_bits);
-    StoreU32To(state + 0x2a1cU, limit);
+    state.score_anim_timer.count = static_cast<i32>(counter);
+    *reinterpret_cast<u32 *>(&state.score_anim_timer.accum) = value_bits;
+    state.score_anim_timer.prev = static_cast<i32>(limit);
     return flag;
 }
 
 } // namespace
 
-u32 TriggerTitleScoreAnim30EsiAbi(void *state)
+u32 TriggerTitleScoreAnim30EsiAbi(void *state_ptr)
 {
-    u8 *const base = static_cast<u8 *>(state);
+    TitleScreenState &state = *reinterpret_cast<TitleScreenState *>(state_ptr);
     (void)CreateAsciiOverlayContext(2U, 30U, 0U, 0U, 0U, 0U);
-    const u32 flag = SeedAndArm(base, 30U, 0x41f00000U /* 30.0f */, 29U);
-    StoreU32To(base + 0x2a18U, LoadU32From(base + 0x2a18U) | 2U);
+    const u32 flag = SeedAndArm(state, 30U, 0x41f00000U /* 30.0f */, 29U);
+    state.master_flags |= 2U;
     return flag;
 }
 
-void *TriggerTitleScoreAnim60EaxAbi(void *state)
+void *TriggerTitleScoreAnim60EaxAbi(void *state_ptr)
 {
-    u8 *const base = static_cast<u8 *>(state);
-    SeedAndArm(base, 60U, 0x42700000U /* 60.0f */, 59U);
-    StoreU32To(base + 0x2a18U, LoadU32From(base + 0x2a18U) | 4U);
-    return state;
+    TitleScreenState &state = *reinterpret_cast<TitleScreenState *>(state_ptr);
+    SeedAndArm(state, 60U, 0x42700000U /* 60.0f */, 59U);
+    state.master_flags |= 4U;
+    return state_ptr;
 }
 
 } // namespace th10

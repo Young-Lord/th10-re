@@ -123,7 +123,7 @@ struct VmRecord {
     float scale_y;                // +0x040
     float scale_rate_x;           // +0x044 (opcode 0x36)
     float scale_rate_y;           // +0x048
-    u32 width;                  // +0x04c (pair written by 0x40c960)
+    u32 width;                  // +0x04c
     u32 height;                 // +0x050
     float texture_u;              // +0x054 (UV scroll, integrated from +0x234)
     float texture_v;              // +0x058
@@ -232,9 +232,12 @@ typedef char AssertVmRecordCurrentInstructionOffset[
 typedef char AssertVmRecordAnimEntryOffset[
     offsetof(VmRecord, anim_entry) == 0x394 ? 1 : -1];
 
-// Note: +0x34/+0x38 carry a documented conflict — the ANM setup-opcode
-// interpreter (0x446590 family) treats them as rotation angular velocities,
-// while the "scale pair" setter 0x40c960 writes them without a dirty flag.
-// One of the two labels is wrong; both call sites are preserved verbatim.
+// Adjudicated (2026-10-02): +0x30/+0x34/+0x38 are the rotation angular
+// velocities. Setup opcode 0x35 writes the triple (TimelineRenderObjectSetup
+// ResolveFloatOperand arg_index 8/12/16) and the setup epilogue integrates
+// them into the +0x24/+0x28/+0x2c rotations with the dirty flag 0x4. The
+// "scale pair" label on 0x40c960 (writes +0x34/+0x38, no dirty flag) is
+// wrong — scale lives at +0x3c/+0x40 (scale_rate outputs) and 0x40c960 has
+// no call-site evidence for a scale reading.
 
 } // namespace th10

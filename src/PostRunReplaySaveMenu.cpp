@@ -18,6 +18,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "AsciiHudOwner.hpp"
 #include "EntityHelpers.hpp"
 #include "GameManagerState.hpp"
 #include "PlayerFrameworkHelpers.hpp"
@@ -176,12 +177,13 @@ extern void DestroyDemoParseObject(void *parsed);
 // semantic body in SaveRunHighScoreEntry.cpp.
 
 // TH10 0x00421f60. Publish the finished-run score into the HUD overlay owner
-// at +0x9e78 and raise the all-time maximum at DAT_00474c40.
+// at +0x9e78 (displayed_score) and raise the all-time maximum at DAT_00474c40.
 void PublishHudFinalScore()
 {
     const u32 score = g_CurrentRunScore;
-    *reinterpret_cast<u32 *>(static_cast<u8 *>(g_AsciiHudOverlayState)
-                             + 0x9E78U) = score;
+    AsciiHudOwner &hud =
+        *reinterpret_cast<AsciiHudOwner *>(g_AsciiHudOverlayState);
+    hud.displayed_score = score;
     if (static_cast<i32>(g_MaximumScore) < static_cast<i32>(score)) {
         g_MaximumScore = score;
     }

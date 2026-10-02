@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "AsciiHudOverlayUpdate.hpp"
+#include "AsciiHudOwner.hpp"
 #include "AsciiOverlayFactory.hpp"
 #include "BgmRuntime.hpp"
 #include "EclScriptLibrary.hpp"
@@ -167,9 +168,9 @@ i32 TH10_STDCALL RunTitleScreenCalcBodyStackAbi(void *title_screen)
             TriggerTitleScoreAnim30EsiAbi(g_TitleScreenStatePrimary);
             TriggerTitleScoreAnim60EaxAbi(g_TitleScreenStateSecondary);
             *flags_word |= 0x800U;
-            ExpireEntityHandleEaxAbi(reinterpret_cast<u32 *>(
-                static_cast<u8 *>(*reinterpret_cast<void **>(0x47770CU)) +
-                0x9E14U));
+            AsciiHudOwner &hud = *reinterpret_cast<AsciiHudOwner *>(
+                *reinterpret_cast<void **>(0x47770CU));
+            ExpireEntityHandleEaxAbi(&hud.first_banner_handle);
         } else {
             // First frame without the title state: run the game-start reset.
             *flags_word &= ~0x800U;
@@ -284,7 +285,9 @@ i32 TH10_STDCALL RunTitleScreenCalcBodyStackAbi(void *title_screen)
     // Spell-practice gate: with the HUD conditional-state mode cleared, the
     // HUD overlay owner idle and at least 90 frames elapsed, run 0x418a00.
     if (LoadU32At(g_AsciiHudConditionalState, 0x10U) == 0U &&
-        LoadU32At(*reinterpret_cast<void **>(0x47770CU), 0x9EB8U) == 0U &&
+        reinterpret_cast<AsciiHudOwner *>(
+            *reinterpret_cast<void **>(0x47770CU))
+                ->result_script_state == 0 &&
         static_cast<i32>(frame) >= 0x5A) {
         TickTitleFrameStateEaxAbi(reinterpret_cast<void *>(0x474C40U));
     }

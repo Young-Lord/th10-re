@@ -1,6 +1,7 @@
 #include "PlayerStageHelpers.hpp"
 
 #include "AsciiAnimationVm.hpp"
+#include "AsciiHudOwner.hpp"
 #include "GameContext.hpp"
 #include "PlayerRecord.hpp"
 #include "StageEffectHelpers.hpp"
@@ -139,17 +140,19 @@ i32 TickRespawnDeathEffectStackAbi(void *node_memory)
 
 // TH10 0x004054b0. Re-binds the three numeric lives digits through the
 // existing semantic body of 0x0043e5a0; the HUD manager comes from the
-// global 0x47770c.
+// global 0x47770c. The digit records are pool_d slots 0/2/3 and the
+// animation resource is the owner's +0x9ec8 front.anm manager work.
 void RefreshHudLivesDisplayEdxStackAbi(i32 lives, i32 percent)
 {
-    u8 *const hud = static_cast<u8 *>(g_AsciiHudOwner);
-    void *const vm = *reinterpret_cast<void *const *>(hud + 0x9ec8);
+    AsciiHudOwner &hud =
+        *reinterpret_cast<AsciiHudOwner *>(g_AsciiHudOwner);
+    void *const vm = hud.front_anm_work;
     InitializeAsciiAnimationVmEntry(vm, static_cast<u32>(lives + 8),
-                                    hud + 0x6a8c);
+                                    &hud.pool_d[0]);
     InitializeAsciiAnimationVmEntry(vm, static_cast<u32>(percent / 10 + 8),
-                                    hud + 0x71e4);
+                                    &hud.pool_d[2]);
     InitializeAsciiAnimationVmEntry(vm, static_cast<u32>(percent % 10 + 8),
-                                    hud + 0x7590);
+                                    &hud.pool_d[3]);
 }
 
 // TH10 0x004086b0. Native ECX = the float2 position (x at +0, y at +4),

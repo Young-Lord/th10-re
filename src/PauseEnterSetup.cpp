@@ -3,6 +3,7 @@
 // disassembly; see docs/evidence/pause-enter-setup.md.
 #include <string.h>
 
+#include "AsciiHudOwner.hpp"
 #include "BgmRuntime.hpp"
 #include "EntityHelpers.hpp"
 #include "GameManagerState.hpp"
@@ -91,7 +92,9 @@ void RunPauseEnterSetupStackAbi(void *record_arg)
     // HUD watch VM (script 0x79) from the HUD owner's manager-work
     // (native ECX = [DAT_0047770c]+0x9ec8, mirrored into record+0x2c4).
     u32 *const handle_a = reinterpret_cast<u32 *>(record + 0x1d4);
-    const u32 hud_work = LoadU32At(g_AsciiHudOverlayState, 0x9ec8);
+    const u32 hud_work = reinterpret_cast<u32>(
+        reinterpret_cast<AsciiHudOwner *>(g_AsciiHudOverlayState)
+            ->front_anm_work);
     StoreU32At(record, 0x2c4, hud_work);
     vm = static_cast<u8 *>(AllocatePoolVmEsiAbi(g_MainChainRenderOwner));
     StoreU32At(vm, 0x35c, LoadU32At(vm, 0x35c) | 0x40000000U);

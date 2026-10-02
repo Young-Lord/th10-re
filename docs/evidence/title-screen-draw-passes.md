@@ -1,7 +1,7 @@
 # Title-Screen State Draw Passes (0x00402850 / 0x00402ca0) and 0x00405300
 
 Implemented in `src/TitleScreenDrawPasses.cpp/.hpp`. These are the two draw
-scheduler records of the 0x2a78-byte title-screen state object (the same
+scheduler records of the 0x2b64-byte title-screen state object (the same
 object destroyed by 0x00402440 `DestroyTitleScreenStateBufferInPlace`). All
 evidence below is from raw `objdump` disassembly of `resources/th10.exe`
 (IDA MCP unavailable in this session).

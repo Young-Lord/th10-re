@@ -1,5 +1,6 @@
 #include "EclScriptLibrary.hpp"
 
+#include "AsciiHudOwner.hpp"
 #include "EclScriptVm.hpp"
 #include "EntityHelpers.hpp"
 #include "GameContext.hpp"
@@ -626,9 +627,8 @@ post_damage_pass:
             StoreU32(entity, 0x35cU,
                      LoadU32(entity, 0x35cU) & 0xffff7fffU);
             if ((flags & 0x8000U) != 0U) {
-                u8 *const hud = static_cast<u8 *>(g_AsciiHudOwner);
-                StoreU32(hud, 0x9da4U,
-                         LoadU32(hud, 0x9da4U) & 0xffff7fffU);
+                reinterpret_cast<AsciiHudOwner *>(g_AsciiHudOwner)
+                    ->aux_vm.flags &= 0xffff7fffU;
             }
             StoreI32(rec, 0x1414U, LoadI32(rec, 0x1414U) - 1);
         } else if ((flags & 0x2000U) != 0U) {
@@ -852,8 +852,8 @@ i32 AcquireScriptNameRequestThisAbi(void *script_manager)
         // divide-by-60 magic 0x88888889).
         const i32 countdown
             = (LoadI32(mgr, slot + 4U) - LoadI32(mgr, 0x115cU) + 59) / 60;
-        StoreU32(static_cast<u8 *>(g_AsciiHudOwner), 0x9ec0U,
-                 static_cast<u32>(countdown > 99 ? 99 : countdown));
+        reinterpret_cast<AsciiHudOwner *>(g_AsciiHudOwner)
+            ->spell_countdown = countdown > 99 ? 99 : countdown;
 
         if (LoadI32(mgr, 0x115cU) < LoadI32(mgr, slot + 4U))
             return 0; // countdown still running (but the HUD value updated)

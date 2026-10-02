@@ -18,7 +18,7 @@ void SelectMainChainDrawWork(MainChainContext *context, u32 index);
 // restores the state's camera snapshot, clears the z-buffer and the menu
 // region {32,16,416,464}, arms the fade-in overlay and timer, then renders
 // scene channels 0..7 and the eight background VM records at +0x180 while the
-// fade-in timer runs. Native ABI is stdcall ret 4 with the 0x2a78-byte
+// fade-in timer runs. Native ABI is stdcall ret 4 with the 0x2b64-byte
 // title-screen state as the only stack argument; returns 1.
 i32 RunTitleScreenDrawPass0StackAbi(void *state);
 

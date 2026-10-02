@@ -3,7 +3,7 @@
 // selector. The two draw bodies are registered by the title-screen state
 // constructor 0x00402230 (calc record 0x403050 -> 0x00402720, draw records
 // 0x403060 -> 0x00402850 and 0x403070 -> 0x00402ca0, each receiving the
-// 0x2a78-byte state through a `push ecx` adapter). Every fixed global address
+// 0x2b64-byte state through a `push ecx` adapter). Every fixed global address
 // and state offset below is taken from the native disassembly; see
 // docs/evidence/title-screen-draw-passes.md.
 #include <string.h>
@@ -19,6 +19,7 @@
 #include "Th10Platform.hpp"
 #include "Th10Types.hpp"
 #include "TitleScreenDrawPasses.hpp"
+#include "TitleScreenState.hpp"
 
 namespace th10 {
 
@@ -43,26 +44,6 @@ u32 LoadU32At(const void *base, u32 offset)
 {
     return *reinterpret_cast<const u32 *>(
         static_cast<const u8 *>(base) + offset);
-}
-
-i32 LoadI32At(const void *base, u32 offset)
-{
-    return static_cast<i32>(LoadU32At(base, offset));
-}
-
-void StoreU32At(void *base, u32 offset, u32 value)
-{
-    *reinterpret_cast<u32 *>(static_cast<u8 *>(base) + offset) = value;
-}
-
-void StoreByteAt(void *base, u32 offset, u8 value)
-{
-    static_cast<u8 *>(base)[offset] = value;
-}
-
-u8 LoadByteAt(const void *base, u32 offset)
-{
-    return static_cast<const u8 *>(base)[offset];
 }
 
 void FlushOwnerVertices()
@@ -111,9 +92,10 @@ void PublishActiveCameraWork()
 
 // Copies the state's 0x46-dword camera-work snapshot at +0x2a4c over the
 // DAT_00491d7c block and republishes it.
-void RestoreCameraWorkSnapshot(u8 *state)
+void RestoreCameraWorkSnapshot(const TitleScreenState &state)
 {
-    memcpy(&g_AsciiCameraWork, state + 0x2a4c, sizeof(MainChainCameraWork));
+    memcpy(&g_AsciiCameraWork, &state.camera_snapshot,
+           sizeof(MainChainCameraWork));
     PublishActiveCameraWork();
 }
 
@@ -160,18 +142,20 @@ void SelectMainChainDrawWork(MainChainContext *context, u32 index)
 // TH10 0x00402850. Base/menu draw pass.
 i32 RunTitleScreenDrawPass0StackAbi(void *state_argument)
 {
-    u8 *const state = static_cast<u8 *>(state_argument);
-    u32 flags = LoadU32At(state, 0x2a18);
+    TitleScreenState &state =
+        *reinterpret_cast<TitleScreenState *>(state_argument);
+    u8 *const st = static_cast<u8 *>(state_argument);
+    u32 flags = state.master_flags;
     if ((flags & 8U) != 0U)
         return 1;
 
     // Front block: skipped entirely once the fade timer has passed 60.
-    if ((flags & 4U) == 0U || LoadI32At(state, 0x2a20) < 0x3c) {
+    if ((flags & 4U) == 0U || state.score_anim_timer.count < 0x3c) {
         FlushOwnerVertices();
-        StoreU32At(state, 0x2b34,
-                   LoadU32At(&g_AsciiOverlayRenderOffsetX, 0));
-        StoreU32At(state, 0x2b38,
-                   LoadU32At(&g_AsciiOverlayRenderOffsetY, 0));
+        state.camera_snapshot.owner_value_00e8 =
+            LoadU32At(&g_AsciiOverlayRenderOffsetX, 0); // +0x2b34
+        state.camera_snapshot.owner_value_00ec =
+            LoadU32At(&g_AsciiOverlayRenderOffsetY, 0); // +0x2b38
         RestoreCameraWorkSnapshot(state);
         g_AsciiActiveViewIsDefault = 0;
         FlushOwnerVertices();
@@ -179,66 +163,67 @@ i32 RunTitleScreenDrawPass0StackAbi(void *state_argument)
         FlushOwnerVertices();
         SetDeviceRenderState(0x17, 4); // z compare func
         FlushOwnerVertices();
-        SetDeviceRenderState(0x22, LoadU32At(state, 0x2b60));
+        // (+0x2b60/+0x2b48/+0x2b4c sit in the camera snapshot's unnamed
+        // tail and stay raw byte accesses.)
+        SetDeviceRenderState(0x22, LoadU32At(st, 0x2b60));
         FlushOwnerVertices();
-        SetDeviceRenderState(0x24, LoadU32At(state, 0x2b48));
+        SetDeviceRenderState(0x24, LoadU32At(st, 0x2b48));
         FlushOwnerVertices();
-        SetDeviceRenderState(0x25, LoadU32At(state, 0x2b4c));
+        SetDeviceRenderState(0x25, LoadU32At(st, 0x2b4c));
 
         // Whole-target z-buffer clear (no preceding flush in the native).
         ClearDeviceTarget(0, 0, 2, 0);
 
-        flags = LoadU32At(state, 0x2a18);
+        flags = state.master_flags;
         const ScreenRect menu_region = {0x20, 0x10, 0x1a0, 0x1d0};
-        if ((flags & 4U) != 0U && LoadI32At(state, 0x2a34) < 0x22) {
+        if ((flags & 4U) != 0U &&
+            static_cast<i32>(state.intro_counter) < 0x22) {
             // Menu area clears to black while the intro counter is below 34.
             ClearDeviceTarget(1, &menu_region, 1, 0);
         } else {
             ClearDeviceTarget(1, &menu_region, 1,
-                              LoadU32At(state, 0x2b60) & 0xffffffU);
+                              LoadU32At(st, 0x2b60) & 0xffffffU);
         }
     }
 
     // Fade-in overlay arm and timer state machine (always runs).
-    flags = LoadU32At(state, 0x2a18);
+    flags = state.master_flags;
     if ((flags & 4U) != 0U) {
-        if (LoadI32At(state, 0x2a20) < 0x1e) {
+        if (state.score_anim_timer.count < 0x1e) {
             // A fresh kind-3 overlay context is allocated every frame while
             // the fade timer counts up; the native discards the result.
             (void)CreateAsciiOverlayContext(3, 0x1e, 0, 0, 0, 0xf);
-            StoreU32At(state, 0x2a18, LoadU32At(state, 0x2a18) | 1U);
-            TickPlayerTimerEaxStackAbi(state + 0x2a1c, 1);
+            state.master_flags |= 1U;
+            TickPlayerTimerEaxStackAbi(&state.score_anim_timer, 1);
         } else {
-            StoreU32At(state, 0x2a18, flags & ~1U);
-            StoreByteAt(state, 0x1eeb, 0);
+            state.master_flags = flags & ~1U;
+            reinterpret_cast<u8 *>(&state.modulation_color)[3] = 0; // +0x1eeb
         }
     }
 
-    if (LoadByteAt(state, 0x1eeb) != 0)
-        PublishOwnerModulation(1, LoadU32At(state, 0x1ee8));
+    if (reinterpret_cast<const u8 *>(&state.modulation_color)[3] != 0)
+        PublishOwnerModulation(1, state.modulation_color);
 
     // Scene counters are cleared unconditionally.
-    StoreU32At(state, 0x2a0c, 0);
-    StoreU32At(state, 0x2a10, 0);
-    StoreU32At(state, 0x2a14, 0);
+    state.scene_counter = 0;
+    state.scene_counter_clear = 0;
+    state.op_counter = 0;
 
-    flags = LoadU32At(state, 0x2a18);
+    flags = state.master_flags;
     if ((flags & 1U) != 0U) {
         // The native gates the whole background-VM block on the second
         // record's +0x394 resource pointer (state+0x514), not on a dedicated
         // flag; preserved as-is.
-        if (LoadU32At(state, 0x514) != 0U) {
+        if (state.background_vms[1].anim_entry != 0) {
             SelectMainChainDrawWork(&g_MainChainContext, 0);
             (void)DisableMainChainFogIfNeeded(&g_MainChainContext);
             FlushOwnerVertices();
             FlushOwnerVertices();
             SetDeviceRenderState(0xe, 0);
-            u8 *vm = state + 0x180;
             for (u32 index = 0; index != 8; ++index) {
-                if (LoadU32At(vm, 0x394) != 0U)
+                if (state.background_vms[index].anim_entry != 0)
                     (void)DispatchAsciiAnimationVmRenderMode(
-                        vm, g_MainChainRenderOwner);
-                vm += 0x3ac;
+                        &state.background_vms[index], g_MainChainRenderOwner);
             }
             FlushOwnerVertices();
             SetDeviceRenderState(0xe, 1);
@@ -250,15 +235,15 @@ i32 RunTitleScreenDrawPass0StackAbi(void *state_argument)
     SyncFogEnable(1);
 
     for (i32 channel = 0; channel != 8; ++channel)
-        (void)RenderAsciiSceneChannel(state, channel);
+        (void)RenderAsciiSceneChannel(st, channel);
     FlushOwnerVertices();
 
     // Idle-frame latch: only increments while already nonzero.
-    if (LoadU32At(state, 0x1ee4) != 0U)
-        StoreU32At(state, 0x1ee4, LoadU32At(state, 0x1ee4) + 1U);
+    if (state.idle_frame_latch != 0U)
+        state.idle_frame_latch = state.idle_frame_latch + 1U;
 
     PublishOwnerModulation(0, 0x80808080U);
-    if (LoadU32At(state, 0x1eec) != 0U)
+    if (state.aux_vm_arm_latch != 0U)
         PublishOwnerModulation(1, 0xff404040U);
 
     FlushOwnerVertices();
@@ -271,18 +256,20 @@ i32 RunTitleScreenDrawPass0StackAbi(void *state_argument)
 // TH10 0x00402ca0. Kind-chain / overlay draw pass with the fade-out epilogue.
 i32 RunTitleScreenDrawPass1StackAbi(void *state_argument)
 {
-    u8 *const state = static_cast<u8 *>(state_argument);
-    u32 flags = LoadU32At(state, 0x2a18);
+    TitleScreenState &state =
+        *reinterpret_cast<TitleScreenState *>(state_argument);
+    u8 *const st = static_cast<u8 *>(state_argument);
+    u32 flags = state.master_flags;
     if ((flags & 8U) != 0U)
         return 1;
 
     // Front block: skipped entirely once the fade timer has passed 60.
-    if ((flags & 4U) == 0U || LoadI32At(state, 0x2a20) < 0x3c) {
+    if ((flags & 4U) == 0U || state.score_anim_timer.count < 0x3c) {
         FlushOwnerVertices();
-        StoreU32At(state, 0x2b34,
-                   LoadU32At(&g_AsciiOverlayRenderOffsetX, 0));
-        StoreU32At(state, 0x2b38,
-                   LoadU32At(&g_AsciiOverlayRenderOffsetY, 0));
+        state.camera_snapshot.owner_value_00e8 =
+            LoadU32At(&g_AsciiOverlayRenderOffsetX, 0); // +0x2b34
+        state.camera_snapshot.owner_value_00ec =
+            LoadU32At(&g_AsciiOverlayRenderOffsetY, 0); // +0x2b38
         RestoreCameraWorkSnapshot(state);
 
         SyncFogEnable(1);
@@ -300,29 +287,31 @@ i32 RunTitleScreenDrawPass1StackAbi(void *state_argument)
         FlushOwnerVertices();
         SetDeviceRenderState(0x17, 4);
         FlushOwnerVertices();
-        SetDeviceRenderState(0x22, LoadU32At(state, 0x2b60));
+        // (+0x2b60/+0x2b48/+0x2b4c sit in the camera snapshot's unnamed
+        // tail and stay raw byte accesses.)
+        SetDeviceRenderState(0x22, LoadU32At(st, 0x2b60));
         FlushOwnerVertices();
-        SetDeviceRenderState(0x24, LoadU32At(state, 0x2b48));
+        SetDeviceRenderState(0x24, LoadU32At(st, 0x2b48));
         FlushOwnerVertices();
-        SetDeviceRenderState(0x25, LoadU32At(state, 0x2b4c));
+        SetDeviceRenderState(0x25, LoadU32At(st, 0x2b4c));
     }
 
     // Fade completion latches the modulation byte while the timer is done.
-    flags = LoadU32At(state, 0x2a18);
-    if ((flags & 4U) != 0U && LoadI32At(state, 0x2a20) >= 0x1e)
-        StoreByteAt(state, 0x1eeb, 0);
+    flags = state.master_flags;
+    if ((flags & 4U) != 0U && state.score_anim_timer.count >= 0x1e)
+        reinterpret_cast<u8 *>(&state.modulation_color)[3] = 0; // +0x1eeb
 
     if ((flags & 1U) != 0U) {
         FlushOwnerVertices();
         SetDeviceRenderState(0xe, 0);
         SyncFogEnable(1);
         for (i32 channel = 8; channel != 12; ++channel)
-            (void)RenderAsciiSceneChannel(state, channel);
+            (void)RenderAsciiSceneChannel(st, channel);
         FlushOwnerVertices();
     }
 
     PublishOwnerModulation(0, 0x80808080U);
-    if (LoadU32At(state, 0x1eec) != 0U)
+    if (state.aux_vm_arm_latch != 0U)
         PublishOwnerModulation(1, 0xff404040U);
 
     FlushOwnerVertices();
@@ -333,18 +322,18 @@ i32 RunTitleScreenDrawPass1StackAbi(void *state_argument)
     // Drain the fade timer by one frame while positive; when it reaches zero
     // the fade ends (bits 1/2 cleared, white modulation latched, and bit 3
     // set when bit 1 requested the draw shutdown).
-    if (LoadI32At(state, 0x2a20) > 0) {
-        ShiftTimerByEsiStackAbi(state + 0x2a1c, -1.0f);
-        if (LoadI32At(state, 0x2a20) <= 0) {
-            u32 end_flags = LoadU32At(state, 0x2a18);
-            StoreByteAt(state, 0x1eeb, 0xff);
+    if (state.score_anim_timer.count > 0) {
+        ShiftTimerByEsiStackAbi(&state.score_anim_timer, -1.0f);
+        if (state.score_anim_timer.count <= 0) {
+            u32 end_flags = state.master_flags;
+            reinterpret_cast<u8 *>(&state.modulation_color)[3] = 0xff;
             if ((end_flags & 2U) != 0U) {
                 end_flags |= 8U;
-                StoreU32At(state, 0x2a18, end_flags);
+                state.master_flags = end_flags;
             }
-            end_flags = LoadU32At(state, 0x2a18);
-            StoreU32At(state, 0x1ee8, 0xffffffU);
-            StoreU32At(state, 0x2a18, end_flags & ~6U);
+            end_flags = state.master_flags;
+            state.modulation_color = 0xffffffU;
+            state.master_flags = end_flags & ~6U;
         }
     }
 

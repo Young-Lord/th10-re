@@ -3,6 +3,7 @@
 // 0x9ED0-byte owner record published at DAT_004770C.
 #include "AsciiHudOwnerLifecycle.hpp"
 
+#include "AsciiHudOwner.hpp"
 #include "EntityHelpers.hpp"
 #include "ManagerReleaseWrappers.hpp"
 #include "Th10Types.hpp"
@@ -91,6 +92,7 @@ u32 *FindEntityNodeTwoLists(u32 id)
 void *ConstructAsciiHudOwnerRecords(void *record_memory)
 {
     u8 *const record = static_cast<u8 *>(record_memory);
+    AsciiHudOwner &hud = *reinterpret_cast<AsciiHudOwner *>(record_memory);
 
     // Six 0x3AC-byte VM-record arrays, constructed through the CRT
     // iterator with ctor 0x402050 and dtor 0x401ff0.
@@ -123,11 +125,14 @@ void *ConstructAsciiHudOwnerRecords(void *record_memory)
         *reinterpret_cast<u16 *>(record + 0x9dcc) = 0xffffU;
     }
 
+    // The nine ready-flag clears above and the 0x9dcc u16 store are
+    // deliberate dead stores (the 0x3ac / 0x9ed0 wipes below erase them);
+    // kept raw on the dead-store block per the conversion rules.
     *reinterpret_cast<u32 *>(record + 0x9e70) &= ~1U;
     // The final 0x9ED0-byte wipe erases everything written so far,
     // including the six arrays and the +0x9a48 block - preserved as-is.
     memset(record, 0, 0x9ed0);
-    *reinterpret_cast<u32 *>(record) |= 2U;
+    hud.flags_0000 |= 2U;
     g_AsciiHudOwnerRecord = record;
     return record;
 }
@@ -136,11 +141,12 @@ void *ConstructAsciiHudOwnerRecords(void *record_memory)
 void ReleaseAsciiHudOwnerResources(void *record_memory)
 {
     u8 *const record = static_cast<u8 *>(record_memory);
+    AsciiHudOwner &hud = *reinterpret_cast<AsciiHudOwner *>(record_memory);
 
     if ((g_HudOwnerModeFlags & 9U) != 0U) {
         ReleaseEntitiesUsingResourceEaxEdxAbi(
             g_AsciiHudResourceOwner,
-            *reinterpret_cast<u32 *>(record + 0x9e80));
+            reinterpret_cast<u32>(hud.stage_script_work));
     } else {
         u32 *const slot =
             reinterpret_cast<u32 *>(g_AsciiHudResourceOwner + 0x3acb9c);
@@ -152,46 +158,53 @@ void ReleaseAsciiHudOwnerResources(void *record_memory)
         }
     }
 
-    void *glyph_buffer = *reinterpret_cast<void **>(record + 0x9eb8);
-    *reinterpret_cast<u32 *>(record + 0x9e80) = 0;
+    void *glyph_buffer = hud.result_script_state;
+    hud.stage_script_work = 0;
     if (glyph_buffer != 0) {
         ReleaseHudGlyphBatchBoundary();
         free(glyph_buffer);
-        *reinterpret_cast<void **>(record + 0x9eb8) = 0;
+        hud.result_script_state = 0;
     }
 
     if ((g_HudOwnerModeFlags & 9U) != 0U) {
-        g_AsciiHudTextMirror = *reinterpret_cast<void **>(record + 0x9ebc);
+        g_AsciiHudTextMirror = hud.result_script_blob;
     } else {
-        if (*reinterpret_cast<void **>(record + 0x9ebc) != 0) {
-            free(*reinterpret_cast<void **>(record + 0x9ebc));
-            *reinterpret_cast<void **>(record + 0x9ebc) = 0;
+        if (hud.result_script_blob != 0) {
+            free(hud.result_script_blob);
+            hud.result_script_blob = 0;
         }
-        *reinterpret_cast<void **>(record + 0x9ebc) = 0;
+        hud.result_script_blob = 0;
         g_AsciiHudTextMirror = 0;
     }
 
-    void *parent = *reinterpret_cast<void **>(record + 8);
+    void *parent = hud.calc_element;
     if (parent != 0)
         *reinterpret_cast<u32 *>(static_cast<u8 *>(parent) + 4) &= ~2U;
 
+    // Deliberately raw: +0x9e54 sits in the unnamed unknown_9e54 gap.
     ReleaseEntityById(g_AsciiHudResourceOwner,
                       *reinterpret_cast<u32 *>(record + 0x9e54));
     *reinterpret_cast<u32 *>(record + 0x9e54) = 0;
     ReleaseEntityById(g_AsciiHudResourceOwner,
-                      *reinterpret_cast<u32 *>(record + 0x9e58));
-    *reinterpret_cast<u32 *>(record + 0x9e58) = 0;
+                      hud.background_vm_id);
+    hud.background_vm_id = 0;
+    // +0x9e64 is the hud_timer.count slot (double-duty "handle").
     ReleaseEntityById(g_AsciiHudResourceOwner,
-                      *reinterpret_cast<u32 *>(record + 0x9e64));
-    *reinterpret_cast<u32 *>(record + 0x9e64) = 0;
+                      static_cast<u32>(hud.hud_timer.count));
+    hud.hud_timer.count = 0;
 
+    // Deliberate raw stride-4 clear over the mixed region
+    // +0x9e70..+0x9ea0 (unnamed bytes, timer, score mirrors, script work,
+    // HP fields and spell bars): no single field expression covers it.
     for (u32 offset = 0x9e70U; offset != 0x9e9cU + 4U; offset += 4U)
         *reinterpret_cast<u32 *>(record + offset) = 0;
 
     // Eight tracked-entity slots at +0x9e34: find each id in the two
     // resource-owner lists and flag the entity (and its children when
     // entity+0x18 == 0) with +0x35c bit 0x4000000, then clear the slot.
-    u32 *slot = reinterpret_cast<u32 *>(record + 0x9e34);
+    // The walk is linear over bench_child_handles[3..9] followed by
+    // script_102_overlay_handle, so it converts to that base pointer.
+    u32 *slot = &hud.bench_child_handles[3];
     i32 remaining = 8;
     do {
         const u32 id = *slot;
@@ -216,7 +229,7 @@ void ReleaseAsciiHudOwnerResources(void *record_memory)
         --remaining;
     } while (remaining != 0);
 
-    *reinterpret_cast<u32 *>(record + 0x9e90) = 0;
+    hud.bench_child_count = 0;
 }
 
 } // namespace th10

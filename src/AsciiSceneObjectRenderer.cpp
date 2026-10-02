@@ -1,5 +1,6 @@
 #include "AsciiSceneObjectRenderer.hpp"
 
+#include "AsciiHudOwner.hpp"
 #include "AsciiHudRenderer.hpp"
 #include "AsciiRenderModeDispatcher.hpp"
 
@@ -89,8 +90,8 @@ i32 RenderAsciiSceneObjectAndBarOverlay(void *object_memory)
     if (*reinterpret_cast<const i32 *>(
             static_cast<u8 *>(g_AsciiHudConditionalState) + 0x10) != 0)
         return 1;
-    if (*reinterpret_cast<const i32 *>(
-            static_cast<u8 *>(g_AsciiHudOwner) + 0x9eb8) != 0)
+    if (reinterpret_cast<const AsciiHudOwner *>(g_AsciiHudOwner)
+            ->result_script_state != 0)
         return 1;
     if (*reinterpret_cast<const i32 *>(
             static_cast<u8 *>(g_GameStateManager) + 4) != 0)

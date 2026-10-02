@@ -8,6 +8,7 @@
 #include "PlayerTimerHelpers.hpp"
 #include "ManagerWork.hpp"
 #include "TimelineRenderObjectSetup.hpp"
+#include "TitleScreenState.hpp"
 #include "VmLeafHelpers.hpp"
 
 namespace th10 {
@@ -69,6 +70,14 @@ inline void CopyVec3(u8 *dst, u32 dst_off, const u8 *src, u32 src_off)
 {
     for (u32 i = 0; i != 3; ++i)
         StoreFloat(dst, dst_off + 4U * i, LoadFloat(src, src_off + 4U * i));
+}
+
+// CopyVec3 into a named float[3] state field (element order preserved).
+inline void CopyVec3To(float dst[3], const u8 *src, u32 src_off)
+{
+    dst[0] = LoadFloat(src, src_off);
+    dst[1] = LoadFloat(src, src_off + 4U);
+    dst[2] = LoadFloat(src, src_off + 8U);
 }
 
 // Lazy timer-block initialization for the pointer-rate records
@@ -135,19 +144,20 @@ extern void *D3DXVec3NormalizeAbi(float out_vec3[3], const float in_vec3[3]);
 } // namespace
 
 // TH10 0x403c80.
-i32 RunTitleBackgroundScriptStackAbi(void *state)
+i32 RunTitleBackgroundScriptStackAbi(void *state_ptr)
 {
-    u8 *const st = static_cast<u8 *>(state);
+    TitleScreenState &state = *reinterpret_cast<TitleScreenState *>(state_ptr);
+    u8 *const st = static_cast<u8 *>(state_ptr);
 
     {
-        u8 *cur = *reinterpret_cast<u8 **>(st + 0x4cU);
-        if (LoadI32(cur, 0) > LoadI32(st, 0x3cU))
+        u8 *cur = state.script_cursor;
+        if (LoadI32(cur, 0) > state.wait_timer.count)
             goto epilogue;
     }
 
     for (;;) {
-        u8 *cur = *reinterpret_cast<u8 **>(st + 0x4cU);
-        if (LoadI32(cur, 0) > LoadI32(st, 0x3cU))
+        u8 *cur = state.script_cursor;
+        if (LoadI32(cur, 0) > state.wait_timer.count)
             break;
 
         const i32 opcode = LoadI16(cur, 4U);
@@ -158,10 +168,11 @@ i32 RunTitleBackgroundScriptStackAbi(void *state)
             // size (+8) and skip the default +6 step.
             LazyInitPointerRateTimer(st, 0x38U);
             const i32 frames = LoadI32(cur, 0xcU);
-            StoreU32(st, 0x3cU, static_cast<u32>(frames));
-            StoreU32(st, 0x38U, static_cast<u32>(frames - 1));
-            StoreFloat(st, 0x40U, static_cast<float>(frames));
-            *reinterpret_cast<u8 **>(st + 0x4cU) = cur + LoadU32(cur, 8U);
+            state.wait_timer.count = frames;
+            state.wait_timer.prev = frames - 1;
+            *reinterpret_cast<float *>(&state.wait_timer.accum) =
+                static_cast<float>(frames);
+            state.script_cursor = cur + LoadU32(cur, 8U);
             advanced = true;
             break;
         }
@@ -182,14 +193,15 @@ i32 RunTitleBackgroundScriptStackAbi(void *state)
         case 3: {
             // Position B target: record vec2 into +0xe0, record vec3 into
             // +0xa8, live +0x2a4c into +0x9c; arm the +0xcc timer.
-            StoreU32(st, 0xe0U, LoadU32(cur, 8U));
-            StoreU32(st, 0xe4U, LoadU32(cur, 0xcU));
-            CopyVec3(st, 0x9cU, st, 0x2a4cU);
-            CopyVec3(st, 0xa8U, cur, 0x10U);
+            state.interp_b_gate_flag = LoadU32(cur, 8U);
+            state.interp_b_record_hi = LoadU32(cur, 0xcU);
+            CopyVec3(st, 0x9cU, st, 0x2a4cU); // camera-overlap read kept raw
+            CopyVec3To(state.interp_b_end, cur, 0x10U);
             LazyInitPointerRateTimer(st, 0xccU);
-            StoreU32(st, 0xd0U, 0U);
-            StoreU32(st, 0xd4U, 0U);
-            StoreU32(st, 0xccU, static_cast<u32>(-1));
+            state.interp_b_timer.count = 0;
+            state.interp_b_timer.accum = 0;
+            *reinterpret_cast<u32 *>(&state.interp_b_timer.prev) =
+                static_cast<u32>(-1);
             break;
         }
         case 4:
@@ -198,14 +210,15 @@ i32 RunTitleBackgroundScriptStackAbi(void *state)
         case 5: {
             // Start interpolator A (+0x50): from the live +0x2a58 to the
             // record vec3; flags +0x94/+0x98 from the record.
-            StoreU32(st, 0x94U, LoadU32(cur, 8U));
-            StoreU32(st, 0x98U, LoadU32(cur, 0xcU));
-            CopyVec3(st, 0x50U, st, 0x2a58U);
-            CopyVec3(st, 0x5cU, cur, 0x10U);
+            state.interp_a_gate = LoadU32(cur, 8U);
+            state.interp_a_mode = LoadU32(cur, 0xcU);
+            CopyVec3(st, 0x50U, st, 0x2a58U); // camera-overlap read kept raw
+            CopyVec3To(state.interp_a_end, cur, 0x10U);
             LazyInitPointerRateTimer(st, 0x80U);
-            StoreU32(st, 0x84U, 0U);
-            StoreU32(st, 0x88U, 0U);
-            StoreU32(st, 0x80U, static_cast<u32>(-1));
+            state.interp_a_timer.count = 0;
+            state.interp_a_timer.accum = 0;
+            *reinterpret_cast<u32 *>(&state.interp_a_timer.prev) =
+                static_cast<u32>(-1);
             break;
         }
         case 6:
@@ -242,52 +255,57 @@ i32 RunTitleBackgroundScriptStackAbi(void *state)
                 static_cast<float>(LoadU32(cur, 0x13U) & 0xffU),
                 static_cast<i32>(LoadU32(cur, 0x14U)),
                 static_cast<i32>(LoadU32(cur, 0x18U)), scratch);
-            StoreU32(st, 0x16cU, LoadU32(cur, 8U));
+            state.color_track_gate = LoadU32(cur, 8U);
             for (u32 i = 0; i != 7U; ++i)
-                StoreU32(st, 0xe8U + 4U * i, LoadU32(st, 0x2b48U + 4U * i));
+                *reinterpret_cast<u32 *>(state.color_track_state + 4U * i) =
+                    LoadU32(st, 0x2b48U + 4U * i);
             for (u32 i = 0; i != 7U; ++i)
-                StoreU32(st, 0x104U + 4U * i, scratch[i]);
+                *reinterpret_cast<u32 *>(state.color_track_scratch + 4U * i) =
+                    scratch[i];
             LazyInitPointerRateTimer(st, 0x158U);
-            StoreU32(st, 0x15cU, 0U);
-            StoreU32(st, 0x160U, 0U);
-            StoreU32(st, 0x158U, static_cast<u32>(-1));
-            StoreU32(st, 0x170U, LoadU32(cur, 0xcU));
+            state.color_track_timer.count = 0;
+            state.color_track_timer.accum = 0;
+            *reinterpret_cast<u32 *>(&state.color_track_timer.prev) =
+                static_cast<u32>(-1);
+            state.color_track_record = LoadU32(cur, 0xcU);
             break;
         }
         case 10: {
             // Start interpolator B (+0x9c): from the live +0x2a4c with the
             // record's three vec3 targets (+0xb4 gate, +0xa8, +0xc0).
-            StoreU32(st, 0x94U, LoadU32(cur, 8U));
-            StoreU32(st, 0xe0U, LoadU32(cur, 8U));
-            CopyVec3(st, 0x9cU, st, 0x2a4cU);
-            CopyVec3(st, 0xb4U, cur, 0x10U);
-            CopyVec3(st, 0xa8U, cur, 0x1cU);
-            CopyVec3(st, 0xc0U, cur, 0x28U);
-            StoreU32(st, 0xe4U, 8U);
+            state.interp_a_gate = LoadU32(cur, 8U);
+            state.interp_b_gate_flag = LoadU32(cur, 8U);
+            CopyVec3(st, 0x9cU, st, 0x2a4cU); // camera-overlap read kept raw
+            CopyVec3To(state.interp_b_gate, cur, 0x10U);
+            CopyVec3To(state.interp_b_end, cur, 0x1cU);
+            CopyVec3To(state.interp_b_third, cur, 0x28U);
+            state.interp_b_record_hi = 8U;
             LazyInitPointerRateTimer(st, 0xccU);
-            StoreU32(st, 0xd0U, 0U);
-            StoreU32(st, 0xd4U, 0U);
-            StoreU32(st, 0xccU, static_cast<u32>(-1));
+            state.interp_b_timer.count = 0;
+            state.interp_b_timer.accum = 0;
+            *reinterpret_cast<u32 *>(&state.interp_b_timer.prev) =
+                static_cast<u32>(-1);
             break;
         }
         case 11: {
             // Start interpolator A variant: extra vec3s into +0x68/+0x74.
-            StoreU32(st, 0x94U, LoadU32(cur, 8U));
-            CopyVec3(st, 0x50U, st, 0x2a58U);
-            CopyVec3(st, 0x68U, cur, 0x10U);
-            CopyVec3(st, 0x5cU, cur, 0x1cU);
-            CopyVec3(st, 0x74U, cur, 0x28U);
-            StoreU32(st, 0x98U, 8U);
+            state.interp_a_gate = LoadU32(cur, 8U);
+            CopyVec3(st, 0x50U, st, 0x2a58U); // camera-overlap read kept raw
+            CopyVec3(st, 0x68U, cur, 0x10U);  // +0x68 has no named field
+            CopyVec3To(state.interp_a_end, cur, 0x1cU);
+            CopyVec3To(state.interp_a_extra, cur, 0x28U);
+            state.interp_a_mode = 8U;
             LazyInitPointerRateTimer(st, 0x80U);
-            StoreU32(st, 0x84U, 0U);
-            StoreU32(st, 0x88U, 0U);
-            StoreU32(st, 0x80U, static_cast<u32>(-1));
+            state.interp_a_timer.count = 0;
+            state.interp_a_timer.accum = 0;
+            *reinterpret_cast<u32 *>(&state.interp_a_timer.prev) =
+                static_cast<u32>(-1);
             break;
         }
         case 12: {
             // Wave mode: byte payload into +0x20, timer +0x24 armed and
-            // reset.
-            StoreU32(st, 0x20U, LoadU32(cur, 8U) & 0xffU);
+            // reset (the +0x24 timer block has no named field).
+            state.wave_mode = LoadU32(cur, 8U) & 0xffU;
             LazyInitPointerRateTimer(st, 0x24U);
             StoreU32(st, 0x28U, 0U);
             StoreU32(st, 0x2cU, 0U);
@@ -302,14 +320,12 @@ i32 RunTitleBackgroundScriptStackAbi(void *state)
             // +0x180 VM record; a negative payload clears the VM's stop
             // flag (bit 0 of +0x35c).
             const i32 index = static_cast<i32>(LoadU32(cur, 0xcU));
-            u8 *vm = st + 0x180U
-                + static_cast<u32>(
-                      static_cast<i32>(LoadU32(cur, 8U)) * 0x3acU);
+            VmRecord &vm =
+                state.background_vms[static_cast<i32>(LoadU32(cur, 8U))];
             if (index >= 0) {
-                BindTitleScriptVmEsiStackAbi(
-                    vm, *reinterpret_cast<void **>(st + 0x178U));
+                BindTitleScriptVmEsiStackAbi(&vm, state.anm_manager_work);
             } else {
-                StoreU32(vm, 0x35cU, LoadU32(vm, 0x35cU) & 0xfffffffeU);
+                vm.flags &= 0xfffffffeU;
             }
             break;
         }
@@ -319,9 +335,8 @@ i32 RunTitleBackgroundScriptStackAbi(void *state)
 
         if (!advanced) {
             // Default advance: signed 16-bit delta at record+6.
-            cur = *reinterpret_cast<u8 **>(st + 0x4cU);
-            *reinterpret_cast<u8 **>(st + 0x4cU) =
-                cur + static_cast<u32>(LoadI16(cur, 6U));
+            cur = state.script_cursor;
+            state.script_cursor = cur + static_cast<u32>(LoadI16(cur, 6U));
         }
     }
 
@@ -330,25 +345,27 @@ epilogue:
     TickPointerRateTimer(st, 0x38U);
 
     float scratch[4];
-    if (LoadU32(st, 0x94U) != 0U) {
+    if (state.interp_a_gate != 0U) {
         TickVec3Interpolator(st + 0x50U, scratch);
         CopyVec3(st, 0x2a58U, reinterpret_cast<const u8 *>(scratch), 0);
     }
-    if (LoadU32(st, 0xe0U) != 0U) {
+    if (state.interp_b_gate_flag != 0U) {
         TickVec3Interpolator(st + 0x9cU, scratch);
         CopyVec3(st, 0x2a4cU, reinterpret_cast<const u8 *>(scratch), 0);
     }
-    if (LoadU32(st, 0x16cU) != 0U) {
+    if (state.color_track_gate != 0U) {
         u32 color_track_out[7];
-        TickColorTrack(st + 0xe8U, color_track_out);
+        TickColorTrack(state.color_track_state, color_track_out);
         for (u32 i = 0; i != 7U; ++i)
             StoreU32(st, 0x2b48U + 4U * i, color_track_out[i]);
     }
-    if (LoadU32(st, 0x20U) != 0U) {
-        const u32 mode = LoadU32(st, 0x20U) & 0xffU;
+    if (state.wave_mode != 0U) {
+        const u32 mode = state.wave_mode & 0xffU;
         if (mode == 1U) {
             // Wave: sin(acc * -100 - pi) * 1.5 published to +0x2a88, then
             // the timer forward tick; past 512 frames the timer re-arms.
+            // (The +0x2a88 target and the +0x24 timer block stay raw:
+            // camera-snapshot overlap / unnamed timer.)
             StoreFloat(st, 0x2a88U,
                        1.5f * static_cast<float>(sin(
                            static_cast<double>(LoadFloat(st, 0x2cU))
@@ -367,11 +384,12 @@ epilogue:
 // caller's filename, loads the script file through the shared loader, then
 // maps the manager-work resource, rebases the script's pointer tables and
 // allocates the VM-record array. Returns 0 on success, -1 on failure.
-i32 LoadTitleBackgroundScriptEbxStackAbi(void *state, const char *filename)
+i32 LoadTitleBackgroundScriptEbxStackAbi(void *state_ptr,
+                                         const char *filename)
 {
-    u8 *const st = static_cast<u8 *>(state);
+    TitleScreenState &state = *reinterpret_cast<TitleScreenState *>(state_ptr);
 
-    if (LoadU32(st, 0x2a44U) == 0U) {
+    if (state.file_buffer == 0) {
         // Native string append: the first byte of 0x497c38 is cleared, the
         // buffer's current terminator located, and the filename (with its
         // terminator) copied over it.
@@ -385,27 +403,27 @@ i32 LoadTitleBackgroundScriptEbxStackAbi(void *state, const char *filename)
         *append = '\0';
 
         void *const data = LoadMainChainFile(g_TitleScriptPath,
-            reinterpret_cast<u32 *>(st + 0x2a48U), 0);
-        StoreU32(st, 0x2a44U, reinterpret_cast<u32>(data));
+                                             &state.file_size, 0);
+        state.file_buffer = static_cast<u8 *>(data);
         if (data == 0)
             return -1;
     }
 
     // Copy the loaded image into a private buffer.
-    u8 *const data = reinterpret_cast<u8 *>(LoadU32(st, 0x2a44U));
-    const u32 size = LoadU32(st, 0x2a48U);
+    u8 *const data = state.file_buffer;
+    const u32 size = state.file_size;
     u8 *const buffer = static_cast<u8 *>(AllocateResourceBuffer(size));
     for (u32 i = 0; i != size; ++i)
         buffer[i] = data[i];
-    StoreU32(st, 0x10U, reinterpret_cast<u32>(buffer));
+    state.stage_script_buffer = buffer;
 
     // Manager-work request: slot = (state+0x2a30 & 1) + 4, resource name
     // inside the buffer at +0x10, owner = DAT_00491c10.
-    const i32 slot = static_cast<i32>((LoadU32(st, 0x2a30U) & 1U) + 4U);
+    const i32 slot = static_cast<i32>((state.scene_mode_copy & 1U) + 4U);
     ManagerWorkPartial *const work = RequestManagerWork(
         static_cast<ManagerWorkOwnerPartial *>(g_MainChainRenderOwner),
         slot, reinterpret_cast<const char *>(buffer + 0x10U));
-    StoreU32(st, 0x178U, reinterpret_cast<u32>(work));
+    state.anm_manager_work = work;
     if (work == 0) {
         AppendSoundFileLoadError(reinterpret_cast<const char *>(0x46cbc0U));
         return -1;
@@ -414,74 +432,77 @@ i32 LoadTitleBackgroundScriptEbxStackAbi(void *state, const char *filename)
     // Rebase the script header: the pointer table at +0x14 counts
     // (i16)base[0] dword offsets relative to the buffer base; +0x18/+0x1c
     // are the base-relative dwords at +4/+8.
-    StoreU32(st, 0x14U, reinterpret_cast<u32>(buffer + 0x90U));
-    StoreU32(st, 0x18U,
-             reinterpret_cast<u32>(buffer + LoadU32(buffer, 4U)));
-    StoreU32(st, 0x1cU,
-             reinterpret_cast<u32>(buffer + LoadU32(buffer, 8U)));
-    u32 *const table = reinterpret_cast<u32 *>(
-        LoadU32(st, 0x14U));
+    state.script_pointer_table = buffer + 0x90U;
+    state.script_base =
+        reinterpret_cast<u32>(buffer + LoadU32(buffer, 4U));
+    state.script_base_2 =
+        reinterpret_cast<u32>(buffer + LoadU32(buffer, 8U));
+    u32 *const table =
+        reinterpret_cast<u32 *>(state.script_pointer_table);
     const i32 table_count = static_cast<i16>(LoadU32(buffer, 0));
     for (i32 i = 0; i < table_count; ++i)
         table[i] = table[i] + reinterpret_cast<u32>(buffer);
 
     // VM-record array sized (i16)base[2] * 0x3ac.
     const i32 vm_count = static_cast<i16>(LoadU32(buffer, 2U));
-    StoreU32(st, 0x17cU,
-             reinterpret_cast<u32>(AllocateResourceBuffer(
-                 static_cast<u32>(vm_count * 0x3ac))));
+    state.vm_heap_array = static_cast<u8 *>(AllocateResourceBuffer(
+        static_cast<u32>(vm_count * 0x3ac)));
     return 0;
 }
 
 // TH10 0x402720.
-i32 UpdateTitleBackgroundCalcBodyEaxAbi(void *state)
+i32 UpdateTitleBackgroundCalcBodyEaxAbi(void *state_ptr)
 {
-    u8 *const st = static_cast<u8 *>(state);
+    TitleScreenState &state = *reinterpret_cast<TitleScreenState *>(state_ptr);
+    u8 *const st = static_cast<u8 *>(state_ptr);
 
-    const u32 gate = LoadU32(st, 0x2a18U);
+    const u32 gate = state.master_flags;
     if ((gate & 8U) != 0U)
         return 1;
-    if ((gate & 4U) != 0U && LoadI32(st, 0x2a20U) >= 60)
+    if ((gate & 4U) != 0U && state.score_anim_timer.count >= 60)
         return 1;
 
     // Zero the +0x2b3c vec3 (and the two dwords at +0x2b34/+0x2b38 the
     // native clears alongside it), then normalize the +0x2a58 vector into
-    // +0x2a70.
+    // +0x2a70. (+0x2b3c/+0x2a58/+0x2a70 sit in the camera-snapshot overlap
+    // region and stay raw; +0x2b34/+0x2b38 are the camera work's named
+    // owner_value_00e8/00ec slots.)
     StoreU32(st, 0x2b3cU, 0U);
     StoreU32(st, 0x2b40U, 0U);
     StoreU32(st, 0x2b44U, 0U);
-    StoreU32(st, 0x2b34U, 0U);
-    StoreU32(st, 0x2b38U, 0U);
+    state.camera_snapshot.owner_value_00e8 = 0U;
+    state.camera_snapshot.owner_value_00ec = 0U;
     {
         const float in[3] = {LoadFloat(st, 0x2a58U), LoadFloat(st, 0x2a5cU),
                              LoadFloat(st, 0x2a60U)};
         D3DXVec3NormalizeAbi(reinterpret_cast<float *>(st + 0x2a70U), in);
     }
-    StoreU32(st, 0x1ee8U, 0x808080U);
+    state.modulation_color = 0x808080U;
     TitleBackgroundPreUpdateAbi(st);
 
     (void)RunTitleBackgroundScriptStackAbi(st);
 
     // The eight VM records at +0x180.
     for (u32 i = 0; i != 8U; ++i)
-        (void)FinalizeTimelineRenderObjectSetup(st + 0x180U + i * 0x3acU);
+        (void)FinalizeTimelineRenderObjectSetup(&state.background_vms[i]);
 
     // The three aux VMs run under a forced 1.0 rate when armed.
-    if (LoadU32(st, 0x1eecU) != 0U) {
+    if (state.aux_vm_arm_latch != 0U) {
         const float saved_rate = g_SharedRateFloat;
         g_SharedRateFloat = 1.0f;
-        (void)FinalizeTimelineRenderObjectSetup(st + 0x1f08U);
-        (void)FinalizeTimelineRenderObjectSetup(st + 0x22b4U);
-        (void)FinalizeTimelineRenderObjectSetup(st + 0x2660U);
+        (void)FinalizeTimelineRenderObjectSetup(&state.aux_vms[0]);
+        (void)FinalizeTimelineRenderObjectSetup(&state.aux_vms[1]);
+        (void)FinalizeTimelineRenderObjectSetup(&state.aux_vms[2]);
         g_SharedRateFloat = saved_rate;
     }
 
-    // Pause-state snapshot: 0x46 dwords from +0x2a4c into the global
-    // snapshot block, then the frame counter advance and latch clear.
+    // Pause-state snapshot: 0x46 dwords from the +0x2a4c camera snapshot
+    // into the global snapshot block, then the frame counter advance and
+    // latch clear.
     for (u32 i = 0; i != 0x46U; ++i)
         g_PauseSnapshot[i] = LoadU32(st, 0x2a4cU + 4U * i);
-    StoreU32(st, 0x1eecU, 0U);
-    StoreU32(st, 0x2a34U, LoadU32(st, 0x2a34U) + 1U);
+    state.aux_vm_arm_latch = 0U;
+    state.intro_counter = state.intro_counter + 1U;
     return 1;
 }
 

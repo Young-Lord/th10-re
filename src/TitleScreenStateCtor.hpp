@@ -5,7 +5,7 @@
 namespace th10 {
 
 // TH10 0x00402230. Title-screen state constructor (native usercall: EAX = the
-// 0x2a78-byte state object, ECX = stage-data file name, stack = priority base
+// 0x2b64-byte state object, ECX = stage-data file name, stack = priority base
 // dword; `ret 4`). The base value doubles as the publication selector: zero
 // publishes the state into the secondary slot (DAT_004776e8), any nonzero
 // value into the primary slot (DAT_004776e4), and the three scheduler-record

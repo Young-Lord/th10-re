@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "AsciiAnimationVm.hpp"
+#include "AsciiHudOwner.hpp"
 #include "BgmRuntime.hpp"
 #include "EntityHelpers.hpp"
 #include "PlayerFrameworkHelpers.hpp"
@@ -16,6 +17,7 @@
 #include "PlayerTimerHelpers.hpp"
 #include "Th10Platform.hpp"
 #include "Th10Types.hpp"
+#include "TitleScreenState.hpp"
 #include "TimelineRenderObjectSetup.hpp"
 #include "TimelineRenderObjects.hpp"
 #include "TitleCalcCluster.hpp"
@@ -77,15 +79,15 @@ void AwardExtendedLifeEaxEcxAbi(void *frame_state, i32 increment)
     } else {
         // Native: (ECX = 0x492590, EDI = 0x2c, stack = 0) -> 0x43dc90.
         EnqueueBgmSoundValue(&g_TransitionRoot, 44U, 0);
-        void *const hud = g_AsciiHudOwner;
+        AsciiHudOwner &hud =
+            *reinterpret_cast<AsciiHudOwner *>(g_AsciiHudOwner);
         ReleaseEntityById(g_MainChainRenderOwner,
-                          LoadU32At(hud, 0x9E18U));
-        StoreU32To(hud, 0x9E18U, 0U);
-        // Native third stack argument (15) is stored to entity+0x20 by
-        // 0x448d00; the shared spawn helper does not model that dead dword.
+                          hud.second_banner_handle);
+        hud.second_banner_handle = 0U;
         i32 *const spawned = SpawnSetupEffectVmListABack(
-            static_cast<i32>(LoadU32At(hud, 0x9EC8U)), 0x4BU);
-        StoreU32To(hud, 0x9E18U, static_cast<u32>(*spawned));
+            static_cast<i32>(
+                reinterpret_cast<u32>(hud.front_anm_work)), 0x4BU);
+        hud.second_banner_handle = static_cast<u32>(*spawned);
     }
     RefreshLifeIconsEaxStackAbi(
         LoadI32At(frame_state, 0x30U)); // == DAT_00474c70
@@ -285,10 +287,10 @@ void ApplyOptionPositionStateEbxAbi(void *record)
 // TH10 0x00417040.
 void UpdateInGameScoreDisplayEsiAbi(void *hud_owner)
 {
-    u8 *const hud = static_cast<u8 *>(hud_owner);
+    AsciiHudOwner &hud = *reinterpret_cast<AsciiHudOwner *>(hud_owner);
     const u32 kHundredMillion = 100000000U;
 
-    i32 displayed = LoadI32At(hud, 0x9E78U);
+    i32 displayed = static_cast<i32>(hud.displayed_score);
     if (static_cast<i32>(LoadU32From(
             reinterpret_cast<const void *>(0x474C44U))) != displayed) {
         // Advance the displayed score toward DAT_00474c44. The rate is the
@@ -305,17 +307,20 @@ void UpdateInGameScoreDisplayEsiAbi(void *hud_owner)
             rate = 578910;
         else if (rate == 0)
             rate = 1;
-        if (LoadI32At(hud, 0x9E7CU) < rate)
-            StoreI32To(hud, 0x9E7CU, rate);
-        if (LoadI32At(hud, 0x9E7CU) > target - LoadI32At(hud, 0x9E78U))
-            StoreI32To(hud, 0x9E7CU, target - LoadI32At(hud, 0x9E78U));
-        displayed = LoadI32At(hud, 0x9E78U) + LoadI32At(hud, 0x9E7CU);
-        StoreI32To(hud, 0x9E78U, displayed);
+        if (static_cast<i32>(hud.score_display_rate) < rate)
+            hud.score_display_rate = static_cast<u32>(rate);
+        if (static_cast<i32>(hud.score_display_rate) >
+            target - static_cast<i32>(hud.displayed_score))
+            hud.score_display_rate = static_cast<u32>(
+                target - static_cast<i32>(hud.displayed_score));
+        displayed = static_cast<i32>(hud.displayed_score) +
+                    static_cast<i32>(hud.score_display_rate);
+        hud.displayed_score = static_cast<u32>(displayed);
         if (displayed >= target)
-            StoreI32To(hud, 0x9E7CU, 0U);
+            hud.score_display_rate = 0U;
         if (displayed >= static_cast<i32>(kHundredMillion) &&
             previous < static_cast<i32>(kHundredMillion))
-            *reinterpret_cast<u16 *>(hud + 0x48D8U) = 4;
+            hud.pool_b[9].state_word = 4;
     }
 
     // Publish a new best score.
@@ -332,15 +337,15 @@ void UpdateInGameScoreDisplayEsiAbi(void *hud_owner)
         // always set, making the 0x448d00 spawn at 0x41711f dead code.
     }
 
-    if (LoadI32At(hud, 0x9E64U) >= 20) {
+    if (hud.hud_timer.count >= 20) {
         if (static_cast<i32>(LoadU32From(
                 reinterpret_cast<const void *>(0x474C40U))) >=
                 static_cast<i32>(kHundredMillion) &&
-            LoadI32At(hud, 0x9E74U) <
+                static_cast<i32>(hud.best_score_mirror) <
                 static_cast<i32>(kHundredMillion))
-            *reinterpret_cast<u16 *>(hud + 0x2420U) = 4;
-        StoreU32To(hud, 0x9E74U,
-                   LoadU32From(reinterpret_cast<const void *>(0x474C40U)));
+            hud.pool_a[9].state_word = 4;
+        hud.best_score_mirror =
+            LoadU32From(reinterpret_cast<const void *>(0x474C40U));
     }
 
     // Redraw the 9+9 score digit VMs (upper row = best score, lower row =
@@ -349,47 +354,41 @@ void UpdateInGameScoreDisplayEsiAbi(void *hud_owner)
     i32 best = static_cast<i32>(LoadU32From(
         reinterpret_cast<const void *>(0x474C40U)));
     i32 lower = displayed;
-    void *const resource =
-        reinterpret_cast<void *>(LoadU32At(hud, 0x9EC8U));
-    {
-        u32 vm_offset = 0x2874U;
-        for (u32 i = 9; i != 0U; --i) {
-            const u32 upper_vm = vm_offset - 0x24B8U;
-            if (best != 0) {
-                InitializeAsciiAnimationVmEntry(
-                    hud + upper_vm,
-                    static_cast<u32>(best % 10) + 8U, resource);
-                best /= 10;
-            } else {
-                InitializeAsciiAnimationVmEntry(hud + upper_vm, 8U,
-                                                resource);
-            }
-            if (lower != 0) {
-                InitializeAsciiAnimationVmEntry(
-                    hud + vm_offset,
-                    static_cast<u32>(lower % 10) + 8U, resource);
-                lower /= 10;
-            } else {
-                InitializeAsciiAnimationVmEntry(hud + vm_offset, 8U,
-                                                resource);
-            }
-            FinalizeTimelineRenderObjectSetup(hud + upper_vm);
-            FinalizeTimelineRenderObjectSetup(hud + vm_offset);
-            vm_offset += 0x3ACU;
+    void *const resource = hud.front_anm_work;
+    for (u32 i = 1; i != 10U; ++i) {
+        VmRecord &upper_vm = hud.pool_a[i];
+        VmRecord &lower_vm = hud.pool_b[i];
+        if (best != 0) {
+            InitializeAsciiAnimationVmEntry(
+                &upper_vm,
+                static_cast<u32>(best % 10) + 8U, resource);
+            best /= 10;
+        } else {
+            InitializeAsciiAnimationVmEntry(&upper_vm, 8U, resource);
         }
+        if (lower != 0) {
+            InitializeAsciiAnimationVmEntry(
+                &lower_vm,
+                static_cast<u32>(lower % 10) + 8U, resource);
+            lower /= 10;
+        } else {
+            InitializeAsciiAnimationVmEntry(&lower_vm, 8U, resource);
+        }
+        FinalizeTimelineRenderObjectSetup(&upper_vm);
+        FinalizeTimelineRenderObjectSetup(&lower_vm);
     }
     // The two auxiliary digit rows show DAT_00474c94 and DAT_00474c90
     // (life/power-of-life counters) through the same digit+8 entry mapping.
     InitializeAsciiAnimationVmEntry(
-        hud + 0x10U,
+        &hud.pool_a[0],
         static_cast<u32>(LoadI32FromAddress(0x474C94U)) + 8U, resource);
     InitializeAsciiAnimationVmEntry(
-        hud + 0x24C8U,
+        &hud.pool_b[0],
         static_cast<u32>(LoadI32FromAddress(0x474C90U)) + 8U, resource);
-    FinalizeTimelineRenderObjectSetup(hud + 0x10U);
-    FinalizeTimelineRenderObjectSetup(hud + 0x24C8U);
+    FinalizeTimelineRenderObjectSetup(&hud.pool_a[0]);
+    FinalizeTimelineRenderObjectSetup(&hud.pool_b[0]);
 
-    if ((LoadU32At(hud, 0x9EB4U) & 0x20U) == 0U) {
+    if ((hud.hud_mode_flags & 0x20U) == 0U) {
         // Score-rank check: the table depends on the difficulty dword
         // (DAT_00474c74 == 4 selects the second table).
         const u32 rank =
@@ -411,26 +410,18 @@ void UpdateInGameScoreDisplayEsiAbi(void *hud_owner)
 // TH10 0x00404450.
 void InitializeTitleSecondaryStateStackAbi(void *state)
 {
-    u8 *const base = static_cast<u8 *>(state);
+    TitleScreenState &title = *reinterpret_cast<TitleScreenState *>(state);
 
-    StoreU32To(reinterpret_cast<void *>(LoadU32At(base, 8U)), 4U,
-               LoadU32At(reinterpret_cast<void *>(LoadU32At(base, 8U)),
-                         4U) | 2U);
-    StoreU32To(reinterpret_cast<void *>(LoadU32At(base, 0xCU)), 4U,
-               LoadU32At(reinterpret_cast<void *>(LoadU32At(base, 0xCU)),
-                         4U) | 2U);
-    StoreU32To(reinterpret_cast<void *>(LoadU32At(base, 0x2A40U)), 4U,
-               LoadU32At(reinterpret_cast<void *>(LoadU32At(base, 0x2A40U)),
-                         4U) | 2U);
+    title.calc_element->flags |= 2U;
+    title.draw_element->flags |= 2U;
+    title.draw_pass1_element->flags |= 2U;
 
-    u8 *const count_ptr =
-        reinterpret_cast<u8 *>(LoadU32At(base, 0x10U));
-    const i32 count =
-        static_cast<i32>(*reinterpret_cast<const short *>(count_ptr));
+    const i32 count = static_cast<i32>(
+        *reinterpret_cast<const short *>(title.stage_script_buffer));
     u32 running_index = 0U;
     if (count > 0) {
         u8 *const *const stage_table =
-            reinterpret_cast<u8 *const *>(LoadU32At(base, 0x14U));
+            reinterpret_cast<u8 *const *>(title.script_pointer_table);
         for (i32 stage = 0; stage < count; ++stage) {
             u8 *const entry = stage_table[stage];
             entry[3] = 1;
@@ -439,9 +430,8 @@ void InitializeTitleSecondaryStateStackAbi(void *state)
                 u32 vm_offset = running_index * 0x3ACU;
                 do {
                     InitializePlayerMainVmEsiStackAbi(
-                        reinterpret_cast<void *>(LoadU32At(base, 0x178U)),
-                        reinterpret_cast<void *>(LoadU32At(base, 0x17CU) +
-                                                 vm_offset),
+                        title.anm_manager_work,
+                        title.vm_heap_array + vm_offset,
                         static_cast<i32>(
                             *reinterpret_cast<const short *>(record + 4)));
                     *reinterpret_cast<u16 *>(record + 6) =
@@ -454,7 +444,8 @@ void InitializeTitleSecondaryStateStackAbi(void *state)
             }
         }
     }
-    StoreU32To(base, 0x4CU, LoadU32At(base, 0x1CU));
+    title.script_cursor =
+        reinterpret_cast<u8 *>(title.script_base_2);
 }
 
 // TH10 0x00417770.

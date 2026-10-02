@@ -5,6 +5,7 @@
 #include "AsciiHudGameplayUpdate.hpp"
 
 #include "AsciiAnimationVm.hpp"
+#include "AsciiHudOwner.hpp"
 #include "EntityHelpers.hpp"
 #include "GameManagerState.hpp"
 #include "PlayerRecord.hpp"
@@ -170,12 +171,15 @@ u8 *SpawnHudPoolVm(u32 script, void *resource)
 // TH10 0x414900.
 i32 UpdateAsciiHudGameplayStackAbi(void *owner)
 {
-    u8 *const hud = static_cast<u8 *>(owner);
+    AsciiHudOwner &hud = *reinterpret_cast<AsciiHudOwner *>(owner);
+    // Raw view for the deliberately unconverted accesses below (dword
+    // bit-pattern clears and record bytes without a named field).
+    u8 *const hud_raw = reinterpret_cast<u8 *>(&hud);
 
     // ---- render-mode latch (+0x9eb4 bit 0x10, 120-frame counter) ----
-    if ((LoadU32(hud, 0x9eb4U) & 0x10U) != 0U) {
-        i32 counter = LoadI32(hud, 0x9eccU) + 1;
-        StoreU32(hud, 0x9eccU, static_cast<u32>(counter));
+    if ((hud.hud_mode_flags & 0x10U) != 0U) {
+        i32 counter = static_cast<i32>(hud.render_mode_counter) + 1;
+        hud.render_mode_counter = static_cast<u32>(counter);
         if (counter >= 120) {
             // (flags & 0x1000) ? 0 : 14 via the neg/sbb/and/add chain.
             g_AsciiHudRenderMode =
@@ -185,14 +189,11 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
 
     // ---- VM pools ----
     for (u32 i = 0; i != 9U; ++i)
-        (void)FinalizeTimelineRenderObjectSetup(hud + 0x4980U
-                                                + i * 0x3acU);
+        (void)FinalizeTimelineRenderObjectSetup(&hud.pool_c[i]);
     for (u32 i = 0; i != 4U; ++i)
-        (void)FinalizeTimelineRenderObjectSetup(hud + 0x6a8cU
-                                                + i * 0x3acU);
+        (void)FinalizeTimelineRenderObjectSetup(&hud.pool_d[i]);
     for (u32 i = 0; i != 2U; ++i)
-        (void)FinalizeTimelineRenderObjectSetup(hud + 0x793cU
-                                                + i * 0x3acU);
+        (void)FinalizeTimelineRenderObjectSetup(&hud.pool_e[i]);
 
     // ---- region state words (7 records at +0x8398) ----
     if (g_ScreenTargetBlock != 0) {
@@ -200,90 +201,84 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
             *reinterpret_cast<const PlayerRecord *>(g_ScreenTargetBlock);
         const float tx = player.position_x;
         const float ty = player.position_y;
-        if ((LoadU32(hud, 0x9eb4U) & 1U) == 0U) {
+        if ((hud.hud_mode_flags & 1U) == 0U) {
             // Enter region: y > 432 and x < -128.
             if (!(ty <= kEnterY || ty != ty) && tx < kEnterX) {
                 for (u32 i = 0; i != 7U; ++i)
-                    StoreU16(hud, 0x8398U + i * 0x3acU, 3U);
-                StoreU32(hud, 0x9eb4U, LoadU32(hud, 0x9eb4U) | 1U);
+                    hud.pool_f[i].state_word = 3U;
+                hud.hud_mode_flags |= 1U;
             }
         } else {
             // Leave region: y < 400 or x > -112.
             if (ty < kLeaveY || ty != ty) {
                 for (u32 i = 0; i != 7U; ++i)
-                    StoreU16(hud, 0x8398U + i * 0x3acU, 2U);
-                StoreU32(hud, 0x9eb4U, LoadU32(hud, 0x9eb4U)
-                                           & 0xfffffffeU);
+                    hud.pool_f[i].state_word = 2U;
+                hud.hud_mode_flags &= 0xfffffffeU;
             } else if (!(tx <= kLeaveX || tx != tx)) {
                 for (u32 i = 0; i != 7U; ++i)
-                    StoreU16(hud, 0x8398U + i * 0x3acU, 2U);
-                StoreU32(hud, 0x9eb4U, LoadU32(hud, 0x9eb4U)
-                                           & 0xfffffffeU);
+                    hud.pool_f[i].state_word = 2U;
+                hud.hud_mode_flags &= 0xfffffffeU;
             }
         }
     }
 
     // ---- score digits ----
-    (void)FinalizeTimelineRenderObjectSetup(hud + 0x8094U);
+    (void)FinalizeTimelineRenderObjectSetup(&hud.pool_f[0]);
     {
         u32 divisor = 10000U;
         i32 remaining = static_cast<i32>(g_ScoreValue);
         for (u32 i = 0; i != 5U; ++i) {
-            u8 *vm = hud + 0x8440U + i * 0x3acU;
+            VmRecord *vm = &hud.pool_f[i + 1];
             const i32 digit = remaining / static_cast<i32>(divisor);
             remaining %= static_cast<i32>(divisor);
             (void)InitializeAsciiAnimationVmEntry(
                 vm, static_cast<u32>(digit + 0x1e),
-                *reinterpret_cast<void **>(hud + 0x9ec8U));
+                hud.front_anm_work);
             divisor /= 10U;
             (void)FinalizeTimelineRenderObjectSetup(vm);
         }
     }
-    (void)FinalizeTimelineRenderObjectSetup(hud + 0x969cU);
+    (void)FinalizeTimelineRenderObjectSetup(&hud.pool_f[6]);
 
     // ---- boss battle block ----
     if (g_BossBattleState != 0
         && *reinterpret_cast<void **>(
                static_cast<u8 *>(g_BossBattleState) + 0x10U)
                != 0
-        && LoadU32(hud, 0x9eb8U) == 0U) {
+        && hud.result_script_state == 0) {
         u8 *const battle = *reinterpret_cast<u8 **>(
             static_cast<u8 *>(g_BossBattleState) + 0x10U);
 
         // HP fill: +0x9e84 rises by 0.025 toward hp/hp_max (+0x9e88) and
         // is clamped down to it.
         const i32 hp = LoadI32(battle, 0x23fcU);
-        StoreU32(hud, 0x9e8cU, static_cast<u32>(hp));
+        hud.boss_hp_raw = hp;
         const float frac = static_cast<float>(hp)
             / static_cast<float>(LoadI32(battle, 0x2400U));
-        StoreFloat(hud, 0x9e88U, frac);
-        if (frac > LoadFloat(hud, 0x9e84U))
-            StoreFloat(hud, 0x9e84U,
-                       LoadFloat(hud, 0x9e84U) + kHpFillStep);
-        if (LoadFloat(hud, 0x9e84U) > frac)
-            StoreFloat(hud, 0x9e84U, frac);
+        hud.boss_hp_fraction = frac;
+        if (frac > hud.boss_hp_fill)
+            hud.boss_hp_fill = hud.boss_hp_fill + kHpFillStep;
+        if (hud.boss_hp_fill > frac)
+            hud.boss_hp_fill = frac;
 
         // Bench-entity state words: bit 8 of +0x9eb4 toggles with the
         // boss bench region; word 2 inside, word 3 outside.
         u8 *const boss = static_cast<u8 *>(g_ScreenTargetBlock);
         PlayerRecord &player =
             *reinterpret_cast<PlayerRecord *>(boss);
-        u32 mode_flags = LoadU32(hud, 0x9eb4U);
+        u32 mode_flags = hud.hud_mode_flags;
         if ((mode_flags & 8U) != 0U) {
             const bool outside =
                 player.position_y < kBenchYHigh
                 && player.position_x > kBenchXHigh;
             if (outside) {
-                const i32 count = LoadI32(hud, 0x9e90U);
+                const i32 count = static_cast<i32>(hud.bench_child_count);
                 for (i32 i = 0; i < count; ++i)
                     SetEntityStateWordByHandleSlot(
-                        reinterpret_cast<u32 *>(hud + 0x9e28U)
-                            + static_cast<u32>(i),
-                        2);
+                        &hud.bench_child_handles[i], 2);
                 SetEntityStateWordByHandleSlot(
-                    reinterpret_cast<u32 *>(hud + 0x9e24U), 2);
-                StoreU32(hud, 0x9eb4U,
-                         (LoadU32(hud, 0x9eb4U) & 0xfffffff7U));
+                    &hud.stage_boss_handle, 2);
+                hud.hud_mode_flags &= 0xfffffff7U;
             }
         } else {
             const bool inside =
@@ -291,15 +286,13 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
                   || player.position_y != player.position_y)
                 && player.position_x < kBenchXLow;
             if (inside) {
-                const i32 count = LoadI32(hud, 0x9e90U);
+                const i32 count = static_cast<i32>(hud.bench_child_count);
                 for (i32 i = 0; i < count; ++i)
                     SetEntityStateWordByHandleSlot(
-                        reinterpret_cast<u32 *>(hud + 0x9e28U)
-                            + static_cast<u32>(i),
-                        3);
+                        &hud.bench_child_handles[i], 3);
                 SetEntityStateWordByHandleSlot(
-                    reinterpret_cast<u32 *>(hud + 0x9e24U), 3);
-                StoreU32(hud, 0x9eb4U, LoadU32(hud, 0x9eb4U) | 8U);
+                    &hud.stage_boss_handle, 3);
+                hud.hud_mode_flags |= 8U;
             }
         }
         (void)mode_flags;
@@ -307,7 +300,7 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
         // Spawn: when the +0x9e24 handle is free, spawn the stage HUD
         // entity (script by stage index) plus up to ten child VMs with
         // scripts 0x5b..; extra filled slots are reset to state word 1.
-        if (LoadU32(hud, 0x9e24U) == 0U) {
+        if (hud.stage_boss_handle == 0U) {
             u32 script = 0x85U;
             const u32 stage = g_StageIndex;
             switch (stage) {
@@ -341,22 +334,20 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
                 break;
             }
             {
-                u8 *vm = SpawnHudPoolVm(
-                    script, *reinterpret_cast<void **>(hud + 0x9ec8U));
-                StoreU32(hud, 0x9e24U, LoadU32(vm, 0));
+                u8 *vm = SpawnHudPoolVm(script, hud.front_anm_work);
+                hud.stage_boss_handle = LoadU32(vm, 0);
             }
         }
     skip_spawn:
         {
             // Fill/reset the ten +0x9e28 slots (bounded by +0x9e90).
-            u32 *slots = reinterpret_cast<u32 *>(hud + 0x9e28U);
-            const i32 wanted = LoadI32(hud, 0x9e90U);
+            u32 *slots = hud.bench_child_handles;
+            const i32 wanted = static_cast<i32>(hud.bench_child_count);
             for (u32 i = 0; i != 10U; ++i) {
                 if (static_cast<i32>(i) < wanted) {
                     if (slots[i] == 0U) {
-                        u8 *vm = SpawnHudPoolVm(
-                            i + 0x5bU,
-                            *reinterpret_cast<void **>(hud + 0x9ec8U));
+                        u8 *vm = SpawnHudPoolVm(i + 0x5bU,
+                                                hud.front_anm_work);
                         slots[i] = LoadU32(vm, 0);
                     }
                 } else if (slots[i] != 0U) {
@@ -368,21 +359,22 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
     } else {
         // Boss gate failed: release the +0x9e24 handle with state word 1
         // and clear the HP/aux accumulators.
-        if (LoadU32(hud, 0x9e24U) != 0U)
-            SetEntityStateWordByHandleSlot(
-                reinterpret_cast<u32 *>(hud + 0x9e24U), 1);
-        StoreU32(hud, 0x9e24U, 0U);
-        StoreU32(hud, 0x9e84U, 0U);
-        StoreU32(hud, 0x9e94U, 0U);
-        StoreU32(hud, 0x9e9cU, 0U);
-        StoreU32(hud, 0x9ea4U, 0U);
-        StoreU32(hud, 0x9eacU, 0U);
+        if (hud.stage_boss_handle != 0U)
+            SetEntityStateWordByHandleSlot(&hud.stage_boss_handle, 1);
+        hud.stage_boss_handle = 0U;
+        // Deliberate raw dword clears: the spell-bar values are float
+        // bit patterns (0x9e9c additionally overlaps the open-script
+        // handle documented in AsciiHudOwner.hpp).
+        StoreU32(hud_raw, 0x9e84U, 0U); // boss_hp_fill
+        StoreU32(hud_raw, 0x9e94U, 0U); // spell_bars[0].value
+        StoreU32(hud_raw, 0x9e9cU, 0U); // overlaps spell_bars[1].value
+        StoreU32(hud_raw, 0x9ea4U, 0U); // spell_bars[2].value
+        StoreU32(hud_raw, 0x9eacU, 0U); // spell_bars[3].value
     }
 
     // ---- result-screen script state (+0x9eb8) ----
     {
-        void *script_state =
-            *reinterpret_cast<void **>(hud + 0x9eb8U);
+        void *script_state = hud.result_script_state;
         if (script_state != 0) {
             if (RunResultScreenScriptStreamStackAbi(
                     static_cast<ResultScreenScriptState *>(script_state))
@@ -399,7 +391,7 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
                 TearDownHandleSlot(reinterpret_cast<u32 *>(ss + 0x50U));
                 TearDownHandleSlot(reinterpret_cast<u32 *>(ss + 0x54U));
                 HudScriptFreeAbi(script_state);
-                StoreU32(hud, 0x9eb8U, 0U);
+                hud.result_script_state = 0;
             }
         }
     }
@@ -410,9 +402,9 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
         battle = *reinterpret_cast<u8 **>(
             static_cast<u8 *>(g_BossBattleState) + 0x10U);
     if (battle != 0) {
-        const i32 seconds = LoadI32(hud, 0x9ec0U);
-        if (seconds >= 0 && LoadU32(hud, 0x9eb8U) == 0U) {
-            const i32 shown = LoadI32(hud, 0x9ec4U);
+        const i32 seconds = hud.spell_countdown;
+        if (seconds >= 0 && hud.result_script_state == 0) {
+            const i32 shown = hud.last_spell_countdown;
             if (seconds < shown) {
                 u16 word;
                 u32 sound;
@@ -427,24 +419,24 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
                     sound = 0U;
                 }
                 if (word != 0U) {
-                    StoreU16(hud, 0x7c40U, word);
-                    StoreU16(hud, 0x7fecU, word);
+                    hud.pool_e[0].state_word = word;
+                    hud.pool_e[1].state_word = word;
                     QueueHudSoundCueAbi(sound, 0U);
                 }
             } else if (seconds > shown) {
-                StoreU16(hud, 0x7c40U, 7U);
-                StoreU16(hud, 0x7fecU, 7U);
+                hud.pool_e[0].state_word = 7U;
+                hud.pool_e[1].state_word = 7U;
             }
             if (seconds != shown) {
                 (void)InitializeAsciiAnimationVmEntry(
-                    hud + 0x793cU,
+                    &hud.pool_e[0],
                     static_cast<u32>(seconds / 10 + 8),
-                    *reinterpret_cast<void **>(hud + 0x9ec8U));
+                    hud.front_anm_work);
                 (void)InitializeAsciiAnimationVmEntry(
-                    hud + 0x7ce8U,
+                    &hud.pool_e[1],
                     static_cast<u32>(seconds % 10 + 8),
-                    *reinterpret_cast<void **>(hud + 0x9ec8U));
-                StoreU32(hud, 0x9ec4U, static_cast<u32>(seconds));
+                    hud.front_anm_work);
+                hud.last_spell_countdown = seconds;
             }
         }
 
@@ -457,8 +449,8 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
             const bool practice =
                 (LoadU32(static_cast<u8 *>(g_StageState), 0x378cU)
                  & 1U) != 0U;
-            u32 mode = (LoadU32(hud, 0x9eb4U) >> 1) & 3U;
-            u32 flags = LoadU32(hud, 0x9eb4U);
+            u32 mode = (hud.hud_mode_flags >> 1) & 3U;
+            u32 flags = hud.hud_mode_flags;
             bool apply = false;
             if (practice) {
                 const u32 thresholds[4] = {0x7d0U, 0x3e8U, 0x190U,
@@ -466,25 +458,25 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
                 if (mode == 0U) {
                     if (spell_timer < thresholds[0]) {
                         flags = (flags & 0xfffffffbU) | 2U;
-                        StoreU16(hud, 0x9d4cU, 7U);
+                        hud.aux_vm.state_word = 7U;
                         apply = true;
                     }
                 } else if (mode == 1U) {
                     if (spell_timer < thresholds[1]) {
                         flags = (flags & 0xfffffffdU) | 4U;
-                        StoreU16(hud, 0x9d4cU, 8U);
+                        hud.aux_vm.state_word = 8U;
                         apply = true;
                     }
                 } else if (mode == 2U) {
                     if (spell_timer < thresholds[2]) {
                         flags |= 6U;
-                        StoreU16(hud, 0x9d4cU, 9U);
+                        hud.aux_vm.state_word = 9U;
                         apply = true;
                     }
                 } else if (mode == 3U) {
                     if (spell_timer > thresholds[3]) {
                         flags &= 0xfffffff9U;
-                        StoreU16(hud, 0x9d4cU, 0xaU);
+                        hud.aux_vm.state_word = 0xaU;
                         apply = true;
                     }
                 }
@@ -493,37 +485,37 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
                 if (mode == 0U) {
                     if (spell_timer < thresholds[0]) {
                         flags = (flags & 0xfffffffbU) | 2U;
-                        StoreU16(hud, 0x9d4cU, 7U);
+                        hud.aux_vm.state_word = 7U;
                         apply = true;
                     }
                 } else if (mode == 1U) {
                     if (spell_timer < thresholds[1]) {
                         flags = (flags & 0xfffffffdU) | 4U;
-                        StoreU16(hud, 0x9d4cU, 8U);
+                        hud.aux_vm.state_word = 8U;
                         apply = true;
                     }
                 } else if (mode == 2U) {
                     if (spell_timer < thresholds[2]) {
                         flags |= 6U;
-                        StoreU16(hud, 0x9d4cU, 9U);
+                        hud.aux_vm.state_word = 9U;
                         apply = true;
                     }
                 } else if (mode == 3U) {
                     if (spell_timer > thresholds[3]) {
                         flags &= 0xfffffff9U;
-                        StoreU16(hud, 0x9d4cU, 0xaU);
+                        hud.aux_vm.state_word = 0xaU;
                         apply = true;
                     }
                 }
             }
             if (apply)
-                StoreU32(hud, 0x9eb4U, flags);
+                hud.hud_mode_flags = flags;
 
             // Boss overlay anchor/alpha, and the +0x9a48 VM run.
-            (void)FinalizeTimelineRenderObjectSetup(hud + 0x9a48U);
-            StoreFloat(hud, 0x9d8cU, 480.0f);
-            StoreFloat(hud, 0x9d88U,
-                       LoadFloat(battle, 0x1068U) + kBossBaseX);
+            (void)FinalizeTimelineRenderObjectSetup(&hud.aux_vm);
+            hud.aux_vm.delta_pos_y = 480.0f;
+            hud.aux_vm.delta_pos_x =
+                LoadFloat(battle, 0x1068U) + kBossBaseX;
             const float boss_x =
                 (*reinterpret_cast<const PlayerRecord *>(
                     g_ScreenTargetBlock)).position_x;
@@ -533,23 +525,25 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
                 // byte +0x9d47 = 0x40 - (i32)(|dx| * -2.984375) low byte
                 // (native fmul ds:0x470ce8 at 0x415722; the product is
                 // negative, so the ramp runs 64 -> 254 over |dx| < 64).
+                // Deliberately raw: record-relative +0x2ff (the alpha
+                // output byte inside primary_color) has no named field.
                 const i32 scaled = static_cast<i32>(
                     abs_diff * kBossAlphaScale);
-                StoreU8(hud, 0x9d47U,
+                StoreU8(hud_raw, 0x9d47U,
                         static_cast<u8>(0x40
                                         - static_cast<u8>(scaled)));
             } else {
-                StoreU8(hud, 0x9d47U, 0xffU);
+                StoreU8(hud_raw, 0x9d47U, 0xffU);
             }
             if (LoadFloat(battle, 0x1068U) < kBossOffLow
                 || LoadFloat(battle, 0x1068U) > kBossOffHigh)
-                StoreU8(hud, 0x9d47U, 0U);
+                StoreU8(hud_raw, 0x9d47U, 0U);
         }
     }
 
     // ---- tail: prev/count latch and the frame timer ----
-    StoreU32(hud, 0x9e60U, LoadU32(hud, 0x9e64U));
-    TickPointerRateTimer(hud, 0x9e64U);
+    hud.hud_timer.prev = hud.hud_timer.count;
+    TickPointerRateTimer(hud_raw, 0x9e64U);
     return 1;
 }
 

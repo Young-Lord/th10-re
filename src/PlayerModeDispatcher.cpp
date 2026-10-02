@@ -1,5 +1,6 @@
 #include "PlayerModeDispatcher.hpp"
 
+#include "AsciiHudOwner.hpp"
 #include "GameContext.hpp"
 #include "PlayerDeathProcessor.hpp"
 #include "PlayerRecord.hpp"
@@ -382,8 +383,8 @@ void RunCommonEpilogue(u8 *player)
     AdvancePlayerTimerBlock(player_rec.move_gate_timer);
 
     const bool in_gameplay = g_AsciiHudOwner != 0 &&
-        *reinterpret_cast<const i32 *>(
-            static_cast<u8 *>(g_AsciiHudOwner) + 0x9eb8) == 0;
+        reinterpret_cast<AsciiHudOwner *>(g_AsciiHudOwner)
+                ->result_script_state == 0;
     if (in_gameplay && g_AsciiHudConditionalState != 0 &&
         *reinterpret_cast<const i32 *>(
             static_cast<u8 *>(g_AsciiHudConditionalState) + 0x60) != 0 &&
@@ -443,8 +444,8 @@ i32 UpdatePlayerModeDispatcher(void *player_memory)
     } else if (mode == 1) {
 mode_1:
         if (g_AsciiHudOwner != 0 &&
-            *reinterpret_cast<const i32 *>(
-                static_cast<u8 *>(g_AsciiHudOwner) + 0x9eb8) == 0 &&
+            reinterpret_cast<AsciiHudOwner *>(g_AsciiHudOwner)
+                    ->result_script_state == 0 &&
             game_ctx != 0 &&
             game_ctx->popup_state == 0 &&
             static_cast<short>(g_PlayerLivesCounter / 20) != 0 &&

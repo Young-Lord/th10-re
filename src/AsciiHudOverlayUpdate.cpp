@@ -1,6 +1,7 @@
 #include "AsciiHudOverlayUpdate.hpp"
 
 #include "AsciiAnimationVm.hpp"
+#include "AsciiHudOwner.hpp"
 #include "EntityHelpers.hpp"
 #include "PlayerShotData.hpp"
 #include "VmRecord.hpp"
@@ -67,13 +68,17 @@ u32 SpawnLinkedOverlayVm(void *anm_work, i32 script_id)
 // TH10 0x00413bc0.
 void ResetAsciiHudOverlayEdiAbi(void *owner_memory)
 {
-    u8 *const owner = static_cast<u8 *>(owner_memory);
-    void *const glyph_resource =
-        *reinterpret_cast<void **>(owner + 0x9ec8);
+    AsciiHudOwner &hud = *reinterpret_cast<AsciiHudOwner *>(owner_memory);
+    // Raw view for the deliberately unconverted +0x9e54 store (it sits in
+    // the unnamed unknown_9e54 gap of the owner layout).
+    u8 *const owner = reinterpret_cast<u8 *>(&hud);
+    void *const glyph_resource = hud.front_anm_work;
 
     // Disable the two scheduler records (+8 / +0xc) by setting bit 1 of
     // their +4 flag word.
-    u8 *const record_slots[2] = {owner + 8, owner + 0xc};
+    u8 *const record_slots[2] = {
+        reinterpret_cast<u8 *>(&hud.calc_element),
+        reinterpret_cast<u8 *>(&hud.draw_element)};
     for (u32 i = 0; i < 2U; ++i) {
         u8 *const record = *reinterpret_cast<u8 **>(record_slots[i]);
         if (record != 0)
@@ -82,69 +87,68 @@ void ResetAsciiHudOverlayEdiAbi(void *owner_memory)
 
     // Re-create the two permanent background entities; the second id is
     // discarded by the original.
-    if (ReadU32(owner, 0x9e58) == 0U)
-        WriteU32(owner, 0x9e58, SpawnLinkedOverlayVm(glyph_resource, 0));
-    if (ReadU32(owner, 0x9e5c) == 0U)
+    if (hud.background_vm_id == 0U)
+        hud.background_vm_id = SpawnLinkedOverlayVm(glyph_resource, 0);
+    if (hud.background_vm_id_1 == 0U)
         SpawnLinkedOverlayVm(glyph_resource, 1);
 
-    // Rebind the glyph VM pool scripts unless the +0x36c bit-0 latch says
-    // the pools are already armed. Script ids: +0x10 -> 10..19 paired with
-    // +0x24c8 -> 20..29, +0x4980 -> 30..38, +0x6a8c -> 47..50,
-    // +0x793c -> 80..81, +0x8094 -> 51..57.
-    if ((owner[0x36c] & 1U) == 0U) {
+    // Rebind the glyph VM pool scripts unless the +0x36c bit-0 latch
+    // (pool_a[0].flags) says the pools are already armed. Script ids:
+    // +0x10 -> 10..19 paired with +0x24c8 -> 20..29, +0x4980 -> 30..38,
+    // +0x6a8c -> 47..50, +0x793c -> 80..81, +0x8094 -> 51..57.
+    if ((hud.pool_a[0].flags & 1U) == 0U) {
         for (u32 i = 0; i < 10U; ++i) {
             AssignAnmScriptToVmEcxEaxBbxAbi(glyph_resource,
-                                            owner + 0x10 + i * 0x3ac,
+                                            &hud.pool_a[i],
                                             static_cast<i32>(10 + i));
             AssignAnmScriptToVmEcxEaxBbxAbi(glyph_resource,
-                                            owner + 0x24c8 + i * 0x3ac,
+                                            &hud.pool_b[i],
                                             static_cast<i32>(20 + i));
         }
         for (u32 i = 0; i < 9U; ++i)
             AssignAnmScriptToVmEcxEaxBbxAbi(glyph_resource,
-                                            owner + 0x4980 + i * 0x3ac,
+                                            &hud.pool_c[i],
                                             static_cast<i32>(30 + i));
         for (u32 i = 0; i < 4U; ++i)
             AssignAnmScriptToVmEcxEaxBbxAbi(glyph_resource,
-                                            owner + 0x6a8c + i * 0x3ac,
+                                            &hud.pool_d[i],
                                             static_cast<i32>(47 + i));
         for (u32 i = 0; i < 2U; ++i)
             AssignAnmScriptToVmEcxEaxBbxAbi(glyph_resource,
-                                            owner + 0x793c + i * 0x3ac,
+                                            &hud.pool_e[i],
                                             static_cast<i32>(80 + i));
         for (u32 i = 0; i < 7U; ++i)
             AssignAnmScriptToVmEcxEaxBbxAbi(glyph_resource,
-                                            owner + 0x8094 + i * 0x3ac,
+                                            &hud.pool_f[i],
                                             static_cast<i32>(51 + i));
     }
 
     // Visible life slots: enable the first `lives` of the nine 0x3ac-stride
-    // flag words at +0x4cdc and clear the rest. The original enables the
-    // counter verbatim, so a value above nine keeps setting flags.
+    // flag words at +0x4cdc (pool_c[i].flags) and clear the rest. The
+    // original enables the counter verbatim, so a value above nine keeps
+    // setting flags.
     const i32 lives = g_PlayerLivesRemaining;
     for (i32 i = 0; i < lives; ++i)
-        WriteU32(owner, 0x4cdc + static_cast<u32>(i) * 0x3ac,
-                 ReadU32(owner, 0x4cdc + static_cast<u32>(i) * 0x3ac) | 2U);
+        hud.pool_c[i].flags |= 2U;
     if (lives < 9) {
         for (i32 i = lives; i < 9; ++i)
-            WriteU32(owner, 0x4cdc + static_cast<u32>(i) * 0x3ac,
-                     ReadU32(owner, 0x4cdc + static_cast<u32>(i) * 0x3ac) &
-                         ~2U);
+            hud.pool_c[i].flags &= ~2U;
     }
 
-    // Life display: lives/20 into the +0x6a8c VM and the fractional part
-    // scaled to 0..99 as tens/ones entries into the next two VMs.
+    // Life display: lives/20 into the +0x6a8c VM (pool_d[0]) and the
+    // fractional part scaled to 0..99 as tens/ones entries into the next
+    // two VMs (pool_d[2] / pool_d[3]; the native skips pool_d[1]).
     const i32 gauge = static_cast<i32>(
         static_cast<short>(g_PlayerPowerGaugeWord));
     const i32 whole = gauge / 20;
     const i32 scaled = (gauge % 20) * 100 / 20;
-    InitializeAsciiAnimationVmEntry(owner + 0x6a8c,
+    InitializeAsciiAnimationVmEntry(&hud.pool_d[0],
                                     static_cast<u32>(whole + 8),
                                     glyph_resource);
-    InitializeAsciiAnimationVmEntry(owner + 0x71e4,
+    InitializeAsciiAnimationVmEntry(&hud.pool_d[2],
                                     static_cast<u32>(scaled / 10 + 8),
                                     glyph_resource);
-    InitializeAsciiAnimationVmEntry(owner + 0x7590,
+    InitializeAsciiAnimationVmEntry(&hud.pool_d[3],
                                     static_cast<u32>(scaled % 10 + 8),
                                     glyph_resource);
 
@@ -153,8 +157,7 @@ void ResetAsciiHudOverlayEdiAbi(void *owner_memory)
     // the pair (0, 1) is spawned against the +0x9e80 resource.
     if (g_MainChainSharedStatus != 8 &&
         (g_GlobalModeFlags & 0x20U) == 0U) {
-        void *const pair_resource =
-            *reinterpret_cast<void **>(owner + 0x9e80);
+        void *const pair_resource = hud.stage_script_work;
         SpawnLinkedOverlayVm(pair_resource, 0);
         SpawnLinkedOverlayVm(pair_resource, 1);
     }
@@ -165,7 +168,7 @@ void ResetAsciiHudOverlayEdiAbi(void *owner_memory)
     AssignAnmScriptToVmEcxEaxBbxAbi(
         *reinterpret_cast<void **>(static_cast<u8 *>(g_AsciiManager) +
                                    0x8994),
-        owner + 0x9a48, 0);
+        &hud.aux_vm, 0);
 
     // Stage-start text layer: spawn script 79 when the active layer is 1,
     // the title screen has no pending +0x5c state, and the third gate is
@@ -179,12 +182,11 @@ void ResetAsciiHudOverlayEdiAbi(void *owner_memory)
     // script-102 entity id is remembered at +0x9e50 and immediately
     // resolved to fire its state word (3 = consume).
     if (g_HudGateFlag491fc4 != 0) {
-        WriteU32(owner, 0x9e50,
-                 SpawnLinkedOverlayVm(
-                     glyph_resource,
-                     static_cast<i32>(102 + g_TimelinePhase)));
-        SetEntityStateWordEaxEsiAbi(
-            reinterpret_cast<u32 *>(owner + 0x9e50), 3);
+        hud.script_102_overlay_handle =
+            SpawnLinkedOverlayVm(
+                glyph_resource,
+                static_cast<i32>(102 + g_TimelinePhase));
+        SetEntityStateWordEaxEsiAbi(&hud.script_102_overlay_handle, 3);
     }
 
     // The script-107 twin always spawns; its id lands in +0x9e54, the
@@ -193,9 +195,10 @@ void ResetAsciiHudOverlayEdiAbi(void *owner_memory)
     const u32 tail_id = SpawnLinkedOverlayVm(
         glyph_resource, static_cast<i32>(107 + g_TimelinePhase));
     // The original copies the id counter (now the script-107 id) here.
+    // Deliberately raw: +0x9e54 has no named owner field.
     WriteU32(owner, 0x9e54, tail_id);
-    SetEntityStateWordEaxEsiAbi(reinterpret_cast<u32 *>(owner + 0x9e50), 3);
-    WriteU32(owner, 0x9e90, 0U);
+    SetEntityStateWordEaxEsiAbi(&hud.script_102_overlay_handle, 3);
+    hud.bench_child_count = 0U;
 }
 
 } // namespace th10

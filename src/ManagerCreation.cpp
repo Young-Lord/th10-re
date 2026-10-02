@@ -1,5 +1,6 @@
 #include "ManagerCreation.hpp"
 
+#include "AsciiHudOwner.hpp"
 #include "ManagerReleaseWrappers.hpp"
 #include "PlayerObjectLifecycle.hpp"
 #include "PlayerRecord.hpp"
@@ -114,6 +115,11 @@ void *ConstructAsciiHudOwnerEaxAbi(void *object)
     extern void *g_AsciiHudOwner; // TH10 DAT_0047770c
     extern void ConstructBlankVmRecord(void *record); // TH10 0x00402050
     u8 *const base = static_cast<u8 *>(object);
+    AsciiHudOwner &hud = *reinterpret_cast<AsciiHudOwner *>(object);
+    // Everything from the array construction down to the 0x9ed0 wipe is a
+    // deliberate dead-store block (the wipe erases all of it), so those
+    // accesses stay raw per the conversion rules. Only the live
+    // flags_0000 store after the wipe is converted.
     const u32 array_slots[6] = {0x10U, 0x24c8U, 0x4980U, 0x6a8cU, 0x793cU,
                                 0x8094U};
     const u32 array_counts[6] = {10U, 10U, 9U, 4U, 2U, 7U};
@@ -139,7 +145,7 @@ void *ConstructAsciiHudOwnerEaxAbi(void *object)
     for (u32 i = 0; i < 0x9ed0U; ++i) {
         base[i] = 0U;
     }
-    StoreU32To(base, LoadU32From(base) | 2U);
+    hud.flags_0000 |= 2U;
     g_AsciiHudOwner = object;
     return object;
 }

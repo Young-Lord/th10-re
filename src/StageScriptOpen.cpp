@@ -2,6 +2,7 @@
 // 0x00413980 (which loads "front.anm" into +0x9ec8 and then calls here).
 #include "StageScriptOpen.hpp"
 
+#include "AsciiHudOwner.hpp"
 #include "ManagerWork.hpp"
 
 namespace th10 {
@@ -38,13 +39,9 @@ const char kLoadErrorFormat[] =
     "ERROR: cannot open the stage script resource"; // TH10 0x0046cb68
                                                     // (boundary text)
 
-// Scene owner offsets (the record is the 0x9ecc-byte scene owner).
-const u32 kOffScriptWork = 0x9e80U;   // manager-work slot 28 result
+// Scene owner offsets (the record is the 0x9ed0-byte ASCII HUD owner; the
+// +0x9e9c open-script handle overlaps spell_bars[1].value and stays raw).
 const u32 kOffScriptHandle = 0x9e9cU; // open script handle
-const u32 kOffTimerBlock = 0x9e60U;   // timer block {prev,count,acc,rate,flags}
-const u32 kOffSubTimer = 0x9e78U;     // copied scene sub-timer
-const u32 kOffSlotA = 0x9ec0U;        // -1 handles
-const u32 kOffSlotB = 0x9ec4U;
 
 const u32 kScriptWorkSlot = 28U; // native ECX = 0x1c
 
@@ -78,7 +75,7 @@ void AppendPathScratch(const char *name)
 // TH10 0x00413a20. Native stdcall (ret 4).
 i32 OpenSceneScriptResource(void *scene_owner)
 {
-    u8 *const owner = static_cast<u8 *>(scene_owner);
+    AsciiHudOwner &hud = *reinterpret_cast<AsciiHudOwner *>(scene_owner);
 
     void *const mode_record = g_PublishedModeRecord;
     const char *const *name_slot = reinterpret_cast<const char *const *>(
@@ -88,8 +85,7 @@ i32 OpenSceneScriptResource(void *scene_owner)
     void *work = RequestManagerWork(
         static_cast<ManagerWorkOwnerPartial *>(g_EntityPoolManager),
         static_cast<i32>(kScriptWorkSlot), script_name);
-    StoreU32(owner, kOffScriptWork,
-             reinterpret_cast<u32>(work));
+    hud.stage_script_work = work;
     if (work == 0) {
         FormatLoadErrorText(reinterpret_cast<void *>(kErrorTextContext),
                             kLoadErrorFormat);
@@ -99,7 +95,7 @@ i32 OpenSceneScriptResource(void *scene_owner)
     void *preopened = g_PreopenedScriptHandle;
     if (preopened != 0) {
         // Demo/reuse path: consume the pre-opened handle once.
-        StoreU32(owner, kOffScriptHandle,
+        StoreU32(reinterpret_cast<u8 *>(&hud), kOffScriptHandle,
                  reinterpret_cast<u32>(preopened));
         g_PreopenedScriptHandle = 0;
     } else {
@@ -109,7 +105,7 @@ i32 OpenSceneScriptResource(void *scene_owner)
         const char *stage_name = *slot;
         AppendPathScratch(stage_name);
         void *handle = LoadMainChainFile(g_SceneScriptPathScratch, 0, 0);
-        StoreU32(owner, kOffScriptHandle,
+        StoreU32(reinterpret_cast<u8 *>(&hud), kOffScriptHandle,
                  reinterpret_cast<u32>(handle));
         if (handle == 0) {
             FormatLoadErrorText(reinterpret_cast<void *>(kErrorTextContext),
@@ -118,22 +114,23 @@ i32 OpenSceneScriptResource(void *scene_owner)
         }
     }
 
-    // Arm the script timer block (lazy init guarded by bit 0 at +0x9e70,
-    // then the unconditional -1/0/0 reset) and copy the scene sub-timer.
-    const u32 timer_flags = LoadU32(owner, kOffTimerBlock + 0x10U);
+    // Arm the script timer block (lazy init guarded by bit 0 of
+    // hud_timer.flags, then the unconditional -1/0/0 reset) and copy the
+    // scene sub-timer into the displayed-score dword (shared duty).
+    const u32 timer_flags = hud.hud_timer.flags;
     if ((timer_flags & 1U) == 0U) {
-        StoreU32(owner, kOffTimerBlock, static_cast<u32>(-999999));
-        StoreU32(owner, kOffTimerBlock + 4U, 0U);
-        StoreU32(owner, kOffTimerBlock + 8U, 0U);
-        StoreU32(owner, kOffTimerBlock + 0xcU, 0x476f78U);
-        StoreU32(owner, kOffTimerBlock + 0x10U, timer_flags | 1U);
+        hud.hud_timer.prev = static_cast<i32>(-999999);
+        hud.hud_timer.count = 0;
+        hud.hud_timer.accum = 0;
+        hud.hud_timer.rate = reinterpret_cast<const float *>(0x476f78U);
+        hud.hud_timer.flags = timer_flags | 1U;
     }
-    StoreU32(owner, kOffTimerBlock + 4U, 0U);
-    StoreU32(owner, kOffTimerBlock + 8U, 0U);
-    StoreU32(owner, kOffTimerBlock, static_cast<u32>(-1));
-    StoreU32(owner, kOffSlotA, static_cast<u32>(-1));
-    StoreU32(owner, kOffSlotB, static_cast<u32>(-1));
-    StoreU32(owner, kOffSubTimer, g_SceneSubTimer);
+    hud.hud_timer.count = 0;
+    hud.hud_timer.accum = 0;
+    hud.hud_timer.prev = static_cast<i32>(-1);
+    hud.spell_countdown = -1;
+    hud.last_spell_countdown = -1;
+    hud.displayed_score = g_SceneSubTimer;
     return 0;
 }
 

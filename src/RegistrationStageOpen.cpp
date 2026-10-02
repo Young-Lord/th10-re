@@ -1,5 +1,6 @@
 #include "RegistrationStageOpen.hpp"
 
+#include "AsciiHudOwner.hpp"
 #include "EntityHelpers.hpp"
 #include "StageScriptOpen.hpp"
 
@@ -108,31 +109,31 @@ void ReleaseRegistrationOwnerHandleChainEsiAbi(void *owner)
 
 void SetManagerRegistrationFlagEaxAbi(void *manager)
 {
-    u8 *bytes = static_cast<u8 *>(manager);
-    *reinterpret_cast<u32 *>(bytes + 0x9eb4) |= kRegistrationOwnerFlag;
-    *reinterpret_cast<u32 *>(bytes + 0x9ecc) = 0;
+    AsciiHudOwner &hud = *reinterpret_cast<AsciiHudOwner *>(manager);
+    hud.hud_mode_flags |= kRegistrationOwnerFlag;
+    hud.render_mode_counter = 0U;
 }
 
 i32 ReadManagerRegistrationFlagEaxAbi(const void *manager)
 {
-    const u32 flags = *reinterpret_cast<const u32 *>(
-        static_cast<const u8 *>(manager) + 0x9eb4);
-    return static_cast<i32>((flags >> 4) & 1U);
+    const AsciiHudOwner &hud =
+        *reinterpret_cast<const AsciiHudOwner *>(manager);
+    return static_cast<i32>((hud.hud_mode_flags >> 4) & 1U);
 }
 
 i32 ReadManagerPostRegistrationFlagEaxAbi(const void *manager)
 {
-    const u32 flags = *reinterpret_cast<const u32 *>(
-        static_cast<const u8 *>(manager) + 0x9eb4);
-    return static_cast<i32>((flags >> 5) & 1U);
+    const AsciiHudOwner &hud =
+        *reinterpret_cast<const AsciiHudOwner *>(manager);
+    return static_cast<i32>((hud.hud_mode_flags >> 5) & 1U);
 }
 
 i32 OpenStageScriptSequenceEbxAbi(void *manager)
 {
+    AsciiHudOwner &hud = *reinterpret_cast<AsciiHudOwner *>(manager);
     void *work = RequestManagerWorkSlotNative(
         g_ManagerWorkOwner, kStageOpenWorkName, 6);
-    *reinterpret_cast<void **>(
-        static_cast<u8 *>(manager) + 0x9ec8) = work;
+    hud.front_anm_work = work;
     if (work == 0) {
         // TH10 0x0046cb68: failure message for the reserved logger.
         ReportStageOpenError(kStageOpenFailureText);
@@ -147,8 +148,7 @@ i32 OpenStageScriptSequenceEbxAbi(void *manager)
     *reinterpret_cast<u32 *>(calc_node + 0x20) =
         reinterpret_cast<u32>(manager);
     RegisterSchedulerCalcCallback(calc_node, &g_SchedulerHeap, 0x18);
-    *reinterpret_cast<u32 *>(static_cast<u8 *>(manager) + 0x8) =
-        reinterpret_cast<u32>(calc_node);
+    hud.calc_element = reinterpret_cast<ChainElem *>(calc_node);
 
     u8 *draw_node = static_cast<u8 *>(AllocSchedulerCallbackNode(
         reinterpret_cast<void *>(&StageOpenDrawCallback)));
@@ -156,19 +156,18 @@ i32 OpenStageScriptSequenceEbxAbi(void *manager)
     *reinterpret_cast<u32 *>(draw_node + 0x20) =
         reinterpret_cast<u32>(manager);
     RegisterSchedulerDrawCallback(draw_node, &g_SchedulerHeap, 0x2b);
-    *reinterpret_cast<u32 *>(static_cast<u8 *>(manager) + 0xc) =
-        reinterpret_cast<u32>(draw_node);
+    hud.draw_element = reinterpret_cast<ChainElem *>(draw_node);
     return 0;
 }
 
 void ReleaseRegistrationOwnerFromManagerEbxAbi(void *manager)
 {
-    u8 *bytes = static_cast<u8 *>(manager);
-    u8 *owner = *reinterpret_cast<u8 **>(bytes + 0x9eb8);
+    AsciiHudOwner &hud = *reinterpret_cast<AsciiHudOwner *>(manager);
+    u8 *owner = static_cast<u8 *>(hud.result_script_state);
     if (owner != 0) {
         ReleaseRegistrationOwnerHandleChainEsiAbi(owner);
         FreeHeapBlock(owner);
-        *reinterpret_cast<u32 *>(bytes + 0x9eb8) = 0;
+        hud.result_script_state = 0;
     }
 
     if ((g_ManagerModeFlags & kRegistrationOwnerFlagMask) != 0)
@@ -179,12 +178,12 @@ void ReleaseRegistrationOwnerFromManagerEbxAbi(void *manager)
         FreeHeapBlock(*g_StageScriptWorkSlot);
         *g_StageScriptWorkSlot = 0;
     }
-    void *script = *reinterpret_cast<void **>(bytes + 0x9ebc);
-    *reinterpret_cast<u32 *>(bytes + 0x9e80) = 0;
+    void *script = hud.result_script_blob;
+    hud.stage_script_work = 0;
     if (script != 0)
         FreeHeapBlock(script);
-    *reinterpret_cast<u32 *>(bytes + 0x9ebc) = 0;
-    *reinterpret_cast<u32 *>(bytes + 0x9ebc) = 0;
+    hud.result_script_blob = 0;
+    hud.result_script_blob = 0;
 }
 
 } // namespace th10

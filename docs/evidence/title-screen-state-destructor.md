@@ -6,7 +6,7 @@ Implemented as `DestroyTitleScreenStateBufferInPlace` in
 
 ## ABI
 
-- Native stdcall, one stack argument (`ret 4`): the 0x2a78-byte title-screen
+- Native stdcall, one stack argument (`ret 4`): the 0x2b64-byte title-screen
   state object whose pointer lives in `DAT_004776e4` (primary) /
   `DAT_004776e8` (secondary).
 

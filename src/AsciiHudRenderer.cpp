@@ -1,5 +1,6 @@
 #include "AsciiHudRenderer.hpp"
 
+#include "AsciiHudOwner.hpp"
 #include "AsciiRenderModeDispatcher.hpp"
 #include "LargeRenderOwnerLayout.hpp"
 #include "MainChainRender.hpp"
@@ -114,16 +115,19 @@ void DrawImmediateAsciiColoredRectangle(const float rectangle[4], u32 color)
 
 i32 RenderAsciiHudBatch(void *owner_memory)
 {
-    u8 *const owner = static_cast<u8 *>(owner_memory);
+    AsciiHudOwner &hud = *reinterpret_cast<AsciiHudOwner *>(owner_memory);
+    // Raw view for the deliberately unconverted +0x8393 alpha byte (the
+    // record-relative +0x2ff output byte has no named VmRecord field).
+    u8 *const owner = reinterpret_cast<u8 *>(&hud);
     for (u32 index = 0; index != 10; ++index) {
-        (void)DispatchAsciiAnimationVmRenderMode(owner + 0x10 + index * 0x3ac,
+        (void)DispatchAsciiAnimationVmRenderMode(&hud.pool_a[index],
             g_MainChainRenderOwner);
-        (void)DispatchAsciiAnimationVmRenderMode(owner + 0x24c8 + index * 0x3ac,
+        (void)DispatchAsciiAnimationVmRenderMode(&hud.pool_b[index],
             g_MainChainRenderOwner);
     }
-    DispatchVmRange(owner + 0x4980, 9);
-    DispatchVmRange(owner + 0x6a8c, 4);
-    DispatchVmRange(owner + 0x8094, 7);
+    DispatchVmRange(reinterpret_cast<u8 *>(hud.pool_c), 9);
+    DispatchVmRange(reinterpret_cast<u8 *>(hud.pool_d), 4);
+    DispatchVmRange(reinterpret_cast<u8 *>(hud.pool_f), 7);
 
     if (g_AsciiHudBarValue != 0) {
         const float y = static_cast<float>(static_cast<i32>(g_AsciiHudBarValue)) *
@@ -135,7 +139,7 @@ i32 RenderAsciiHudBatch(void *owner_memory)
         DrawImmediateAsciiColoredRectangle(second, alpha | 0x00ffffffU);
     }
 
-    const float progress = ReadFloat(owner, 0x9e84);
+    const float progress = hud.boss_hp_fill;
     if (progress == progress && progress > 0.0f) {
         const float y = progress * g_AsciiHudProgressScale +
             g_AsciiHudProgressOffset;
@@ -144,15 +148,14 @@ i32 RenderAsciiHudBatch(void *owner_memory)
         const float second[] = {40.0f, 22.0f, y - 1.0f, 24.0f};
         DrawImmediateAsciiColoredRectangle(second, 0xffffffffU);
         for (u32 index = 0; index != 4; ++index) {
-            const u8 *const entry = owner + 0x9e94 + index * 8;
-            const float value = ReadFloat(entry, 0);
+            const AsciiHudSpellBarEntry &entry = hud.spell_bars[index];
+            const float value = entry.value;
             if (IsNativeNonZero(value)) {
                 const float rectangle[] = {40.0f, 22.0f,
                     NativeOrderedMinimum(value, progress) *
                         g_AsciiHudProgressScale + g_AsciiHudEntryOffset,
                     24.0f};
-                DrawImmediateAsciiColoredRectangle(rectangle,
-                    *reinterpret_cast<const u32 *>(entry + 4));
+                DrawImmediateAsciiColoredRectangle(rectangle, entry.color);
             }
         }
     }
@@ -162,11 +165,11 @@ i32 RenderAsciiHudBatch(void *owner_memory)
         u8 *const state = *reinterpret_cast<u8 **>(conditional + 0x10);
         if (state != 0 && (*reinterpret_cast<const u32 *>(state + 0x2480) &
                            0x11U) == 0)
-            (void)DispatchAsciiAnimationVmRenderMode(owner + 0x9a48,
+            (void)DispatchAsciiAnimationVmRenderMode(&hud.aux_vm,
                 g_MainChainRenderOwner);
-        if (*reinterpret_cast<const i32 *>(owner + 0x9ec0) >= 0 &&
-            state != 0 && *reinterpret_cast<const u32 *>(owner + 0x9eb8) == 0)
-            DispatchVmRange(owner + 0x793c, 2);
+        if (hud.spell_countdown >= 0 &&
+            state != 0 && hud.result_script_state == 0)
+            DispatchVmRange(reinterpret_cast<u8 *>(hud.pool_e), 2);
     }
     return 1;
 }
