@@ -96,13 +96,13 @@ i32 LoadMainChainConfiguration(MainChainContext *context, const char *path)
         }
     }
 
-    *reinterpret_cast<u32 *>(reinterpret_cast<u8 *>(context) + 0x3b4) = 0;
+    context->field_03b4 = 0;
     const u8 input_flags = context->input_setup_flags_0150;
     if ((input_flags & 0x4) != 0)
         AppendMainChainStartupInputFlagMessage(0x4);
     if ((input_flags & 0x1) != 0)
         AppendMainChainStartupInputFlagMessage(0x1);
-    if (*(reinterpret_cast<u8 *>(context) + 0x13d) != 0)
+    if (context->startup_input_diagnostic != 0)
         AppendMainChainStartupInputStateMessage();
     if ((input_flags & 0x2) != 0)
         AppendMainChainStartupInputFlagMessage(0x2);

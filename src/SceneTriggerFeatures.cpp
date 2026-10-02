@@ -7,6 +7,7 @@
 #include <cmath>
 
 #include "GameManagerState.hpp"
+#include "PlayerRecord.hpp"
 #include "PlayerTimerHelpers.hpp"
 #include "SceneTriggerObject.hpp"
 
@@ -70,9 +71,10 @@ inline void PolarVelocity(u8 *object, float speed)
 // deltas fail both zero comparisons and reach the atan2 path.
 float AimAngleAtScreenTarget(const u8 *object)
 {
-    const u8 *const screen = static_cast<const u8 *>(g_ScreenTargetBlock);
-    const float dx = LoadFloat(screen, 0x3c0U) - LoadFloat(object, 0x3b4U);
-    const float dy = LoadFloat(screen, 0x3c4U) - LoadFloat(object, 0x3b8U);
+    const PlayerRecord &player =
+        *reinterpret_cast<const PlayerRecord *>(g_ScreenTargetBlock);
+    const float dx = player.position_x - LoadFloat(object, 0x3b4U);
+    const float dy = player.position_y - LoadFloat(object, 0x3b8U);
     if (dy == 0.0f && dx == 0.0f)
         return kPiHalfImmediate;
     return static_cast<float>(

@@ -1,5 +1,7 @@
 #include "PlayerOptionCallbacks.hpp"
 
+#include "PlayerRecord.hpp"
+
 #include <cmath>
 
 namespace th10 {
@@ -28,95 +30,102 @@ i32 FloatToI32(float value)
         : static_cast<i32>(std::ceil(static_cast<double>(value) - 0.5));
 }
 
-inline i32 ReadInt(const u8 *bytes, u32 offset)
-{
-    return *reinterpret_cast<const i32 *>(bytes + offset);
-}
-
-inline void WriteInt(u8 *bytes, u32 offset, i32 value)
-{
-    *reinterpret_cast<i32 *>(bytes + offset) = value;
-}
-
 } // namespace
 
 // TH10 0x00427950 (inner 0x00427960).
 i32 TH10_FASTCALL UpdateHomingOptionRecord(void *record_memory)
 {
-    u8 *const record = static_cast<u8 *>(record_memory);
-    u8 *const player = g_OptionPositionBase;
-    const i32 mode = ReadInt(player, 0x4474);
-    const u32 index = static_cast<u32>(ReadInt(record, 0x88));
-    u8 *const history = player + 0x436c;
+    PlayerOptionRecord &record =
+        *reinterpret_cast<PlayerOptionRecord *>(record_memory);
+    PlayerRecord &player_rec =
+        *reinterpret_cast<PlayerRecord *>(g_OptionPositionBase);
+    // The option position fields carry x100 fixed-point dwords; the dword
+    // view is kept on every access.
+    const i32 mode = static_cast<i32>(player_rec.focus_flag);
+    const u32 index = record.option_index;
 
-    WriteInt(record, 0x34,
-             ReadInt(history + index * 0x40, 0));
-    WriteInt(record, 0x38,
-             ReadInt(history + index * 0x40, 4));
+    *reinterpret_cast<i32 *>(&record.unfocused_position[0]) =
+        static_cast<i32>(player_rec.trail_history[index * 16]);
+    *reinterpret_cast<i32 *>(&record.unfocused_position[1]) =
+        static_cast<i32>(player_rec.trail_history[index * 16 + 1]);
 
     if (mode == 0) {
         // Unfocused: freeze the spread offset relative to the player.
-        WriteInt(record, 0x44,
-                 ReadInt(record, 0x34) - ReadInt(player, 0x3cc));
-        WriteInt(record, 0x48,
-                 ReadInt(record, 0x38) - ReadInt(player, 0x3d0));
+        *reinterpret_cast<i32 *>(&record.offset_source_a[0]) =
+            *reinterpret_cast<const i32 *>(&record.unfocused_position[0]) -
+            player_rec.position_x_fixed;
+        *reinterpret_cast<i32 *>(&record.offset_source_a[1]) =
+            *reinterpret_cast<const i32 *>(&record.unfocused_position[1]) -
+            player_rec.position_y_fixed;
     } else {
         // Focused: pin the segment head to the player plus the frozen
         // offset, then fill the eight trail slots at 1/8 steps toward the
         // entry one segment ahead (0x4778ac family read). The x87 constant
         // 0.125 lives at 0x00470b90.
-        WriteInt(history + index * 0x40, 0,
-                 ReadInt(player, 0x3cc) + ReadInt(record, 0x44));
-        WriteInt(history + index * 0x40, 4,
-                 ReadInt(player, 0x3d0) + ReadInt(record, 0x48));
-        const i32 head_x = ReadInt(history + index * 0x40, 0);
-        const i32 head_y = ReadInt(history + index * 0x40, 4);
+        player_rec.trail_history[index * 16] = static_cast<u32>(
+            player_rec.position_x_fixed +
+            *reinterpret_cast<const i32 *>(&record.offset_source_a[0]));
+        player_rec.trail_history[index * 16 + 1] = static_cast<u32>(
+            player_rec.position_y_fixed +
+            *reinterpret_cast<const i32 *>(&record.offset_source_a[1]));
+        const i32 head_x =
+            static_cast<i32>(player_rec.trail_history[index * 16]);
+        const i32 head_y =
+            static_cast<i32>(player_rec.trail_history[index * 16 + 1]);
         const i32 tail_x =
-            ReadInt(history + index * 0x40 + 0x40, 0);
+            static_cast<i32>(player_rec.trail_history[(index + 1) * 16]);
         const i32 tail_y =
-            ReadInt(history + index * 0x40 + 0x40, 4);
+            static_cast<i32>(player_rec.trail_history[(index + 1) * 16 + 1]);
         const i32 dx = tail_x - head_x;
         const i32 dy = tail_y - head_y;
         for (i32 k = 1; k <= 8; ++k) {
-            WriteInt(history + index * 0x40 + k * 8, 0,
-                     FloatToI32(static_cast<float>(dx * k) * 0.125f) +
-                         head_x);
-            WriteInt(history + index * 0x40 + k * 8, 4,
-                     FloatToI32(static_cast<float>(dy * k) * 0.125f) +
-                         head_y);
+            player_rec.trail_history[index * 16 + k * 2] = static_cast<u32>(
+                FloatToI32(static_cast<float>(dx * k) * 0.125f) + head_x);
+            player_rec.trail_history[index * 16 + k * 2 + 1] =
+                static_cast<u32>(
+                    FloatToI32(static_cast<float>(dy * k) * 0.125f) +
+                    head_y);
         }
     }
 
-    WriteInt(record, 0x34,
-             ReadInt(record, 0x44) + ReadInt(player, 0x3cc));
-    WriteInt(record, 0x38,
-             ReadInt(record, 0x48) + ReadInt(player, 0x3d0));
-    WriteInt(record, 0x84, mode);
+    *reinterpret_cast<i32 *>(&record.unfocused_position[0]) =
+        *reinterpret_cast<const i32 *>(&record.offset_source_a[0]) +
+        player_rec.position_x_fixed;
+    *reinterpret_cast<i32 *>(&record.unfocused_position[1]) =
+        *reinterpret_cast<const i32 *>(&record.offset_source_a[1]) +
+        player_rec.position_y_fixed;
+    record.focus_latch = static_cast<u32>(mode);
     return 0;
 }
 
 // TH10 0x00427ad0 (inner 0x00427ae0).
 i32 TH10_FASTCALL UpdateAngularOptionRecord(void *record_memory)
 {
-    u8 *const record = static_cast<u8 *>(record_memory);
-    u8 *const player = g_OptionPositionBase;
-    const i32 mode = ReadInt(player, 0x4474);
-    const i32 previous_mode = ReadInt(record, 0x84);
+    PlayerOptionRecord &record =
+        *reinterpret_cast<PlayerOptionRecord *>(record_memory);
+    PlayerRecord &player_rec =
+        *reinterpret_cast<PlayerRecord *>(g_OptionPositionBase);
+    // The option position fields carry x100 fixed-point dwords; the dword
+    // view is kept on every access.
+    const i32 mode = static_cast<i32>(player_rec.focus_flag);
+    const i32 previous_mode = static_cast<i32>(record.focus_latch);
 
     if (mode == 0) {
         if (previous_mode != 0)
-            SetEntityStateWordEaxEsiAbi(
-                reinterpret_cast<u32 *>(record + 0x68), 6);
-        WriteInt(record, 0x4c, ReadInt(record, 0x3c));
-        WriteInt(record, 0x50, ReadInt(record, 0x40));
+            SetEntityStateWordEaxEsiAbi(&record.sprite_entity_id, 6);
+        *reinterpret_cast<i32 *>(&record.offset_source_b[0]) =
+            *reinterpret_cast<const i32 *>(&record.render_position[0]);
+        *reinterpret_cast<i32 *>(&record.offset_source_b[1]) =
+            *reinterpret_cast<const i32 *>(&record.render_position[1]);
     } else {
         if (previous_mode == 0)
-            SetEntityStateWordEaxEsiAbi(
-                reinterpret_cast<u32 *>(record + 0x68), 3);
-        WriteInt(record, 0x34, ReadInt(record, 0x4c));
-        WriteInt(record, 0x38, ReadInt(record, 0x50));
+            SetEntityStateWordEaxEsiAbi(&record.sprite_entity_id, 3);
+        *reinterpret_cast<i32 *>(&record.unfocused_position[0]) =
+            *reinterpret_cast<const i32 *>(&record.offset_source_b[0]);
+        *reinterpret_cast<i32 *>(&record.unfocused_position[1]) =
+            *reinterpret_cast<const i32 *>(&record.offset_source_b[1]);
     }
-    WriteInt(record, 0x84, mode);
+    record.focus_latch = static_cast<u32>(mode);
     return 0;
 }
 

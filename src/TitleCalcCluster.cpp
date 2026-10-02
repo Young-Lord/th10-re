@@ -11,6 +11,7 @@
 #include "EntityHelpers.hpp"
 #include "PlayerFrameworkHelpers.hpp"
 #include "PlayerOptionRecords.hpp"
+#include "PlayerRecord.hpp"
 #include "PlayerShotData.hpp"
 #include "PlayerTimerHelpers.hpp"
 #include "Th10Platform.hpp"
@@ -96,53 +97,53 @@ void AwardExtendedLifeEaxEcxAbi(void *frame_state, i32 increment)
 void ResetOptionPositionRecordsEsiAbi(void *manager)
 {
     u8 *const base = static_cast<u8 *>(manager);
-    StoreU32To(base, 0x458U, 1U);
+    PlayerRecord &player = *reinterpret_cast<PlayerRecord *>(base);
+    player.mode = 1;
 
     // First-use initialization of the three option sub-records, then the
     // per-call reset values (the first record also gets the -1.0f float and
     // the -2 dword the other two do not).
-    if ((LoadU32At(base, 0x470U) & 1U) == 0U) {
-        StoreU32To(base, 0x464U, 0U);
-        StoreU32To(base, 0x460U, static_cast<u32>(-999999));
-        StoreU32To(base, 0x468U, 0U);
-        StoreU32To(base, 0x46CU,
-                   reinterpret_cast<u32>(&kUnitRate));
-        StoreU32To(base, 0x470U, LoadU32At(base, 0x470U) | 1U);
+    if ((player.autocollect_timer.flags & 1U) == 0U) {
+        player.autocollect_timer.count = 0;
+        player.autocollect_timer.prev = static_cast<i32>(-999999);
+        player.autocollect_timer.accum = 0;
+        player.autocollect_timer.rate = &kUnitRate;
+        player.autocollect_timer.flags |= 1U;
     }
-    StoreU32To(base, 0x464U, static_cast<u32>(-1));
-    StoreU32To(base, 0x468U, 0xBF800000U); // -1.0f
-    StoreU32To(base, 0x460U, static_cast<u32>(-2));
+    player.autocollect_timer.count = static_cast<i32>(-1);
+    *reinterpret_cast<u32 *>(&player.autocollect_timer.accum) =
+        0xBF800000U; // -1.0f
+    player.autocollect_timer.prev = static_cast<i32>(-2);
 
-    if ((LoadU32At(base, 0x484U) & 1U) == 0U) {
-        StoreU32To(base, 0x478U, 0U);
-        StoreU32To(base, 0x474U, static_cast<u32>(-999999));
-        StoreU32To(base, 0x47CU, 0U);
-        StoreU32To(base, 0x480U,
-                   reinterpret_cast<u32>(&kUnitRate));
-        StoreU32To(base, 0x484U, LoadU32At(base, 0x484U) | 1U);
+    if ((player.frame_timer.flags & 1U) == 0U) {
+        player.frame_timer.count = 0;
+        player.frame_timer.prev = static_cast<i32>(-999999);
+        player.frame_timer.accum = 0;
+        player.frame_timer.rate = &kUnitRate;
+        player.frame_timer.flags |= 1U;
     }
-    StoreU32To(base, 0x478U, 0U);
-    StoreU32To(base, 0x47CU, 0U);
-    StoreU32To(base, 0x474U, static_cast<u32>(-1));
+    player.frame_timer.count = 0;
+    player.frame_timer.accum = 0;
+    player.frame_timer.prev = static_cast<i32>(-1);
 
-    if ((LoadU32At(base, 0x498U) & 1U) == 0U) {
-        StoreU32To(base, 0x48CU, 0U);
-        StoreU32To(base, 0x488U, static_cast<u32>(-999999));
-        StoreU32To(base, 0x490U, 0U);
-        StoreU32To(base, 0x494U,
-                   reinterpret_cast<u32>(&kUnitRate));
-        StoreU32To(base, 0x498U, LoadU32At(base, 0x498U) | 1U);
+    if ((player.move_gate_timer.flags & 1U) == 0U) {
+        player.move_gate_timer.count = 0;
+        player.move_gate_timer.prev = static_cast<i32>(-999999);
+        player.move_gate_timer.accum = 0;
+        player.move_gate_timer.rate = &kUnitRate;
+        player.move_gate_timer.flags |= 1U;
     }
-    StoreU32To(base, 0x48CU, 0U);
-    StoreU32To(base, 0x490U, 0U);
-    StoreU32To(base, 0x488U, static_cast<u32>(-1));
+    player.move_gate_timer.count = 0;
+    player.move_gate_timer.accum = 0;
+    player.move_gate_timer.prev = static_cast<i32>(-1);
 
     // Release the tracked option entity (the native stores the cleared slot
     // twice; the second store is redundant) and refresh the life icons
     // through the 0x413790 tail call.
-    ReleaseEntityById(g_MainChainRenderOwner, LoadU32At(base, 0x329CU));
-    StoreU32To(base, 0x329CU, 0U);
-    StoreU32To(base, 0x329CU, 0U);
+    ReleaseEntityById(g_MainChainRenderOwner,
+                      player.focus_glide_entity_id);
+    player.focus_glide_entity_id = 0;
+    player.focus_glide_entity_id = 0;
     RefreshLifeIconsEaxStackAbi(g_PlayerLivesRemaining);
 }
 
@@ -213,11 +214,15 @@ void ApplyOptionPositionStateEbxAbi(void *record)
 
         u8 *const manager = reinterpret_cast<u8 *>(LoadU32From(
             reinterpret_cast<const void *>(0x477834U)));
-        StoreU32To(slot, 0x24U, LoadU32At(manager, 0x3CCU));
-        StoreU32To(slot, 0x28U, LoadU32At(manager, 0x3D0U));
-        memcpy(slot + 0x2C, manager + 0x436C, 0x108U);
+        PlayerRecord &player = *reinterpret_cast<PlayerRecord *>(manager);
+        StoreU32To(slot, 0x24U,
+                   static_cast<u32>(player.position_x_fixed));
+        StoreU32To(slot, 0x28U,
+                   static_cast<u32>(player.position_y_fixed));
+        memcpy(slot + 0x2C, player.trail_history, 0x108U);
         {
-            u8 *src = manager + 0x32D4U;
+            u8 *src = reinterpret_cast<u8 *>(
+                player.options[0].unfocused_position);
             u8 *dst = slot + 0x134U;
             for (u32 i = 0; i != 4U; ++i) {
                 for (u32 j = 0; j != 8U; ++j)
@@ -230,21 +235,23 @@ void ApplyOptionPositionStateEbxAbi(void *record)
         StoreU32To(slot, 0x1B8U,
                    LoadU32From(reinterpret_cast<const void *>(0x474C9CU)));
         StoreU32To(rec, 0x1D0U, slot_index);
-        StoreU32To(slot, 0x1BCU, LoadU32At(manager, 0x4474U));
+        StoreU32To(slot, 0x1BCU, player.focus_flag);
     } else if (mode == 1U) {
         // Commit: write the record back into the 0x477834 manager.
         u8 *const manager = reinterpret_cast<u8 *>(LoadU32From(
             reinterpret_cast<const void *>(0x477834U)));
+        PlayerRecord &player = *reinterpret_cast<PlayerRecord *>(manager);
         u8 *const slot = reinterpret_cast<u8 *>(
             LoadU32At(rec, 0xB0U + 0x24U * slot_index));
         StoreU32To(rec, 0x1D0U, slot_index);
         PublishSelectedRunStatsEaxEcxAbi(manager, reinterpret_cast<const u32 *>(slot + 0x24U));
-        memcpy(manager + 0x436C, slot + 0x2C, 0x108U);
-        StoreU32To(manager, 0x4474U, LoadU32At(slot, 0x1BCU));
+        memcpy(player.trail_history, slot + 0x2C, 0x108U);
+        player.focus_flag = LoadU32At(slot, 0x1BCU);
         RebuildPlayerOptionRecords(manager);
         {
             u8 *src = slot + 0x134U;
-            u8 *dst = manager + 0x32D4U;
+            u8 *dst = reinterpret_cast<u8 *>(
+                player.options[0].unfocused_position);
             const u32 stage =
                 LoadU32From(reinterpret_cast<const void *>(0x474C68U));
             const u32 floor =
@@ -265,10 +272,10 @@ void ApplyOptionPositionStateEbxAbi(void *record)
                 dst += 0x98U;
             }
         }
-        StoreU32To(manager, 0x332CU, 0U);
-        StoreU32To(manager, 0x33C4U, 0U);
-        StoreU32To(manager, 0x345CU, 0U);
-        StoreU32To(manager, 0x34F4U, 0U);
+        player.options[0].tier_latch = 0U;
+        player.options[1].tier_latch = 0U;
+        player.options[2].tier_latch = 0U;
+        player.options[3].tier_latch = 0U;
         ResetOptionPositionRecordsEsiAbi(manager);
     }
 
@@ -551,17 +558,17 @@ void ReleaseAsciiHudConditionalState(void *state)
 
 void *PublishSelectedRunStatsEaxEcxAbi(void *state, const u32 *values)
 {
-    StoreU32To(state, 0x3ccU, values[0]);
-    StoreU32To(state, 0x3d0U, values[1]);
+    PlayerRecord &player = *reinterpret_cast<PlayerRecord *>(state);
+    player.position_x_fixed = static_cast<i32>(values[0]);
+    player.position_y_fixed = static_cast<i32>(values[1]);
     const float f0 =
-        static_cast<float>(static_cast<i32>(LoadU32At(state, 0x3ccU))) * 0.01f;
+        static_cast<float>(player.position_x_fixed) * 0.01f;
     const float f1 =
-        static_cast<float>(static_cast<i32>(LoadU32At(state, 0x3d0U))) * 0.01f;
-    *reinterpret_cast<float *>(static_cast<u8 *>(state) + 0x3c0U) = f0;
-    *reinterpret_cast<float *>(static_cast<u8 *>(state) + 0x3c4U) = f1;
-    const u32 flag_slots[4] = {0x332cU, 0x33c4U, 0x345cU, 0x34f4U};
+        static_cast<float>(player.position_y_fixed) * 0.01f;
+    player.position_x = f0;
+    player.position_y = f1;
     for (u32 i = 0; i < 4U; ++i) {
-        StoreU32To(state, flag_slots[i], 1U);
+        player.options[i].tier_latch = 1U;
     }
     return state;
 }

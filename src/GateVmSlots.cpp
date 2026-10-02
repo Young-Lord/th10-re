@@ -8,6 +8,7 @@
 
 #include "Th10Types.hpp"
 #include "Th10Platform.hpp"
+#include "MainChainContext.hpp"
 #include "MainChainRender.hpp"
 
 namespace th10 {
@@ -30,20 +31,19 @@ void UpdateMainChainCameraWorkEdiAbi(MainChainCameraWork *work); // declared
 // camera-work refresh over the record, then calls the +0x8 object's vtable
 // +0xbc with record+0xcc, and finally publishes the index at slot+0x388.
 void AcquireGateVmRecordSlotEbxAbi(void *slot, u32 index) {
-    u8 *slot_bytes = static_cast<u8 *>(slot);
-    u8 *record = slot_bytes + 0x154 + index * 0x118;
-    *reinterpret_cast<u8 **>(slot_bytes + 0x384) = record;
+    MainChainContext &ctx = *reinterpret_cast<MainChainContext *>(slot);
+    MainChainCameraWork *record = &ctx.camera_work_bank[index];
+    ctx.draw_work_pointer = record;
 
-    UpdateMainChainCameraWorkEdiAbi(reinterpret_cast<MainChainCameraWork *>(
-        record));
+    UpdateMainChainCameraWorkEdiAbi(record);
 
-    void *binder = *reinterpret_cast<void **>(slot_bytes + 0x8);
+    void *binder = ctx.draw_target;
     void *const *vtable = *reinterpret_cast<void *const **>(binder);
     BindGateRecordVirtual bind =
         reinterpret_cast<BindGateRecordVirtual>(vtable[0xbc / 4]);
-    bind(record + 0xcc);
+    bind(reinterpret_cast<u8 *>(record) + 0xcc);
 
-    *reinterpret_cast<u32 *>(slot_bytes + 0x388) = index;
+    ctx.draw_initialized = static_cast<i32>(index);
 }
 
 // TH10 0x00401d20 native entry wrapper bound at the 0x491c28 slot.

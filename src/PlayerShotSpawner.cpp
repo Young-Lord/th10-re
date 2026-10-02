@@ -2,6 +2,7 @@
 
 #include "EntityHelpers.hpp"
 #include "PlayerMotionHelpers.hpp"
+#include "PlayerRecord.hpp"
 
 #include <string.h>
 #include "BgmRuntime.hpp"
@@ -69,20 +70,20 @@ void AllocateAndRegisterEntity(u32 *out_id, i32 script_id)
 i32 SpawnPlayerShotStackAbi(void *player_memory, const void *descriptor_memory,
                             i32 frame)
 {
-    u8 *const player = static_cast<u8 *>(player_memory);
+    u8 *const player_ptr = static_cast<u8 *>(player_memory);
+    PlayerRecord &player = *reinterpret_cast<PlayerRecord *>(player_ptr);
     const u8 *const descriptor =
         static_cast<const u8 *>(descriptor_memory);
     const i32 type = static_cast<const i32>(descriptor[0x1d]);
     const i32 slot = static_cast<const i32>(descriptor[0x1c]);
 
-    if (type == 3 &&
-        ReadInt(player, 0x42f4 + static_cast<u32>(slot) * 4) != 0)
+    if (type == 3 && player.type3_slot_latches[slot] != 0)
         return 0;
 
-    u8 *record = 0;
+    PlayerShotRecord *record = 0;
     for (u32 index = 0; index != 128; ++index) {
-        u8 *const candidate = player + 0x49c + index * 0x5c;
-        if (ReadInt(candidate, 0x40) == 0) {
+        PlayerShotRecord *const candidate = &player.shots[index];
+        if (candidate->state == 0) {
             record = candidate;
             break;
         }
@@ -90,63 +91,57 @@ i32 SpawnPlayerShotStackAbi(void *player_memory, const void *descriptor_memory,
     if (record == 0)
         return 0;
 
-    const bool was_initialized =
-        (*reinterpret_cast<const u8 *>(record + 0x3c) & 1) != 0;
-    WriteInt(record, 0x40, 1);
-    *reinterpret_cast<const void **>(record + 0x58) = descriptor;
+    const bool was_initialized = (record->angle_flags & 1) != 0;
+    record->state = 1;
+    record->descriptor = const_cast<void *>(
+        static_cast<const void *>(descriptor));
     if (!was_initialized) {
-        WriteInt(record, 4, 0);
-        WriteInt(record, 0, static_cast<i32>(0xfff0bdc1U));
-        WriteInt(record, 8, 0);
-        *reinterpret_cast<const float **>(record + 0xc) = &g_FrameTimeScale;
-        *reinterpret_cast<u8 *>(record + 0x3c) |= 1;
+        record->timer_count = 0;
+        *reinterpret_cast<u32 *>(&record->timer_prev) =
+            static_cast<u32>(0xfff0bdc1U);
+        *reinterpret_cast<u32 *>(&record->timer_accum) = 0;
+        record->timer_rate = &g_FrameTimeScale;
+        record->angle_flags |= 1;
     }
-    WriteInt(record, 4, 0);
-    WriteInt(record, 8, 0);
-    WriteInt(record, 0, -1);
+    record->timer_count = 0;
+    *reinterpret_cast<u32 *>(&record->timer_accum) = 0;
+    *reinterpret_cast<u32 *>(&record->timer_prev) = static_cast<u32>(-1);
 
     if (slot == 0) {
-        WriteFloat(record, 0x14, ReadFloat(player, 0x3c0));
-        WriteFloat(record, 0x18, ReadFloat(player, 0x3c4));
-        WriteFloat(record, 0x1c, ReadFloat(player, 0x3c8));
+        record->position[0] = player.position_x;
+        record->position[1] = player.position_y;
+        record->position[2] = player.position_z;
     } else {
-        WriteFloat(record, 0x14,
-                   static_cast<float>(
-                       ReadInt(player, 0x3244 + static_cast<u32>(slot) *
-                                          0x98)) *
-                       0.01f);
-        WriteFloat(record, 0x18,
-                   static_cast<float>(
-                       ReadInt(player, 0x3248 + static_cast<u32>(slot) *
-                                          0x98)) *
-                       0.01f);
-        WriteFloat(record, 0x1c, 0.0f);
+        record->position[0] =
+            static_cast<float>(*reinterpret_cast<const i32 *>(
+                &player.options[slot - 1].render_position[0])) *
+            0.01f;
+        record->position[1] =
+            static_cast<float>(*reinterpret_cast<const i32 *>(
+                &player.options[slot - 1].render_position[1])) *
+            0.01f;
+        record->position[2] = 0.0f;
     }
     if (type == 3)
-        WriteInt(player, 0x42f4 + static_cast<u32>(slot) * 4, 1);
+        player.type3_slot_latches[slot] = 1;
 
-    WriteFloat(record, 0x2c, ReadFloat(descriptor, 0x18));
-    WriteFloat(record, 0x30,
-               WrapAngleToPi(ReadFloat(descriptor, 0x14)));
+    record->speed = ReadFloat(descriptor, 0x18);
+    record->angle = WrapAngleToPi(ReadFloat(descriptor, 0x14));
 
     if (!was_initialized) {
-        PolarToCartesianEdiAbi(record + 0x20, ReadFloat(record, 0x30),
-                               ReadFloat(record, 0x2c));
-        *reinterpret_cast<u32 *>(record + 0x28) = 0;
+        PolarToCartesianEdiAbi(record->velocity, record->angle,
+                               record->speed);
+        record->field_0028 = 0;
     } else {
-        WriteFloat(record, 0x34,
-                   ReadFloat(record, 0x34) + ReadFloat(record, 0x38));
-        WriteFloat(record, 0x30,
-                   WrapAngleToPi(ReadFloat(record, 0x2c) +
-                                 ReadFloat(record, 0x30)));
+        record->angle_delta[0] =
+            record->angle_delta[0] + record->angle_delta[1];
+        record->angle = WrapAngleToPi(record->speed + record->angle);
     }
 
-    WriteFloat(record, 0x14,
-               ReadFloat(record, 0x14) + ReadFloat(descriptor, 4) -
-                   ReadFloat(record, 0x20));
-    WriteFloat(record, 0x18,
-               ReadFloat(record, 0x18) + ReadFloat(descriptor, 8) -
-                   ReadFloat(record, 0x24));
+    record->position[0] = record->position[0] + ReadFloat(descriptor, 4) -
+                          record->velocity[0];
+    record->position[1] = record->position[1] + ReadFloat(descriptor, 8) -
+                          record->velocity[1];
 
     u32 entity_id = 0;
     AllocateAndRegisterEntity(&entity_id,
@@ -154,11 +149,11 @@ i32 SpawnPlayerShotStackAbi(void *player_memory, const void *descriptor_memory,
                                   static_cast<short>(descriptor[0x1e] |
                                                    (descriptor[0x1f] << 8))) +
                                   5);
-    WriteInt(record, 0x44, static_cast<i32>(entity_id));
+    record->entity_id = entity_id;
     u8 *const entity =
         FindEntityEdxStackAbi(g_MainChainRenderOwner, entity_id);
     if (entity == 0) {
-        WriteInt(record, 0x44, 0);
+        record->entity_id = 0;
     } else if ((*reinterpret_cast<const u32 *>(entity + 0x35c) &
                 0x08000000U) != 0) {
         WriteFloat(entity, 0x2c, ReadFloat(descriptor, 0x14));
@@ -167,22 +162,22 @@ i32 SpawnPlayerShotStackAbi(void *player_memory, const void *descriptor_memory,
 
     if (type == 3) {
         AllocateAndRegisterEntity(&entity_id, 0x10);
-        WriteInt(record, 0x48, static_cast<i32>(entity_id));
+        record->secondary_entity_id = entity_id;
     } else {
-        WriteInt(record, 0x48, 0);
+        record->secondary_entity_id = 0;
     }
 
     DescriptorUpdateFnPtr update =
         reinterpret_cast<DescriptorUpdateFnPtr>(
             *reinterpret_cast<const void *const *>(descriptor + 0x24));
     if (*reinterpret_cast<const void *const *>(descriptor + 0x24) != 0)
-        update(player, record, frame);
+        update(player_ptr, record, frame);
 
     const short sound_id = static_cast<short>(
         descriptor[0x22] | (descriptor[0x23] << 8));
     if (sound_id >= 0)
         EnqueueBgmSoundValueFromFloat(&g_TransitionRoot,
-            static_cast<u32>(sound_id), ReadFloat(record, 0x14));
+            static_cast<u32>(sound_id), record->position[0]);
     return 0;
 }
 
@@ -192,40 +187,37 @@ void *SpawnPlayerSubEffectEcxDxStackAbi(void *position_memory,
                                         void *player_memory, float vel_x,
                                         float vel_y, i32 count, i32 limit)
 {
-    u8 *const player = static_cast<u8 *>(player_memory);
+    PlayerRecord &player = *reinterpret_cast<PlayerRecord *>(player_memory);
     const float *const position =
         static_cast<const float *>(position_memory);
-    u8 *const record_base = player + 0x350c;
+    PlayerSubEffectRecord *record = player.sub_effects;
     for (u32 index = 0; index != 32; ++index) {
-        u8 *const record = record_base + index * 0x6c;
-        if ((*reinterpret_cast<const u8 *>(record + 0x68) & 1) != 0)
+        if ((record->flags & 1) != 0) {
+            ++record;
             continue;
+        }
         memset(record, 0, 0x6c);
-        *reinterpret_cast<u8 *>(record + 0x68) |= 3;
-        *reinterpret_cast<u32 *>(record + 0x18) =
-            *reinterpret_cast<const u32 *>(position);
-        *reinterpret_cast<u32 *>(record + 0x1c) =
-            *reinterpret_cast<const u32 *>(position + 1);
-        *reinterpret_cast<u32 *>(record + 0x20) =
-            *reinterpret_cast<const u32 *>(position + 2);
-        WriteFloat(record, 0, vel_x);
-        WriteFloat(record, 4, vel_y);
+        record->flags |= 3;
+        record->position[0] = position[0];
+        record->position[1] = position[1];
+        record->position[2] = position[2];
+        record->velocity[0] = vel_x;
+        record->velocity[1] = vel_y;
         // Timer block: prev +0x44, count +0x48, accumulator +0x4c, rate
         // pointer +0x50, latch +0x54. The caller pre-sets the rate global
         // (0x476f78) to 1.0f before spawning.
-        WriteInt(record, 0x48, count);
-        WriteInt(record, 0x44, count - 1);
-        WriteFloat(record, 0x4c, static_cast<float>(count));
-        *reinterpret_cast<const float **>(record + 0x50) =
-            &g_FrameTimeScale;
-        *reinterpret_cast<u32 *>(record + 0x54) |= 1;
-        WriteInt(record, 0x58, limit);
-        WriteInt(record, 0x5c, 0);
-        WriteInt(record, 0x60, 999999);
-        WriteInt(record, 0x64, 4);
+        record->timer_count = count;
+        record->timer_prev = count - 1;
+        record->timer_accum = static_cast<float>(count);
+        record->timer_rate = &g_FrameTimeScale;
+        record->timer_latch |= 1;
+        record->value = limit;
+        record->accumulated = 0;
+        record->limit = 999999;
+        record->period = 4;
         return record;
     }
-    return record_base + 32 * 0x6c;
+    return player.sub_effects + 32;
 }
 
 } // namespace th10

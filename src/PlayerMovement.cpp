@@ -2,6 +2,7 @@
 
 #include "EntityHelpers.hpp"
 #include "PlayerOptionCallbacks.hpp"
+#include "PlayerRecord.hpp"
 
 #include <cmath>
 
@@ -42,21 +43,12 @@ i32 FloatToI32(float value)
         : static_cast<i32>(std::ceil(static_cast<double>(value) - 0.5));
 }
 
-inline i32 ReadInt(const u8 *bytes, u32 offset)
-{
-    return *reinterpret_cast<const i32 *>(bytes + offset);
-}
-
-inline void WriteInt(u8 *bytes, u32 offset, i32 value)
-{
-    *reinterpret_cast<i32 *>(bytes + offset) = value;
-}
-
 } // namespace
 
 i32 UpdatePlayerMovementEdiAbi(void *player_memory)
 {
     u8 *const player = static_cast<u8 *>(player_memory);
+    PlayerRecord &player_rec = *reinterpret_cast<PlayerRecord *>(player);
     const u8 input = g_InputMask;
 
     // Diagonal masks require both bits and win over the cardinals.
@@ -77,66 +69,63 @@ i32 UpdatePlayerMovementEdiAbi(void *player_memory)
         state = 3;
     else if ((input & 0x80) != 0)
         state = 4;
-    WriteInt(player, 0x454, state);
+    player_rec.input_state = state;
 
     if (g_AsciiHudConditionalState == 0 ||
         *reinterpret_cast<const i32 *>(
             static_cast<u8 *>(g_AsciiHudConditionalState) + 0x60) == 0 ||
-        ReadInt(player, 0x48c) < 4) {
-        WriteInt(player, 0x4474, 0);
-        WriteInt(player, 0x4308, 30);
+        player_rec.move_gate_timer.count < 4) {
+        player_rec.focus_flag = 0;
+        player_rec.deathbomb_lerp_percent = 30;
     } else {
-        WriteInt(player, 0x4474, (input >> 2) & 1);
+        player_rec.focus_flag = (input >> 2) & 1;
         if (static_cast<i32>(g_PlayerShotType + g_PlayerCharacter * 3) == 5) {
             if ((input & 4) != 0)
-                WriteInt(player, 0x4308, 0);
-            else if (ReadInt(player, 0x4308) < 30)
-                WriteInt(player, 0x4308, ReadInt(player, 0x4308) + 1);
+                player_rec.deathbomb_lerp_percent = 0;
+            else if (player_rec.deathbomb_lerp_percent < 30)
+                player_rec.deathbomb_lerp_percent =
+                    player_rec.deathbomb_lerp_percent + 1;
         }
     }
 
-    const bool focused = ReadInt(player, 0x4474) != 0;
+    const bool focused = player_rec.focus_flag != 0;
     i32 dx = 0;
     i32 dy = 0;
     if (!focused) {
-        const u32 tracked = ReadInt(player, 0x329c);
+        const u32 tracked = player_rec.focus_glide_entity_id;
         if (tracked != 0) {
             if (FindEntityEdxStackAbi(g_MainChainRenderOwner, tracked) != 0)
                 StopEntityById(g_MainChainRenderOwner, tracked);
-            WriteInt(player, 0x329c, 0);
+            player_rec.focus_glide_entity_id = 0;
         }
         switch (state) {
-        case 1: dx = -ReadInt(player, 0x3d4); break;
-        case 2: dx = ReadInt(player, 0x3d4); break;
-        case 3: dy = -ReadInt(player, 0x3d4); break;
-        case 4: dy = ReadInt(player, 0x3d4); break;
-        case 5: dx = -ReadInt(player, 0x3dc); dy = dx; break;
-        case 6: dx = ReadInt(player, 0x3dc); dy = dx; break;
-        case 7: dx = -ReadInt(player, 0x3dc); dy = -dx; break;
-        case 8: dx = ReadInt(player, 0x3dc); dy = dx; break;
+        case 1: dx = -player_rec.speed_unfocused; break;
+        case 2: dx = player_rec.speed_unfocused; break;
+        case 3: dy = -player_rec.speed_unfocused; break;
+        case 4: dy = player_rec.speed_unfocused; break;
+        case 5: dx = -player_rec.speed_unfocused_diagonal; dy = dx; break;
+        case 6: dx = player_rec.speed_unfocused_diagonal; dy = dx; break;
+        case 7: dx = -player_rec.speed_unfocused_diagonal; dy = -dx; break;
+        case 8: dx = player_rec.speed_unfocused_diagonal; dy = dx; break;
         default: break;
         }
-        const i32 previous_dx = ReadInt(player, 0x44c);
+        const i32 previous_dx = player_rec.direction_x;
         if (dx < 0 && previous_dx >= 0)
-            SpawnDirectionAnimEcxEaxBbxAbi(
-                *reinterpret_cast<void *const *>(player + 0x10),
-                player + 0x14, 1);
+            SpawnDirectionAnimEcxEaxBbxAbi(player_rec.anm_manager_work,
+                &player_rec.anim_vm, 1);
         if (dx > 0 && previous_dx <= 0)
-            SpawnDirectionAnimEcxEaxBbxAbi(
-                *reinterpret_cast<void *const *>(player + 0x10),
-                player + 0x14, 3);
+            SpawnDirectionAnimEcxEaxBbxAbi(player_rec.anm_manager_work,
+                &player_rec.anim_vm, 3);
         if (dx == 0) {
             if (previous_dx < 0)
-                SpawnDirectionAnimEcxEaxBbxAbi(
-                    *reinterpret_cast<void *const *>(player + 0x10),
-                    player + 0x14, 2);
+                SpawnDirectionAnimEcxEaxBbxAbi(player_rec.anm_manager_work,
+                    &player_rec.anim_vm, 2);
             if (previous_dx > 0)
-                SpawnDirectionAnimEcxEaxBbxAbi(
-                    *reinterpret_cast<void *const *>(player + 0x10),
-                    player + 0x14, 4);
+                SpawnDirectionAnimEcxEaxBbxAbi(player_rec.anm_manager_work,
+                    &player_rec.anim_vm, 4);
         }
     } else {
-        if (ReadInt(player, 0x329c) == 0) {
+        if (player_rec.focus_glide_entity_id == 0) {
             void *const vm = AllocatePoolVmEsiAbi(g_MainChainRenderOwner);
             *reinterpret_cast<u32 *>(static_cast<u8 *>(vm) + 0x20) = 9;
             *reinterpret_cast<u32 *>(static_cast<u8 *>(vm) + 0x35c) |=
@@ -144,65 +133,64 @@ i32 UpdatePlayerMovementEdiAbi(void *player_memory)
             AssignPoolVmScriptEcxEaxAbi(vm, 0x160);
             u32 id = 0;
             LinkEntityAndAssignIdEaxEsiAbi(&id, vm);
-            WriteInt(player, 0x329c, static_cast<i32>(id));
+            player_rec.focus_glide_entity_id = id;
         }
         switch (state) {
-        case 1: dx = -ReadInt(player, 0x3d8); break;
-        case 2: dx = ReadInt(player, 0x3d8); break;
-        case 3: dy = -ReadInt(player, 0x3d8); break;
-        case 4: dy = ReadInt(player, 0x3d8); break;
-        case 5: dx = -ReadInt(player, 0x3e0); dy = dx; break;
-        case 6: dx = ReadInt(player, 0x3e0); dy = dx; break;
-        case 7: dx = -ReadInt(player, 0x3e0); dy = -dx; break;
-        case 8: dx = ReadInt(player, 0x3e0); dy = dx; break;
+        case 1: dx = -player_rec.speed_focused; break;
+        case 2: dx = player_rec.speed_focused; break;
+        case 3: dy = -player_rec.speed_focused; break;
+        case 4: dy = player_rec.speed_focused; break;
+        case 5: dx = -player_rec.speed_focused_diagonal; dy = dx; break;
+        case 6: dx = player_rec.speed_focused_diagonal; dy = dx; break;
+        case 7: dx = -player_rec.speed_focused_diagonal; dy = -dx; break;
+        case 8: dx = player_rec.speed_focused_diagonal; dy = dx; break;
         default: break;
         }
     }
 
-    WriteInt(player, 0x44c, dx);
-    WriteInt(player, 0x450, dy);
+    player_rec.direction_x = dx;
+    player_rec.direction_y = dy;
     const i32 step_x = FloatToI32(static_cast<float>(dx) * g_FrameTimeScale);
     const i32 step_y = FloatToI32(static_cast<float>(dy) * g_FrameTimeScale);
-    WriteInt(player, 0x3f0, step_x);
-    WriteInt(player, 0x3f4, step_y);
-    WriteInt(player, 0x3cc, ReadInt(player, 0x3cc) + step_x);
-    WriteInt(player, 0x3d0, ReadInt(player, 0x3d0) + step_y);
+    player_rec.step_x = step_x;
+    player_rec.step_y = step_y;
+    player_rec.position_x_fixed = player_rec.position_x_fixed + step_x;
+    player_rec.position_y_fixed = player_rec.position_y_fixed + step_y;
 
-    if (ReadInt(player, 0x3cc) < -0x47e0)
-        WriteInt(player, 0x3cc, -0x47e0);
-    else if (ReadInt(player, 0x3cc) > 0x47e0)
-        WriteInt(player, 0x3cc, 0x47e0);
-    if (ReadInt(player, 0x3d0) < 0xc80)
-        WriteInt(player, 0x3d0, 0xc80);
-    else if (ReadInt(player, 0x3d0) > 0xa8c0)
-        WriteInt(player, 0x3d0, 0xa8c0);
+    if (player_rec.position_x_fixed < -0x47e0)
+        player_rec.position_x_fixed = -0x47e0;
+    else if (player_rec.position_x_fixed > 0x47e0)
+        player_rec.position_x_fixed = 0x47e0;
+    if (player_rec.position_y_fixed < 0xc80)
+        player_rec.position_y_fixed = 0xc80;
+    else if (player_rec.position_y_fixed > 0xa8c0)
+        player_rec.position_y_fixed = 0xa8c0;
 
     const float position_x =
-        static_cast<float>(ReadInt(player, 0x3cc)) * 0.01f;
+        static_cast<float>(player_rec.position_x_fixed) * 0.01f;
     const float position_y =
-        static_cast<float>(ReadInt(player, 0x3d0)) * 0.01f;
-    *reinterpret_cast<float *>(player + 0x3c0) = position_x;
-    *reinterpret_cast<float *>(player + 0x3c4) = position_y;
+        static_cast<float>(player_rec.position_y_fixed) * 0.01f;
+    player_rec.position_x = position_x;
+    player_rec.position_y = position_y;
 
-    const u32 tracked = ReadInt(player, 0x329c);
+    const u32 tracked = player_rec.focus_glide_entity_id;
     if (tracked != 0) {
         if (FindEntityEdxStackAbi(g_MainChainRenderOwner, tracked) != 0) {
             const float target[3] = {position_x + 224.0f,
                                      position_y + 16.0f,
-                                     *reinterpret_cast<const float *>(
-                                         player + 0x3c8)};
+                                     player_rec.position_z};
             SetEntityPositionDirectEsiAbi(g_MainChainRenderOwner, tracked,
                                           target);
         } else {
-            WriteInt(player, 0x329c, 0);
+            player_rec.focus_glide_entity_id = 0;
         }
     }
 
     // History ring: 32 dword pairs; the valid window is optionCount*8 pairs
     // and the tail is saturated to its oldest entry. Only shifts while
     // unfocused and moving; the head write runs every frame.
-    const i32 count = ReadInt(player, 0x3500);
-    u32 *const history = reinterpret_cast<u32 *>(player + 0x436c);
+    const i32 count = player_rec.option_count;
+    u32 *const history = player_rec.trail_history;
     if (!focused && (dx != 0 || dy != 0)) {
         const i32 valid = count * 8;
         if (valid < 32) {
@@ -221,51 +209,72 @@ i32 UpdatePlayerMovementEdiAbi(void *player_memory)
             }
         }
     }
-    history[0] = *reinterpret_cast<const u32 *>(player + 0x3cc);
-    history[1] = *reinterpret_cast<const u32 *>(player + 0x3d0);
+    history[0] = static_cast<u32>(player_rec.position_x_fixed);
+    history[1] = static_cast<u32>(player_rec.position_y_fixed);
 
-    const i32 lerp_percent = ReadInt(player, 0x4308);
+    const i32 lerp_percent = player_rec.deathbomb_lerp_percent;
     for (u32 index = 0; index != 4; ++index) {
-        u8 *const record = player + 0x32a0 + index * 0x98;
-        if (ReadInt(record, 0) == 0)
+        PlayerOptionRecord &rec = player_rec.options[index];
+        if (rec.state == 0)
             continue;
-        const u32 offset_base = focused ? 0x4c : 0x44;
-        WriteInt(record, 0x34,
-                 ReadInt(player, 0x3cc) + ReadInt(record, offset_base));
-        WriteInt(record, 0x38,
-                 ReadInt(player, 0x3d0) + ReadInt(record, offset_base + 4));
+        // The option position fields carry x100 fixed-point dwords; the
+        // dword view is kept on every access.
+        const float *const offset_source =
+            focused ? rec.offset_source_b : rec.offset_source_a;
+        *reinterpret_cast<i32 *>(&rec.unfocused_position[0]) =
+            player_rec.position_x_fixed +
+            *reinterpret_cast<const i32 *>(&offset_source[0]);
+        *reinterpret_cast<i32 *>(&rec.unfocused_position[1]) =
+            player_rec.position_y_fixed +
+            *reinterpret_cast<const i32 *>(&offset_source[1]);
 
         OptionRecordFn *const callback =
-            *reinterpret_cast<OptionRecordFn *const *>(record + 0x90);
-        if (*reinterpret_cast<void *const *>(record + 0x90) != 0)
-            (void)(*callback)(record);
+            reinterpret_cast<OptionRecordFn *>(rec.update_callback);
+        if (rec.update_callback != 0)
+            (void)(*callback)(&rec);
 
-        if (ReadInt(record, 0x8c) != 0) {
-            WriteInt(record, 0x8c, 0);
-            WriteInt(record, 0x3c, ReadInt(record, 0x34));
-            WriteInt(record, 0x40, ReadInt(record, 0x38));
+        if (rec.tier_latch != 0) {
+            rec.tier_latch = 0;
+            *reinterpret_cast<i32 *>(&rec.render_position[0]) =
+                *reinterpret_cast<const i32 *>(&rec.unfocused_position[0]);
+            *reinterpret_cast<i32 *>(&rec.render_position[1]) =
+                *reinterpret_cast<const i32 *>(&rec.unfocused_position[1]);
         } else if (lerp_percent > 29) {
-            const i32 delta_x = (ReadInt(record, 0x34) -
-                                 ReadInt(record, 0x3c)) * lerp_percent / 100;
-            const i32 delta_y = (ReadInt(record, 0x38) -
-                                 ReadInt(record, 0x40)) * lerp_percent / 100;
+            const i32 delta_x =
+                (*reinterpret_cast<const i32 *>(&rec.unfocused_position[0]) -
+                 *reinterpret_cast<const i32 *>(&rec.render_position[0])) *
+                lerp_percent / 100;
+            const i32 delta_y =
+                (*reinterpret_cast<const i32 *>(&rec.unfocused_position[1]) -
+                 *reinterpret_cast<const i32 *>(&rec.render_position[1])) *
+                lerp_percent / 100;
             if (delta_x != 0 || delta_y != 0) {
-                WriteInt(record, 0x3c, ReadInt(record, 0x3c) + delta_x);
-                WriteInt(record, 0x40, ReadInt(record, 0x40) + delta_y);
+                *reinterpret_cast<i32 *>(&rec.render_position[0]) =
+                    *reinterpret_cast<const i32 *>(
+                        &rec.render_position[0]) + delta_x;
+                *reinterpret_cast<i32 *>(&rec.render_position[1]) =
+                    *reinterpret_cast<const i32 *>(
+                        &rec.render_position[1]) + delta_y;
             } else {
-                WriteInt(record, 0x3c, ReadInt(record, 0x34));
-                WriteInt(record, 0x40, ReadInt(record, 0x38));
+                *reinterpret_cast<i32 *>(&rec.render_position[0]) =
+                    *reinterpret_cast<const i32 *>(
+                        &rec.unfocused_position[0]);
+                *reinterpret_cast<i32 *>(&rec.render_position[1]) =
+                    *reinterpret_cast<const i32 *>(
+                        &rec.unfocused_position[1]);
             }
         }
 
         const float entity_position[3] = {
-            static_cast<float>(ReadInt(record, 0x3c)) * 0.01f,
-            static_cast<float>(ReadInt(record, 0x40)) * 0.01f, 0.0f};
+            static_cast<float>(*reinterpret_cast<const i32 *>(
+                &rec.render_position[0])) * 0.01f,
+            static_cast<float>(*reinterpret_cast<const i32 *>(
+                &rec.render_position[1])) * 0.01f, 0.0f};
         SetEntityPositionOffsetEsiAbi(g_MainChainRenderOwner,
-                                      ReadInt(record, 0x68),
+                                      rec.sprite_entity_id,
                                       entity_position);
         SetEntityPositionOffsetEsiAbi(g_MainChainRenderOwner,
-                                      ReadInt(record, 0x6c),
+                                      rec.power_effect_entity_id,
                                       entity_position);
     }
     return 0;

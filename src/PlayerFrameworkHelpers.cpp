@@ -2,6 +2,8 @@
 #include "PlayerShotData.hpp"
 
 #include "EntityHelpers.hpp"
+#include "MainChainContext.hpp"
+#include "PlayerRecord.hpp"
 #include "StageEffectHelpers.hpp"
 #include "TimelineRenderObjectSetup.hpp"
 #include "PlayerShotSpawner.hpp"
@@ -88,13 +90,18 @@ void InitializeRecordTimer(u8 *block)
 } // namespace
 
 // TH10 0x0040ac90. Stores the pending state at controller+0x390; when bit
-// 12 of controller+0x3cc is set the request is overridden with state 2.
+// 12 of the dword rooted at controller+0x3cc is set the request is
+// overridden with state 2.
 void RequestGameStateTransitionEaxStackAbi(void *controller, i32 state)
 {
-    u8 *const object = static_cast<u8 *>(controller);
-    if ((ReadInt(object, 0x3cc) & 0x1000) != 0)
+    MainChainContext &chain = *static_cast<MainChainContext *>(controller);
+    // The native reads the full dword at +0x3cc; only its first byte is a
+    // named field (callback_state_byte), so the dword read is anchored
+    // there.
+    if ((*reinterpret_cast<const u32 *>(&chain.callback_state_byte) &
+         0x1000) != 0)
         state = 2;
-    WriteInt(object, 0x390, state);
+    chain.requested_state = static_cast<MainChainState>(state);
 }
 
 // TH10 0x00412e70. The argument is divided by ten (truncated) and
@@ -153,9 +160,10 @@ void ShowCautionText(const float position[3])
 float ComputeDeathBurstAngleEcxEaxAbi(void *player_memory,
                                       const float target[2])
 {
-    const u8 *const player = static_cast<const u8 *>(player_memory);
-    const float dx = target[0] - ReadFloat(player, 0x3c0);
-    const float dy = target[1] - ReadFloat(player, 0x3c4);
+    const PlayerRecord &player_rec =
+        *reinterpret_cast<const PlayerRecord *>(player_memory);
+    const float dx = target[0] - player_rec.position_x;
+    const float dy = target[1] - player_rec.position_y;
     if (dx == 0.0f && dy == 0.0f)
         return 1.5707964f;
     return static_cast<float>(std::atan2(static_cast<double>(dy),

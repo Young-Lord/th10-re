@@ -1,5 +1,6 @@
 #include "PlayerItemMagnet.hpp"
 
+#include "PlayerRecord.hpp"
 #include "PlayerShotSpawner.hpp"
 #include "PlayerTimerHelpers.hpp"
 
@@ -18,16 +19,6 @@ extern i32 g_PlayerPowerGauge; // TH10 DAT_00474c48
 
 
 
-inline i32 ReadInt(const u8 *bytes, u32 offset)
-{
-    return *reinterpret_cast<const i32 *>(bytes + offset);
-}
-
-inline void WriteInt(u8 *bytes, u32 offset, i32 value)
-{
-    *reinterpret_cast<i32 *>(bytes + offset) = value;
-}
-
 } // namespace
 
 // TH10 0x00428160. Walks the 0x34-byte shot descriptors of the schedule row
@@ -35,12 +26,13 @@ inline void WriteInt(u8 *bytes, u32 offset, i32 value)
 void FireScheduledShotsEdiBbxAbi(void *player_memory, i32 frame)
 {
     u8 *const player = static_cast<u8 *>(player_memory);
+    PlayerRecord &player_rec = *reinterpret_cast<PlayerRecord *>(player);
     i32 row = g_PlayerPowerGauge / 20;
     if (row > 4)
         row = 4;
-    if (ReadInt(player, 0x4474) != 0)
+    if (player_rec.focus_flag != 0)
         row += 5;
-    u8 *const buffer = *reinterpret_cast<u8 *const *>(player + 0x45c);
+    u8 *const buffer = static_cast<u8 *>(player_rec.shot_data);
     u8 *const descriptor =
         *reinterpret_cast<u8 *const *>(buffer + 0x110 +
                                        static_cast<u32>(row) * 8);
@@ -57,28 +49,31 @@ void FireScheduledShotsEdiBbxAbi(void *player_memory, i32 frame)
 i32 TickItemMagnetEaxAbi(void *player_memory)
 {
     u8 *const player = static_cast<u8 *>(player_memory);
-    if (ReadInt(player, 0x458) != 1) {
-        WriteInt(player, 0x3504, 0);
-        *reinterpret_cast<u8 *>(player + 0x3508) = 0;
+    PlayerRecord &player_rec = *reinterpret_cast<PlayerRecord *>(player);
+    if (player_rec.mode != 1) {
+        player_rec.homing_target = 0;
+        player_rec.homing_target_latch = 0;
         return 0;
     }
 
-    if (ReadInt(player, 0x464) < 0) {
+    if (player_rec.autocollect_timer.count < 0) {
         if ((g_InputMask & 1) == 0)
             return 0;
-        TickPlayerTimerEaxStackAbi(player + 0x460, 0);
+        TickPlayerTimerEaxStackAbi(&player_rec.autocollect_timer, 0);
     }
 
-    if (ReadInt(player, 0x464) != ReadInt(player, 0x460))
-        FireScheduledShotsEdiBbxAbi(player, ReadInt(player, 0x464));
+    if (player_rec.autocollect_timer.count !=
+        player_rec.autocollect_timer.prev)
+        FireScheduledShotsEdiBbxAbi(
+            player, player_rec.autocollect_timer.count);
 
-    if (ReadInt(player, 0x464) > 14) {
+    if (player_rec.autocollect_timer.count > 14) {
         if ((g_InputMask & 1) != 0)
-            ShiftTimerByEsiStackAbi(player + 0x460, -15.0f);
+            ShiftTimerByEsiStackAbi(&player_rec.autocollect_timer, -15.0f);
         else
-            TickPlayerTimerEaxStackAbi(player + 0x460, -1);
+            TickPlayerTimerEaxStackAbi(&player_rec.autocollect_timer, -1);
     } else {
-        TickTimerForwardEsiAbi(player + 0x460);
+        TickTimerForwardEsiAbi(&player_rec.autocollect_timer);
     }
     return 0;
 }

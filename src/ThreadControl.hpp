@@ -14,7 +14,9 @@ struct ThreadControl {
     u32 field_0010;
     u8 unknown_0014[4];
     void *thread_entry;
-    u8 unknown_001c[4];
+    // +0x1c: when the control is embedded in MainChainContext (+0x62c) this
+    // dword is the update status consumed by MainChainUpdate (0x0041ff80).
+    i32 update_status_001c;
 };
 
 typedef char AssertThreadControlSize[sizeof(ThreadControl) == 0x20 ? 1 : -1];

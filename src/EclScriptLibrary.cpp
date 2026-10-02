@@ -3,6 +3,7 @@
 #include "EclScriptVm.hpp"
 #include "EntityHelpers.hpp"
 #include "GameContext.hpp"
+#include "PlayerRecord.hpp"
 #include "TimelineRenderObjectSetup.hpp"
 #include "PlayerMotionHelpers.hpp"
 #include "PlayerTimerHelpers.hpp"
@@ -487,8 +488,8 @@ i32 RunEclScriptSetupStackAbi(void *sub_record)
             g_PlayerStateBlock,
             reinterpret_cast<const float *>(rec + 0x2cU),
             reinterpret_cast<const float *>(rec + 0xb0U));
-        const u32 player_mode = LoadU32(
-            reinterpret_cast<const u8 *>(g_PlayerStateBlock), 0x458U);
+        const u32 player_mode = static_cast<u32>(
+            reinterpret_cast<PlayerRecord *>(g_PlayerStateBlock)->mode);
         if (player_mode == 2U || player_mode == 0U)
             damage /= 5;
         if (damage == 0) {
@@ -592,9 +593,11 @@ post_damage_pass:
         // +0x3508 latch) by X distance to the player (+0x3c0); skipped with
         // flag bits 0x11 or 0xc0000.
         if ((flags & 0x11U) == 0U && (flags & 0xc0000U) == 0U) {
-            u8 *const player = static_cast<u8 *>(g_PlayerStateBlock);
-            const u8 *const old_target = LoadPointer(player, 0x3504U);
-            const float player_x = LoadF32(player, 0x3c0U);
+            PlayerRecord &player =
+                *reinterpret_cast<PlayerRecord *>(g_PlayerStateBlock);
+            const u8 *const old_target =
+                static_cast<const u8 *>(player.homing_target);
+            const float player_x = player.position_x;
             const float new_distance = LoadF32(rec, 0x2cU) - player_x;
             bool farther = old_target == 0;
             if (!farther) {
@@ -606,10 +609,9 @@ post_damage_pass:
                                                : old_distance);
             }
             if (farther) {
-                if (player[0x3508U] == 0U)
-                    StoreU32(player, 0x3504U,
-                             reinterpret_cast<u32>(script_manager));
-                player[0x3508U] = 1U;
+                if (player.homing_target_latch == 0U)
+                    player.homing_target = script_manager;
+                player.homing_target_latch = 1U;
             }
         }
 

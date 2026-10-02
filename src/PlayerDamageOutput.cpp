@@ -9,6 +9,7 @@
 
 #include "EntityHelpers.hpp"
 #include "GameContext.hpp"
+#include "PlayerRecord.hpp"
 #include "PlayerShotSpawner.hpp"
 #include "Th10Platform.hpp"
 
@@ -83,8 +84,9 @@ u32 *SpawnItemPickupEffect(void *work_record, i32 script_id, u32 kind)
 }
 
 // Player-shot descriptor callback: native __fastcall ECX = player, EDX =
-// player + 0x49c shot entry cache, stack = enemy position. A nonzero return
-// suppresses the default collection path.
+// the current PlayerShotRecord (the 0x49c shot-table entry being tested),
+// stack = enemy position. A nonzero return suppresses the default
+// collection path.
 typedef i32 (TH10_FASTCALL *PlayerShotHitCallback)(void *player,
                                                    void *shot_entry_cache,
                                                    const float *position);
@@ -206,11 +208,12 @@ i32 ComputeEnemyDamageFromPlayerAttacksStackAbi(u32 *out_value, void *player,
                                                 const float *size)
 {
     u8 *const player_bytes = static_cast<u8 *>(player);
+    PlayerRecord &player_rec = *reinterpret_cast<PlayerRecord *>(player);
     i32 damage = 0;
 
-    // Frame gate: the player's +0x474/+0x478 scaled timer pair must have
-    // advanced (prev != count).
-    if (ReadI32(player_bytes, 0x478U) == ReadI32(player_bytes, 0x474U))
+    // Frame gate: the player's frame-timer {prev, count} pair at +0x474
+    // must have advanced (prev != count).
+    if (player_rec.frame_timer.count == player_rec.frame_timer.prev)
         return 0;
 
     const float half_w = size[0] * 0.5f;
@@ -223,24 +226,23 @@ i32 ComputeEnemyDamageFromPlayerAttacksStackAbi(u32 *out_value, void *player,
     if (out_value != 0)
         *out_value = 0;
 
-    // ---- Pass 1: the 128 player-shot records at player+0x4a0 (0x5c stride).
-    // Fields: position +0x00/+0x04, fade float +0x38, 0.1f step +0x28,
-    // state +0x2c, entity id +0x30, hit flag +0x3c, magnet flag +0x40,
-    // descriptor +0x44.
-    u8 *item = player_bytes + 0x4A0U;
-    for (i32 index = 128; index != 0; --index, item += 0x5CU) {
-        const i32 state = ReadI32(item, 0x2CU);
-        if (state == 0 || state == 2)
+    // ---- Pass 1: the 128 player-shot records at player+0x49c (0x5c stride,
+    // PlayerShotRecord). The native loop cursor sits at record+0x44 (the
+    // entity-id slot; TH10 0x00428630 indexes the player pointer + 312
+    // dwords), so the handle helpers all take &record.entity_id.
+    PlayerShotRecord *item =
+        reinterpret_cast<PlayerShotRecord *>(player_bytes + 0x49CU);
+    for (i32 index = 128; index != 0; --index, ++item) {
+        if (item->state == 0 || item->state == 2)
             continue;
 
-        const u8 *desc =
-            *reinterpret_cast<u8 *const *>(item + 0x44U);
+        const u8 *desc = static_cast<const u8 *>(item->descriptor);
         const float half_iw = ReadF32(desc, 12U) * 0.5f;
         const float half_ih = ReadF32(desc, 16U) * 0.5f;
-        const float item_left = ReadF32(item, 0U) - half_iw;
-        const float item_top = ReadF32(item, 4U) - half_ih;
-        const float item_right = ReadF32(item, 0U) + half_iw;
-        const float item_bottom = ReadF32(item, 4U) + half_ih;
+        const float item_left = item->position[0] - half_iw;
+        const float item_top = item->position[1] - half_ih;
+        const float item_right = item->position[0] + half_iw;
+        const float item_bottom = item->position[1] + half_ih;
 
         // Box overlap with the player/enemy box.
         if (!(item_top <= box_bottom && item_left <= box_right
@@ -259,45 +261,45 @@ i32 ComputeEnemyDamageFromPlayerAttacksStackAbi(u32 *out_value, void *player,
 
         PlayerShotHitCallback hit;
         memcpy(&hit, desc + 48U, sizeof(hit));
-        if (hit != 0
-            && hit(player, player_bytes + 0x49CU, position) != 0)
+        if (hit != 0 && hit(player, item, position) != 0)
             continue;
 
-        if (ReadI32(item, 0x40U) == 0) {
-            SetPlayerShotEntityHitState(
-                reinterpret_cast<u32 *>(item + 0x30U));
-            WriteI32(item, 0x40U, 1);
+        if (item->magnet_latch == 0) {
+            SetPlayerShotEntityHitState(&item->entity_id);
+            item->magnet_latch = 1;
         }
-        WriteI32(item, 0x3CU, 1);
+        item->hit_flag = 1;
         if (item_type != 3 || IsTimerFrameMultiple(
-                reinterpret_cast<const u32 *>(player_bytes + 0x474U), 4)) {
+                reinterpret_cast<const u32 *>(&item->timer_prev), 4)) {
             damage += static_cast<i32>(ReadU16(desc, 2U));
         }
         if (item_type != 3) {
             // Spawn the pickup effect and convert the record into its
-            // magnet/collect state.
-            void *slot = ResolveItemSpawnSlotEsiAbi(item);
+            // magnet/collect state. The native shrinks the shot speed and
+            // plants the 0.1f magnet step into position z.
+            void *slot = ResolveItemSpawnSlotEsiAbi(&item->entity_id);
             const u32 saved_handle = *reinterpret_cast<const u32 *>(
                 static_cast<const u8 *>(slot) + 0x2CU);
-            ReleaseItemSpawnSlotEsiAbi(item);
+            ReleaseItemSpawnSlotEsiAbi(&item->entity_id);
             const i32 script_id =
                 static_cast<i32>(ReadU16(desc, 0x20U)) + 5;
             const u32 *spawned = SpawnItemPickupEffect(
                 player_bytes + 0x10U, script_id, 15U);
-            *reinterpret_cast<u32 *>(item + 0x30U) = *spawned;
-            void *slot_after = ResolveItemSpawnSlotEsiAbi(item);
+            item->entity_id = *spawned;
+            void *slot_after = ResolveItemSpawnSlotEsiAbi(&item->entity_id);
             *reinterpret_cast<u32 *>(
                 static_cast<u8 *>(slot_after) + 0x2CU) = saved_handle;
             *reinterpret_cast<u32 *>(
                 static_cast<u8 *>(slot_after) + 0x35CU) |= 4U;
-            WriteF32(item, 0x38U, ReadF32(item, 0x38U) * kShotFadeStep);
-            WriteF32(item, 0x28U, 0.1f);
-            WriteI32(item, 0x2CU, 2);
+            const float shrunk_speed = item->speed * kShotFadeStep;
+            item->position[2] = 0.1f;
+            item->state = 2;
+            item->speed = shrunk_speed;
         }
         if (item_type == 2) {
             // Point-of-value items pop a sub-effect with damage/3 as limit.
             SpawnPlayerSubEffectEcxDxStackAbi(
-                item, player, 2.0f, 1.4f,
+                item->position, player, 2.0f, 1.4f,
                 13, static_cast<i32>(ReadU16(desc, 2U)) / 3);
         }
     }
@@ -305,29 +307,29 @@ i32 ComputeEnemyDamageFromPlayerAttacksStackAbi(u32 *out_value, void *player,
     // Bomb / sub-effect damage from the game context.
     damage += ComputeBombAreaDamageThisAbi(g_GameContextObject, position);
 
-    // ---- Pass 2: the 32 damage-box records at player+0x350c (0x6c stride).
-    // Fields: angle +0x08, width +0x10, height +0x14, center +0x18/+0x1c,
-    // prev/cur counter +0x44/+0x48, value +0x58, accumulated +0x5c,
-    // limit +0x60, period +0x64, flags +0x68 (bit0 active, bit2 rotated).
-    u8 *box = player_bytes + 0x350CU;
-    for (i32 index = 32; index != 0; --index, box += 0x6CU) {
-        const u32 flags = *reinterpret_cast<const u32 *>(box + 0x68U);
+    // ---- Pass 2: the 32 damage-box records at player+0x350c (0x6c stride,
+    // PlayerSubEffectRecord).
+    PlayerSubEffectRecord *box =
+        reinterpret_cast<PlayerSubEffectRecord *>(player_bytes + 0x350CU);
+    for (i32 index = 32; index != 0; --index, ++box) {
+        // The native reads the flag byte plus its padding as one dword.
+        const u32 flags =
+            *reinterpret_cast<const u32 *>(&box->flags);
         if ((flags & 1U) == 0)
             continue;
-        const u32 cur = *reinterpret_cast<const u32 *>(box + 0x48U);
-        const u32 prev = *reinterpret_cast<const u32 *>(box + 0x44U);
-        const i32 period = ReadI32(box, 0x64U);
-        if (cur == prev || static_cast<i32>(cur) % period != 0)
+        const u32 cur = static_cast<u32>(box->timer_count);
+        const u32 prev = static_cast<u32>(box->timer_prev);
+        if (cur == prev || static_cast<i32>(cur) % box->period != 0)
             continue;
 
-        const float width = ReadF32(box, 0x10U);
-        const float height = ReadF32(box, 0x14U);
+        const float width = box->box_width;
+        const float height = box->box_height;
         bool hits = false;
         if ((flags & 2U) != 0) {
             // Rotated box: the box test runs against the enemy centre point.
-            const float angle = -ReadF32(box, 0x08U);
-            const float dx = position[0] - ReadF32(box, 0x18U);
-            const float dy = position[1] - ReadF32(box, 0x1CU);
+            const float angle = -box->damage_angle;
+            const float dx = position[0] - box->position[0];
+            const float dy = position[1] - box->position[1];
             const float s = std::sin(angle);
             const float c = std::cos(angle);
             const float rx = c * dx - s * dy;
@@ -338,8 +340,8 @@ i32 ComputeEnemyDamageFromPlayerAttacksStackAbi(u32 *out_value, void *player,
                 && ry - half_h <= height * 0.5f)
                 hits = true;
         } else {
-            const float cx = ReadF32(box, 0x18U);
-            const float cy = ReadF32(box, 0x1CU);
+            const float cx = box->position[0];
+            const float cy = box->position[1];
             const float hw = width * 0.5f;
             const float hh = height * 0.5f;
             if (cx - hw <= box_right && cx + hw >= box_left
@@ -349,12 +351,11 @@ i32 ComputeEnemyDamageFromPlayerAttacksStackAbi(u32 *out_value, void *player,
         if (!hits)
             continue;
 
-        const i32 value = ReadI32(box, 0x58U);
+        const i32 value = box->value;
         damage += value;
-        const i32 accumulated = ReadI32(box, 0x5CU) + value;
-        WriteI32(box, 0x5CU, accumulated);
-        if (ReadI32(box, 0x60U) <= accumulated)
-            WriteF32(box, 0x58U, 0.0f);
+        box->accumulated += value;
+        if (box->limit <= box->accumulated)
+            *reinterpret_cast<float *>(&box->value) = 0.0f;
     }
 
     if (damage != 0) {

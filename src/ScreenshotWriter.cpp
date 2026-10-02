@@ -107,8 +107,7 @@ i32 CaptureMainChainSnapshot(MainChainContext *context,
 {
     // The writer thread and the caller share the whole scratch block; the
     // native spins on the context busy word instead of taking a lock.
-    while (*reinterpret_cast<u32 *>(reinterpret_cast<u8 *>(context) +
-                                    0x50c) != 0)
+    while (context->snapshot_busy != 0)
         Sleep(10);
 
     // Obtain the back-buffer wrapper through device vtable slot 0x48/4.
@@ -126,17 +125,20 @@ i32 CaptureMainChainSnapshot(MainChainContext *context,
 
     // BITMAPFILEHEADER at +0x510: 'BM', size 54, reserved 0, data offset
     // 54 (the pixel bytes are added to the size field later).
-    u32 *const header = reinterpret_cast<u32 *>(context_bytes + 0x510);
+    SnapshotBmpFileHeader &bmp = context->snapshot_bmp_header;
+    u32 *const header = reinterpret_cast<u32 *>(&bmp);
     header[0] = 0;
     header[1] = 0;
     header[2] = 0;
-    *reinterpret_cast<u16 *>(context_bytes + 0x51c) = 0;
-    *reinterpret_cast<u16 *>(context_bytes + 0x510) = 0x4d42; // 'BM'
-    *reinterpret_cast<u32 *>(context_bytes + 0x51a) = 54;
-    *reinterpret_cast<u32 *>(context_bytes + 0x512) = 54;
+    // Overlapping write of the data offset's high half (native u16 store).
+    *reinterpret_cast<u16 *>(reinterpret_cast<u8 *>(&bmp.data_offset) + 2) =
+        0;
+    bmp.type = 0x4d42; // 'BM'
+    bmp.data_offset = 54;
+    bmp.size = 54;
     // File name copy at +0x528 including the terminator.
     {
-        u8 *dst = context_bytes + 0x528;
+        char *dst = context->snapshot_path;
         const char *src = output_path;
         for (;;) {
             const char c = *src++;
@@ -146,22 +148,21 @@ i32 CaptureMainChainSnapshot(MainChainContext *context,
         }
     }
 
-    const u32 render_mode =
-        *reinterpret_cast<u32 *>(context_bytes + 0xec);
+    const u32 render_mode = context->render_mode_selector;
     if (render_mode == 22) {
         // 24bpp capture path.
         void *info = malloc(0x2c);
-        *reinterpret_cast<void **>(context_bytes + 0x520) = info;
+        context->snapshot_bmp_info = info;
         if (info == 0) {
             PushTextLogMessage("snapShotScreen : ");
         } else {
             memset(info, 0, 0x2c);
             void *pixels = malloc(0xE1000);
-            *reinterpret_cast<void **>(context_bytes + 0x524) = pixels;
+            context->snapshot_pixel_buffer = pixels;
             if (pixels == 0) {
                 PushTextLogMessage("snapShotScreen : ");
             } else {
-                *reinterpret_cast<u32 *>(context_bytes + 0x512) += 0xE1000;
+                bmp.size += 0xE1000;
                 u8 *const info_bytes = static_cast<u8 *>(info);
                 *reinterpret_cast<u16 *>(info_bytes + 0xe) = 24;
                 *reinterpret_cast<u32 *>(info_bytes) = 40;

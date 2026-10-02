@@ -1,5 +1,7 @@
 #include "PlayerRecordHelpers.hpp"
 
+#include "PlayerRecord.hpp"
+
 #include <string.h>
 
 namespace th10 {
@@ -30,32 +32,31 @@ i32 WritePlayerQuadSlotValueEaxEcxAbi(i32 value, void *player)
 void *ResetPlayerRecordEsiAbi(void *player)
 {
     u8 *bytes = static_cast<u8 *>(player);
+    PlayerRecord &player_rec = *reinterpret_cast<PlayerRecord *>(bytes);
+    // Player-relative VmRecord anim-block flag table; kept as a raw offset
+    // walk on purpose (the offsets straddle the embedded anim_vm fields).
     static const u32 kFlagOffsets[] = {
         0x80U, 0xc4U, 0x110U, 0x13cU, 0x188U, 0x1c4U, 0x210U, 0x23cU,
         0x38cU
     };
     for (u32 index = 0; index != 9U; ++index)
         *reinterpret_cast<u32 *>(bytes + kFlagOffsets[index]) &= ~1U;
-    memset(bytes + 0x14, 0, 0x3ac);
-    *reinterpret_cast<u16 *>(bytes + 0x398) = 0xffffU;
-    *reinterpret_cast<u32 *>(bytes + 0x470) &= ~1U;
-    *reinterpret_cast<u32 *>(bytes + 0x484) &= ~1U;
-    *reinterpret_cast<u32 *>(bytes + 0x498) &= ~1U;
-    u32 *entry = reinterpret_cast<u32 *>(bytes + 0x4ac);
-    for (u32 index = 0; index != 128U; ++index) {
-        *entry &= ~1U;
-        entry += 23; // 0x5c stride
-    }
-    *reinterpret_cast<u32 *>(bytes + 0x3320) &= ~1U;
-    *reinterpret_cast<u32 *>(bytes + 0x33b8) &= ~1U;
-    *reinterpret_cast<u32 *>(bytes + 0x3450) &= ~1U;
-    *reinterpret_cast<u32 *>(bytes + 0x34e8) &= ~1U;
-    u32 *shot = reinterpret_cast<u32 *>(bytes + 0x3560);
-    for (u32 index = 0; index != 33U; ++index) {
-        *shot &= ~1U;
-        shot += 27; // 0x6c stride
-    }
-    *reinterpret_cast<u32 *>(bytes + 0x431c) &= ~1U;
+    memset(&player_rec.anim_vm, 0, 0x3ac);
+    *reinterpret_cast<u16 *>(&player_rec.anim_vm.sprite_entry_id) = 0xffffU;
+    player_rec.autocollect_timer.flags &= ~1U;
+    player_rec.frame_timer.flags &= ~1U;
+    player_rec.move_gate_timer.flags &= ~1U;
+    for (i32 i = 0; i < 128; ++i)
+        player_rec.shots[i].timer_latch &= ~1U;
+    player_rec.options[0].flag_0080 &= ~1U;
+    player_rec.options[1].flag_0080 &= ~1U;
+    player_rec.options[2].flag_0080 &= ~1U;
+    player_rec.options[3].flag_0080 &= ~1U;
+    // 33 entries: the native walk runs one record past the named array,
+    // into the padding at player+0x42e0.
+    for (i32 i = 0; i < 33; ++i)
+        player_rec.sub_effects[i].timer_latch &= ~1U;
+    player_rec.deathbomb_timer.flags &= ~1U;
     memset(bytes, 0, 0x4478);
     g_PlayerRecord = bytes;
     return bytes;
@@ -63,26 +64,30 @@ void *ResetPlayerRecordEsiAbi(void *player)
 
 void UpdatePlayerFocusMotionEdiAbi(void *entity)
 {
-    u8 *bytes = static_cast<u8 *>(entity);
-    u8 *player = static_cast<u8 *>(g_PlayerRecord);
-    const u32 focused = *reinterpret_cast<const u32 *>(player + 0x4474);
-    const u32 previous = *reinterpret_cast<const u32 *>(bytes + 0x84);
+    PlayerOptionRecord &record =
+        *reinterpret_cast<PlayerOptionRecord *>(entity);
+    PlayerRecord &player_rec =
+        *reinterpret_cast<PlayerRecord *>(g_PlayerRecord);
+    // The option position fields carry x100 fixed-point dwords; the dword
+    // view is kept on every access.
+    const u32 focused = player_rec.focus_flag;
+    const u32 previous = record.focus_latch;
     if (focused != 0U) {
         if (previous == 0U)
-            SetEntityStateWordByHandleSlotNative(bytes + 0x68, 6);
-        *reinterpret_cast<u32 *>(bytes + 0x4c) =
-            *reinterpret_cast<const u32 *>(bytes + 0x3c);
-        *reinterpret_cast<u32 *>(bytes + 0x50) =
-            *reinterpret_cast<const u32 *>(bytes + 0x40);
+            SetEntityStateWordByHandleSlotNative(&record.sprite_entity_id, 6);
+        *reinterpret_cast<u32 *>(&record.offset_source_b[0]) =
+            *reinterpret_cast<const u32 *>(&record.render_position[0]);
+        *reinterpret_cast<u32 *>(&record.offset_source_b[1]) =
+            *reinterpret_cast<const u32 *>(&record.render_position[1]);
     } else {
         if (previous == 0U)
-            SetEntityStateWordByHandleSlotNative(bytes + 0x68, 3);
-        *reinterpret_cast<u32 *>(bytes + 0x34) =
-            *reinterpret_cast<const u32 *>(bytes + 0x4c);
-        *reinterpret_cast<u32 *>(bytes + 0x38) =
-            *reinterpret_cast<const u32 *>(bytes + 0x50);
+            SetEntityStateWordByHandleSlotNative(&record.sprite_entity_id, 3);
+        *reinterpret_cast<u32 *>(&record.unfocused_position[0]) =
+            *reinterpret_cast<const u32 *>(&record.offset_source_b[0]);
+        *reinterpret_cast<u32 *>(&record.unfocused_position[1]) =
+            *reinterpret_cast<const u32 *>(&record.offset_source_b[1]);
     }
-    *reinterpret_cast<u32 *>(bytes + 0x84) = focused;
+    record.focus_latch = focused;
 }
 
 double FloorfToDoubleStackAbi(float value)

@@ -10,6 +10,7 @@
 #include "EclScriptObjectTeardown.hpp"
 
 #include "EntityHelpers.hpp"
+#include "PlayerRecord.hpp"
 
 namespace th10 {
 
@@ -95,17 +96,17 @@ void DestroyEclScriptObjectInPlaceStackAbi(void *record)
     // Player-block back references: the primary slot at +0x3504 also owns
     // the byte flag at +0x3508; the 0x80-entry table at +0x4e8 (stride
     // 0x5c) is scanned unconditionally.
-    u8 *const player = static_cast<u8 *>(g_PlayerStateBlock);
-    if (player != 0) {
-        if (LoadU32From(player + 0x3504U) == reinterpret_cast<u32>(rec)) {
-            StoreU32To(player + 0x3504U, 0U);
-            player[0x3508U] = 0U;
+    u8 *const player_ptr = static_cast<u8 *>(g_PlayerStateBlock);
+    if (player_ptr != 0) {
+        PlayerRecord &player =
+            *reinterpret_cast<PlayerRecord *>(player_ptr);
+        if (player.homing_target == rec) {
+            player.homing_target = 0;
+            player.homing_target_latch = 0U;
         }
-        u8 *entry = player + 0x4e8U;
         for (u32 index = 0; index != 0x80U; ++index) {
-            if (LoadU32From(entry) == reinterpret_cast<u32>(rec))
-                StoreU32To(entry, 0U);
-            entry += 0x5cU;
+            if (player.shots[index].homing_target == rec)
+                player.shots[index].homing_target = 0;
         }
     }
 

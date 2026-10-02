@@ -150,11 +150,10 @@ struct ScreenRect {
 // TH10 0x00405300.
 void SelectMainChainDrawWork(MainChainContext *context, u32 index)
 {
-    u8 *const work = reinterpret_cast<u8 *>(context) + 0x154 + index * 0x118;
+    MainChainCameraWork *work = &context->camera_work_bank[index];
     context->draw_work_pointer = work;
-    (void)UpdateMainChainD3DFrameStateEdiAbi(
-        reinterpret_cast<MainChainCameraWork *>(work));
-    SetDeviceViewportOn(context->draw_target, work + 0xcc);
+    (void)UpdateMainChainD3DFrameStateEdiAbi(work);
+    SetDeviceViewportOn(context->draw_target, &work->viewport);
     context->draw_initialized = static_cast<i32>(index);
 }
 

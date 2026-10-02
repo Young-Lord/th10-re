@@ -22,6 +22,7 @@
 #include "Th10Platform.hpp"
 #include "Th10Types.hpp"
 #include "LargeRenderOwnerLayout.hpp"
+#include "PlayerRecord.hpp"
 
 namespace th10 {
 
@@ -139,14 +140,10 @@ i32 UpdateTrackedEntityProximityFadeEdiAbi(void *record_raw)
                                    + mode * 0xcU),
         record, 1);
 
-    const float player_x = LoadFloatAt(reinterpret_cast<u32>(
-                                            g_PlayerStateBlock834)
-                                        + 0x3c0U)
-                          + k_field_center_x;
-    const float player_y = LoadFloatAt(reinterpret_cast<u32>(
-                                            g_PlayerStateBlock834)
-                                        + 0x3c4U)
-                          + k_field_center_y;
+    const PlayerRecord &player_rec =
+        *reinterpret_cast<const PlayerRecord *>(g_PlayerStateBlock834);
+    const float player_x = player_rec.position_x + k_field_center_x;
+    const float player_y = player_rec.position_y + k_field_center_y;
 
     u32 slot_offset = 0U; // over +0xdc ids (4 bytes each)
     u32 pair_offset = 0U; // over +0x104 pairs (0xc bytes each)

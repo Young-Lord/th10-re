@@ -2,6 +2,7 @@
 
 #include "AsciiAnimationVm.hpp"
 #include "PackedArchive.hpp"
+#include "PlayerRecord.hpp"
 #include "VmRecord.hpp"
 
 #include <cmath>
@@ -111,9 +112,9 @@ void InitializePlayerMainVmEsiStackAbi(void *vm_memory, void *anm_work,
 // sin(pi/4), and rebases the record pointer tables.
 i32 LoadPlayerShotDataEsiEaxAbi(void *player_memory, const char *entry_name)
 {
-    u8 *const player = static_cast<u8 *>(player_memory);
+    PlayerRecord &player = *reinterpret_cast<PlayerRecord *>(player_memory);
     u8 *const buffer = LoadPackedResource(entry_name, 0, 0);
-    *reinterpret_cast<u8 **>(player + 0x45c) = buffer;
+    player.shot_data = buffer;
     if (buffer == 0)
         return -1;
 

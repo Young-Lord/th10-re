@@ -18,6 +18,7 @@
 #include "EntityHelpers.hpp"
 #include "PlayerFrameworkHelpers.hpp"
 #include "PlayerOptionRecords.hpp"
+#include "PlayerRecord.hpp"
 #include "ResultScreenScript.hpp"
 #include "TimelineRenderObjects.hpp"
 #include "Th10Types.hpp"
@@ -214,16 +215,16 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
 
         {
             void *opt_mgr = g_OptionPositionManager;
+            PlayerRecord &player =
+                *reinterpret_cast<PlayerRecord *>(opt_mgr);
             if (state == 1) {
-                if (LoadI32At(opt_mgr, 0x458U) != 2
-                    && LoadI32At(opt_mgr, 0x458U) != 4
-                    && LoadFloatAt(opt_mgr, 0x3C4U) < kLandingLineY) {
+                if (player.mode != 2
+                    && player.mode != 4
+                    && player.position_y < kLandingLineY) {
                     // Home in on the player and fall through to the
                     // state-3 angle update (with the option-state 4 exit).
                     StoreU32At(bullet, kOffSpeed,
-                               LoadU32At(*reinterpret_cast<void **>(
-                              static_cast<u8 *>(opt_mgr) + 0x45CU),
-                          8U));
+                               LoadU32At(player.shot_data, 8U));
                     StoreI32At(bullet, kOffState, 3);
                     goto state3;
                 }
@@ -246,9 +247,7 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
                     + g_SceneFadeScale * kGravityStep);
                 if (LoadFloatAt(bullet, kOffVy) >= kZero) {
                     StoreU32At(bullet, kOffSpeed,
-                               LoadU32At(*reinterpret_cast<void **>(
-                              static_cast<u8 *>(opt_mgr) + 0x45CU),
-                          8U));
+                               LoadU32At(player.shot_data, 8U));
                     StoreI32At(bullet, kOffState, 3);
                     goto state3;
                 }
@@ -274,7 +273,7 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
                     StoreFloatAt(bullet, kOffSpeed,
                                  LoadFloatAt(bullet, kOffSpeed)
                                      + kAccelStep);
-                if (LoadI32At(opt_mgr, 0x458U) == 4) {
+                if (player.mode == 4) {
                     StoreI32At(bullet, kOffState, 1);
                     StoreU32At(bullet, kOffVx, 0U);
                     StoreU32At(bullet, kOffVy, 0U);
@@ -284,9 +283,9 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
             // state 3 (and the state-1/2 transitions into it).
         state3:
             {
-                const float dx = LoadFloatAt(opt_mgr, 0x3C0U)
+                const float dx = player.position_x
                     - LoadFloatAt(bullet, kOffX);
-                const float dy = LoadFloatAt(opt_mgr, 0x3C4U)
+                const float dy = player.position_y
                     - LoadFloatAt(bullet, kOffY);
                 float angle;
                 if (dx == kZero && dy == kZero)
@@ -304,7 +303,7 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
                     StoreFloatAt(bullet, kOffSpeed,
                                  LoadFloatAt(bullet, kOffSpeed)
                                      + kAccelStep);
-                if (LoadI32At(opt_mgr, 0x458U) == 4) {
+                if (player.mode == 4) {
                     StoreI32At(bullet, kOffState, 1);
                     StoreU32At(bullet, kOffVx, 0U);
                     StoreU32At(bullet, kOffVy, 0U);
@@ -313,19 +312,22 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
         }
 
     kind_gate:
-        if (LoadI32At(g_OptionPositionManager, 0x458U) == 2)
+        if ((*reinterpret_cast<PlayerRecord *>(
+                g_OptionPositionManager)).mode == 2)
             goto tick; // native 0x41b7fd path: VM tick still runs
 
         {
             // Play-field rectangle [edx+0x4330, edx+0x4324] x
             // [edx+0x4334, edx+0x4328].
             void *opt_mgr = g_OptionPositionManager;
+            PlayerRecord &player =
+                *reinterpret_cast<PlayerRecord *>(opt_mgr);
             const float x = LoadFloatAt(bullet, kOffX);
             const float y = LoadFloatAt(bullet, kOffY);
-            const bool inside = x <= LoadFloatAt(opt_mgr, 0x4324U)
-                && y <= LoadFloatAt(opt_mgr, 0x4328U)
-                && x > LoadFloatAt(opt_mgr, 0x4330U)
-                && y > LoadFloatAt(opt_mgr, 0x4334U);
+            const bool inside = x <= player.graze_box[0]
+                && y <= player.graze_box[1]
+                && x > player.graze_box[3]
+                && y > player.graze_box[4];
             if (!inside)
                 goto offscreen;
 
@@ -366,15 +368,16 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
                 i32 value;
                 i32 color;
                 i32 power_delta;
-                if (LoadFloatAt(g_OptionPositionManager, 0x3C4U)
+                if ((*reinterpret_cast<PlayerRecord *>(
+                        g_OptionPositionManager)).position_y
                     >= kBonusLineY) {
                     const i32 piv = LoadI32At(frame, 0x0CU);
                     value = piv * 10 - ((piv * 10) % 10);
                     color = static_cast<i32>(0xFFFFFF00U);
                     power_delta = 8;
                 } else {
-                    const float py = LoadFloatAt(g_OptionPositionManager,
-                                                 0x3C4U);
+                    const float py = (*reinterpret_cast<PlayerRecord *>(
+                        g_OptionPositionManager)).position_y;
                     const i32 piv = LoadI32At(frame, 0x0CU);
                     const i32 scaled = static_cast<i32>(
                         (py - kBonusLineY) * kBonusScale
@@ -485,29 +488,29 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
             goto tick;
         {
             void *opt_mgr = g_OptionPositionManager;
+            PlayerRecord &player =
+                *reinterpret_cast<PlayerRecord *>(opt_mgr);
             const u32 gate = g_SceneGateFlags & 4U;
             const float x = LoadFloatAt(bullet, kOffX);
             const float y = LoadFloatAt(bullet, kOffY);
             bool retarget;
             if (gate != 0U) {
-                retarget = x <= LoadFloatAt(opt_mgr, 0x433CU)
-                    && y <= LoadFloatAt(opt_mgr, 0x4340U)
-                    && x > LoadFloatAt(opt_mgr, 0x4348U)
-                    && y > LoadFloatAt(opt_mgr, 0x434CU);
+                retarget = x <= player.item_box[0]
+                    && y <= player.item_box[1]
+                    && x > player.item_box[3]
+                    && y > player.item_box[4];
                 if (!retarget)
                     goto tick; // native: cx != 0 -> plain tick
             } else {
-                retarget = x <= LoadFloatAt(opt_mgr, 0x4354U)
-                    && y <= LoadFloatAt(opt_mgr, 0x4358U)
-                    && x > LoadFloatAt(opt_mgr, 0x4360U)
-                    && y > LoadFloatAt(opt_mgr, 0x4364U);
+                retarget = x <= player.autocollect_box[0]
+                    && y <= player.autocollect_box[1]
+                    && x > player.autocollect_box[3]
+                    && y > player.autocollect_box[4];
             }
             if (retarget) {
                 StoreI32At(bullet, kOffState, 4);
                 StoreFloatAt(bullet, kOffSpeed,
-                             LoadFloatAt(*reinterpret_cast<void **>(
-                              static_cast<u8 *>(opt_mgr) + 0x45CU),
-                          8U)
+                             LoadFloatAt(player.shot_data, 8U)
                                  * kRetargetScale);
             }
         }
@@ -589,8 +592,9 @@ void *SetPolarVectorThiscall(float *vector, float angle, float radius)
 // TH10 0x00426660.
 float AngleToPlayerPositionEaxEcxAbi(const float *position, void *manager)
 {
-    const float dx = LoadFloatAt(manager, 0x3C0U) - position[0];
-    const float dy = LoadFloatAt(manager, 0x3C4U) - position[1];
+    PlayerRecord &player = *reinterpret_cast<PlayerRecord *>(manager);
+    const float dx = player.position_x - position[0];
+    const float dy = player.position_y - position[1];
     if (dy == 30.0f && dx == 30.0f)
         return 1.75f;
     return static_cast<float>(std::atan2(static_cast<double>(dy),

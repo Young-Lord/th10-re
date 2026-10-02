@@ -2,6 +2,7 @@
 
 #include "ManagerReleaseWrappers.hpp"
 #include "PlayerObjectLifecycle.hpp"
+#include "PlayerRecord.hpp"
 #include "Th10Platform.hpp"
 
 namespace th10 {
@@ -147,6 +148,7 @@ void *ConstructPlayerStateBlockEsiAbi(void *object)
 {
     extern void *g_OptionPositionBase; // TH10 DAT_00477834
     u8 *const base = static_cast<u8 *>(object);
+    PlayerRecord &player = *reinterpret_cast<PlayerRecord *>(base);
     const u32 early_flags[9] = {0x80U, 0xc4U, 0x110U, 0x13cU, 0x188U,
                                 0x1c4U, 0x210U, 0x23cU, 0x38cU};
     for (u32 i = 0; i < 9U; ++i) {
@@ -163,22 +165,22 @@ void *ConstructPlayerStateBlockEsiAbi(void *object)
         StoreU32To(base + mid_flags[i],
                    LoadU32From(base + mid_flags[i]) & ~1U);
     }
-    u32 cursor = 0x4acU;
+    PlayerShotRecord *shot = player.shots;
     for (i32 i = 0; i < 128; ++i) {
-        StoreU32To(base + cursor, LoadU32From(base + cursor) & ~1U);
-        cursor += 0x5cU;
+        shot->timer_latch &= ~1U;
+        ++shot;
     }
     const u32 late_flags[4] = {0x3320U, 0x33b8U, 0x3450U, 0x34e8U};
     for (u32 i = 0; i < 4U; ++i) {
         StoreU32To(base + late_flags[i],
                    LoadU32From(base + late_flags[i]) & ~1U);
     }
-    cursor = 0x3560U;
+    u32 cursor = 0x3560U;
     for (i32 i = 0; i < 33; ++i) {
         StoreU32To(base + cursor, LoadU32From(base + cursor) & ~1U);
         cursor += 0x6cU;
     }
-    StoreU32To(base + 0x431cU, LoadU32From(base + 0x431cU) & ~1U);
+    player.deathbomb_timer.flags &= ~1U;
     for (u32 i = 0; i < 0x4478U; ++i) {
         base[i] = 0U;
     }

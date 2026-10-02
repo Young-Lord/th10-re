@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "EntityHelpers.hpp"
+#include "MainChainContext.hpp"
 #include "Th10Types.hpp"
 #include "GameManagerGateVms.hpp"
 #include "VmRecord.hpp"
@@ -63,8 +64,9 @@ void StopEntityAndChildren(u8 *entity, u16 stop_word)
 void StopGameManagerBackgroundVms(void *slot_arg, u16 stop_word,
                                   u32 stop_latch)
 {
-    u8 *const slot = static_cast<u8 *>(slot_arg);
-    if (LoadU32At(slot, 0x6fc) == 1U) {
+    MainChainContext &slot_ctx =
+        *reinterpret_cast<MainChainContext *>(slot_arg);
+    if (slot_ctx.background_vm_latch == 1U) {
         u32 *const id_slots[3] = {&g_ManagerBackgroundVmIdA,
                                   &g_ManagerBackgroundVmIdB,
                                   &g_ManagerBackgroundVmIdC};
@@ -80,7 +82,7 @@ void StopGameManagerBackgroundVms(void *slot_arg, u16 stop_word,
         for (u32 index = 0; index != 3U; ++index) {
             *id_slots[index] = 0U;
         }
-        StoreU32At(slot, 0x6fc, stop_latch);
+        slot_ctx.background_vm_latch = stop_latch;
     }
     if (g_ManagerSlotAuxFlag != 0U) {
         g_ManagerSlotAuxFlag = 0U;
@@ -93,13 +95,13 @@ void StopGameManagerBackgroundVms(void *slot_arg, u16 stop_word,
 void SpawnGameManagerBackgroundVmsStackAbi(void *slot_arg,
                                            const float position[3])
 {
-    u8 *const slot = static_cast<u8 *>(slot_arg);
-    if (LoadU32At(slot, 0x6fc) == 0U) {
+    MainChainContext &slot_ctx =
+        *reinterpret_cast<MainChainContext *>(slot_arg);
+    if (slot_ctx.background_vm_latch == 0U) {
         // The script binds run with ECX = the slot's +0x3c8 manager-work
         // (consumed by the 0x00449870 script-bind boundary; the semantic
         // body feeds its bind context internally).
-        void *const manager_work =
-            reinterpret_cast<void *>(LoadU32At(slot, 0x3c8));
+        void *const manager_work = slot_ctx.anm_manager_work;
         (void)manager_work;
         u32 *const id_slots[3] = {&g_ManagerBackgroundVmIdA,
                                   &g_ManagerBackgroundVmIdB,
@@ -115,7 +117,7 @@ void SpawnGameManagerBackgroundVmsStackAbi(void *slot_arg,
             // front-insertion variant.
             LinkEntityAndAssignIdEaxEsiAbi(id_slots[script], vm_bytes);
         }
-        StoreU32At(slot, 0x6fc, 1U);
+        slot_ctx.background_vm_latch = 1U;
 
         // Publish the caller's position into all three VMs (0x004492f0,
         // native ESI = float3 read from the second stack argument).

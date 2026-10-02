@@ -26,6 +26,7 @@
 #include "BgmRuntime.hpp"
 #include "PlayerFrameworkHelpers.hpp"
 #include "PlayerMotionHelpers.hpp"
+#include "PlayerRecord.hpp"
 #include "PlayerShotData.hpp"
 #include "PlayerTimerHelpers.hpp"
 #include "SceneTriggerFeatures.hpp"
@@ -697,8 +698,10 @@ i32 TH10_STDCALL StageObjectUpdateA(void *object)
                 const u32 table = LoadU32At(obj, kSobOffTable);
                 const SweepFn sweep =
                     *reinterpret_cast<const SweepFn *>(table + 6U * 4U);
-                const float *target = reinterpret_cast<const float *>(
-                    static_cast<u8 *>(g_OptionPositionBase) + 0x3c0U);
+                PlayerRecord &player =
+                    *reinterpret_cast<PlayerRecord *>(
+                        g_OptionPositionBase);
+                const float *target = &player.position_x;
                 sweep(obj, target, tip2, 0);
             } else if (region == 2) {
                 if (LoadI32At(obj, 0x14U) % 5 == 0) {
@@ -1269,8 +1272,10 @@ i32 TH10_STDCALL StageObjectUpdateB(void *object)
                 const u32 table = LoadU32At(obj, kSobOffTable);
                 const SweepFn sweep =
                     *reinterpret_cast<const SweepFn *>(table + 6U * 4U);
-                const float *target = reinterpret_cast<const float *>(
-                    static_cast<u8 *>(g_OptionPositionBase) + 0x3c0U);
+                PlayerRecord &player =
+                    *reinterpret_cast<PlayerRecord *>(
+                        g_OptionPositionBase);
+                const float *target = &player.position_x;
                 sweep(obj, target, tip2, 0);
             } else if (region == 2) {
                 if (LoadI32At(obj, 0x14U) % 5 == 0) {

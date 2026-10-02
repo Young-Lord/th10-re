@@ -7,6 +7,7 @@
 #include "AsciiAnimationVm.hpp"
 #include "EntityHelpers.hpp"
 #include "GameManagerState.hpp"
+#include "PlayerRecord.hpp"
 #include "ResultScreenScript.hpp"
 #include "TimelineRenderObjectSetup.hpp"
 
@@ -195,9 +196,10 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
 
     // ---- region state words (7 records at +0x8398) ----
     if (g_ScreenTargetBlock != 0) {
-        const u8 *target = static_cast<const u8 *>(g_ScreenTargetBlock);
-        const float tx = LoadFloat(target, 0x3c0U);
-        const float ty = LoadFloat(target, 0x3c4U);
+        const PlayerRecord &player =
+            *reinterpret_cast<const PlayerRecord *>(g_ScreenTargetBlock);
+        const float tx = player.position_x;
+        const float ty = player.position_y;
         if ((LoadU32(hud, 0x9eb4U) & 1U) == 0U) {
             // Enter region: y > 432 and x < -128.
             if (!(ty <= kEnterY || ty != ty) && tx < kEnterX) {
@@ -264,11 +266,13 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
         // Bench-entity state words: bit 8 of +0x9eb4 toggles with the
         // boss bench region; word 2 inside, word 3 outside.
         u8 *const boss = static_cast<u8 *>(g_ScreenTargetBlock);
+        PlayerRecord &player =
+            *reinterpret_cast<PlayerRecord *>(boss);
         u32 mode_flags = LoadU32(hud, 0x9eb4U);
         if ((mode_flags & 8U) != 0U) {
             const bool outside =
-                LoadFloat(boss, 0x3c4U) < kBenchYHigh
-                && LoadFloat(boss, 0x3c0U) > kBenchXHigh;
+                player.position_y < kBenchYHigh
+                && player.position_x > kBenchXHigh;
             if (outside) {
                 const i32 count = LoadI32(hud, 0x9e90U);
                 for (i32 i = 0; i < count; ++i)
@@ -283,9 +287,9 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
             }
         } else {
             const bool inside =
-                !(LoadFloat(boss, 0x3c4U) > kBenchYLow
-                  || LoadFloat(boss, 0x3c4U) != LoadFloat(boss, 0x3c4U))
-                && LoadFloat(boss, 0x3c0U) < kBenchXLow;
+                !(player.position_y > kBenchYLow
+                  || player.position_y != player.position_y)
+                && player.position_x < kBenchXLow;
             if (inside) {
                 const i32 count = LoadI32(hud, 0x9e90U);
                 for (i32 i = 0; i < count; ++i)
@@ -520,8 +524,9 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
             StoreFloat(hud, 0x9d8cU, 480.0f);
             StoreFloat(hud, 0x9d88U,
                        LoadFloat(battle, 0x1068U) + kBossBaseX);
-            const float boss_x = LoadFloat(
-                static_cast<const u8 *>(g_ScreenTargetBlock), 0x3c0U);
+            const float boss_x =
+                (*reinterpret_cast<const PlayerRecord *>(
+                    g_ScreenTargetBlock)).position_x;
             const float diff = LoadFloat(battle, 0x1068U) - boss_x;
             const float abs_diff = diff < 0.0f ? -diff : diff;
             if (abs_diff < kBossNearX) {

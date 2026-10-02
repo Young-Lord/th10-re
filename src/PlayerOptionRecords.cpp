@@ -3,6 +3,7 @@
 #include "EntityHelpers.hpp"
 #include "LargeRenderOwnerLayout.hpp"
 #include "PlayerOptionCallbacks.hpp"
+#include "PlayerRecord.hpp"
 
 #include <cmath>
 
@@ -92,26 +93,6 @@ void SpawnOptionEntity(u32 *out_id, i32 script_id)
     LinkEntityAndAssignIdEaxEsiAbi(out_id, vm);
 }
 
-inline i32 ReadInt(const u8 *bytes, u32 offset)
-{
-    return *reinterpret_cast<const i32 *>(bytes + offset);
-}
-
-inline u32 ReadUint(const u8 *bytes, u32 offset)
-{
-    return *reinterpret_cast<const u32 *>(bytes + offset);
-}
-
-inline void WriteUint(u8 *bytes, u32 offset, u32 value)
-{
-    *reinterpret_cast<u32 *>(bytes + offset) = value;
-}
-
-inline void WriteInt(u8 *bytes, u32 offset, i32 value)
-{
-    *reinterpret_cast<i32 *>(bytes + offset) = value;
-}
-
 inline float ReadFloat(const u8 *bytes, u32 offset)
 {
     return *reinterpret_cast<const float *>(bytes + offset);
@@ -132,31 +113,35 @@ i32 ScaleAndRound(const u8 *shot, u32 offset)
 void RebuildPlayerOptionRecords(void *player_memory)
 {
     u8 *const player = static_cast<u8 *>(player_memory);
+    PlayerRecord &player_rec = *reinterpret_cast<PlayerRecord *>(player);
+    // Alias view over DAT_00477834 kept for the trail-window seed reads.
+    const PlayerRecord &opt_pos_base =
+        *reinterpret_cast<const PlayerRecord *>(g_OptionPositionBase);
     const u16 gauge = g_PlayerPowerGauge;
 
     if (gauge >= 100) {
         // Full-power path: recycle and unconditionally respawn the power
         // effect entities stored at R+0x6C.
         for (u32 index = 0; index != 4; ++index) {
-            u8 *const record = player + 0x32a0 + index * 0x98;
-            u32 *const effect_slot = reinterpret_cast<u32 *>(record + 0x6c);
-            if (*effect_slot != 0)
-                ReleaseEntity(*effect_slot, false);
-            *effect_slot = 0;
+            PlayerOptionRecord &rec = player_rec.options[index];
+            if (rec.power_effect_entity_id != 0)
+                ReleaseEntity(rec.power_effect_entity_id, false);
+            rec.power_effect_entity_id = 0;
             const u32 script_choice = g_PlayerShotType + g_PlayerCharacter * 3;
             static const i32 kScripts[6] = {0x14, 0x15, 0x16,
                                             0x14, 0x15, 0x16};
             if (script_choice < 6) {
                 void *const entity = CreateRenderEffectStackAbi(
-                    *reinterpret_cast<void *const *>(player + 0x10),
+                    player_rec.anm_manager_work,
                     kScripts[script_choice], 0xf);
-                *effect_slot = *reinterpret_cast<const u32 *>(entity);
+                rec.power_effect_entity_id =
+                    *reinterpret_cast<const u32 *>(entity);
             }
         }
     } else {
         for (u32 index = 0; index != 4; ++index) {
             const u32 effect_id =
-                ReadUint(player + 0x32a0 + index * 0x98, 0x6c);
+                player_rec.options[index].power_effect_entity_id;
             if (effect_id != 0)
                 ReleaseEntity(effect_id, true);
         }
@@ -165,138 +150,170 @@ void RebuildPlayerOptionRecords(void *player_memory)
     i32 count = static_cast<i32>(gauge) / 20;
     if (count > 4)
         count = 4;
-    if (ReadInt(player, 0x3500) == count)
+    if (player_rec.option_count == count)
         return;
 
-    const u8 *const shot = *reinterpret_cast<u8 *const *>(player + 0x45c);
+    const u8 *const shot = static_cast<const u8 *>(player_rec.shot_data);
     u32 index = 0;
     for (; static_cast<i32>(index) < count; ++index) {
-        u8 *const record = player + 0x32a0 + index * 0x98;
-        WriteInt(record, 0x3c, ReadInt(player, 0x3cc));
-        WriteInt(record, 0x40, ReadInt(player, 0x3d0));
-        const u32 old_id = ReadUint(record, 0x68);
+        PlayerOptionRecord &rec = player_rec.options[index];
+        // The option position fields carry x100 fixed-point dwords; the
+        // dword view is kept on every access.
+        *reinterpret_cast<i32 *>(&rec.render_position[0]) =
+            player_rec.position_x_fixed;
+        *reinterpret_cast<i32 *>(&rec.render_position[1]) =
+            player_rec.position_y_fixed;
+        const u32 old_id = rec.sprite_entity_id;
         if (old_id != 0)
             ReleaseEntity(old_id, false);
-        WriteUint(record, 0x68, 0);
-        WriteInt(record, 0x88, static_cast<i32>(index));
+        rec.sprite_entity_id = 0;
+        rec.option_index = index;
 
         if (g_PlayerCharacter == 0) {
             const u32 script_base = g_OptionIndexTable[count];
             const u32 pair = (script_base + index) * 12;
-            WriteInt(record, 0x44, ScaleAndRound(shot, pair + 0x20));
-            WriteInt(record, 0x48, ScaleAndRound(shot, pair + 0x24));
-            WriteInt(record, 0x4c, ScaleAndRound(shot, pair + 0x98));
-            WriteInt(record, 0x50, ScaleAndRound(shot, pair + 0x9c));
-            const u32 src = ReadInt(player, 0x4474) != 0 ? 0x4c : 0x44;
-            WriteInt(record, 0x34,
-                     ReadInt(player, 0x3cc) + ReadInt(record, src));
-            WriteInt(record, 0x38,
-                     ReadInt(player, 0x3d0) + ReadInt(record, src + 4));
-            WriteInt(record, 0x3c, ReadInt(record, 0x34));
-            WriteInt(record, 0x40, ReadInt(record, 0x38));
+            *reinterpret_cast<i32 *>(&rec.offset_source_a[0]) =
+                ScaleAndRound(shot, pair + 0x20);
+            *reinterpret_cast<i32 *>(&rec.offset_source_a[1]) =
+                ScaleAndRound(shot, pair + 0x24);
+            *reinterpret_cast<i32 *>(&rec.offset_source_b[0]) =
+                ScaleAndRound(shot, pair + 0x98);
+            *reinterpret_cast<i32 *>(&rec.offset_source_b[1]) =
+                ScaleAndRound(shot, pair + 0x9c);
+            const float *const src =
+                player_rec.focus_flag != 0 ? rec.offset_source_b
+                                           : rec.offset_source_a;
+            *reinterpret_cast<i32 *>(&rec.unfocused_position[0]) =
+                player_rec.position_x_fixed +
+                *reinterpret_cast<const i32 *>(&src[0]);
+            *reinterpret_cast<i32 *>(&rec.unfocused_position[1]) =
+                player_rec.position_y_fixed +
+                *reinterpret_cast<const i32 *>(&src[1]);
+            *reinterpret_cast<i32 *>(&rec.render_position[0]) =
+                *reinterpret_cast<const i32 *>(&rec.unfocused_position[0]);
+            *reinterpret_cast<i32 *>(&rec.render_position[1]) =
+                *reinterpret_cast<const i32 *>(&rec.unfocused_position[1]);
             static const i32 kScripts[3] = {0x11, 0x12, 0x13};
             if (g_PlayerShotType < 3) {
                 u32 id = 0;
                 SpawnOptionEntity(&id, kScripts[g_PlayerShotType]);
-                WriteUint(record, 0x68, id);
+                rec.sprite_entity_id = id;
             }
         } else if (g_PlayerCharacter == 1) {
             if (g_PlayerShotType == 0) {
                 const u32 script_base = g_OptionIndexTable[count];
                 const u32 pair = (script_base + index) * 12;
-                if (ReadInt(player, 0x4474) == 0) {
-                    WriteInt(record, 0x44,
-                             ScaleAndRound(shot, pair + 0x20));
-                    WriteInt(record, 0x48,
-                             ScaleAndRound(shot, pair + 0x24));
+                if (player_rec.focus_flag == 0) {
+                    *reinterpret_cast<i32 *>(&rec.offset_source_a[0]) =
+                        ScaleAndRound(shot, pair + 0x20);
+                    *reinterpret_cast<i32 *>(&rec.offset_source_a[1]) =
+                        ScaleAndRound(shot, pair + 0x24);
                 }
-                WriteInt(record, 0x4c, ScaleAndRound(shot, pair + 0x98));
-                WriteInt(record, 0x50, ScaleAndRound(shot, pair + 0x9c));
-                WriteInt(record, 0x3c,
-                         ReadInt(g_OptionPositionBase + index * 0x40 +
-                                 0x43ac, 0));
-                WriteInt(record, 0x40,
-                         ReadInt(g_OptionPositionBase + index * 0x40 +
-                                 0x43b0, 0));
-                if (ReadInt(player, 0x4474) != 0 && ReadInt(record, 0) == 0) {
+                *reinterpret_cast<i32 *>(&rec.offset_source_b[0]) =
+                    ScaleAndRound(shot, pair + 0x98);
+                *reinterpret_cast<i32 *>(&rec.offset_source_b[1]) =
+                    ScaleAndRound(shot, pair + 0x9c);
+                *reinterpret_cast<i32 *>(&rec.render_position[0]) =
+                    static_cast<i32>(
+                        opt_pos_base.trail_history[16 + index * 16]);
+                *reinterpret_cast<i32 *>(&rec.render_position[1]) =
+                    static_cast<i32>(
+                        opt_pos_base.trail_history[17 + index * 16]);
+                if (player_rec.focus_flag != 0 && rec.state == 0) {
                     if (index == 0) {
-                        WriteInt(record, 0x44,
-                                 ScaleAndRound(shot, script_base * 12 +
-                                                      0x98));
-                        WriteInt(record, 0x48,
-                                 ScaleAndRound(shot, script_base * 12 +
-                                                      0x9c));
+                        *reinterpret_cast<i32 *>(&rec.offset_source_a[0]) =
+                            ScaleAndRound(shot, script_base * 12 + 0x98);
+                        *reinterpret_cast<i32 *>(&rec.offset_source_a[1]) =
+                            ScaleAndRound(shot, script_base * 12 + 0x9c);
                     } else {
-                        WriteInt(record, 0x44,
-                                 ReadInt(record - 0x98, 0x44));
-                        WriteInt(record, 0x48,
-                                 ReadInt(record - 0x98, 0x48));
+                        PlayerOptionRecord &previous =
+                            player_rec.options[index - 1];
+                        *reinterpret_cast<i32 *>(&rec.offset_source_a[0]) =
+                            *reinterpret_cast<const i32 *>(
+                                &previous.offset_source_a[0]);
+                        *reinterpret_cast<i32 *>(&rec.offset_source_a[1]) =
+                            *reinterpret_cast<const i32 *>(
+                                &previous.offset_source_a[1]);
                     }
                 }
-                *reinterpret_cast<void **>(record + 0x90) =
+                rec.update_callback =
                     reinterpret_cast<void *>(&UpdateHomingOptionRecord);
                 u32 id = 0;
                 SpawnOptionEntity(&id, 0x11);
-                WriteUint(record, 0x68, id);
-                WriteInt(record, 0x3c,
-                         ReadInt(player, 0x436c + index * 0x40));
-                WriteInt(record, 0x40,
-                         ReadInt(player, 0x4370 + index * 0x40));
+                rec.sprite_entity_id = id;
+                *reinterpret_cast<i32 *>(&rec.render_position[0]) =
+                    static_cast<i32>(player_rec.trail_history[index * 16]);
+                *reinterpret_cast<i32 *>(&rec.render_position[1]) =
+                    static_cast<i32>(player_rec.trail_history[index * 16 + 1]);
             } else if (g_PlayerShotType == 1) {
-                WriteInt(record, 0x44, ScaleAndRound(shot, 0x20));
-                WriteInt(record, 0x48, ScaleAndRound(shot, 0x24));
-                WriteInt(record, 0x4c, ScaleAndRound(shot, 0x98));
-                WriteInt(record, 0x50, ScaleAndRound(shot, 0x9c));
-                const u32 src = ReadInt(player, 0x4474) == 0 ? 0x44 : 0x4c;
-                WriteInt(record, 0x34,
-                         ReadInt(player, 0x3cc) + ReadInt(record, src));
-                WriteInt(record, 0x38,
-                         ReadInt(player, 0x3d0) + ReadInt(record, src + 4));
+                *reinterpret_cast<i32 *>(&rec.offset_source_a[0]) =
+                    ScaleAndRound(shot, 0x20);
+                *reinterpret_cast<i32 *>(&rec.offset_source_a[1]) =
+                    ScaleAndRound(shot, 0x24);
+                *reinterpret_cast<i32 *>(&rec.offset_source_b[0]) =
+                    ScaleAndRound(shot, 0x98);
+                *reinterpret_cast<i32 *>(&rec.offset_source_b[1]) =
+                    ScaleAndRound(shot, 0x9c);
+                const float *const src =
+                    player_rec.focus_flag == 0 ? rec.offset_source_a
+                                               : rec.offset_source_b;
+                *reinterpret_cast<i32 *>(&rec.unfocused_position[0]) =
+                    player_rec.position_x_fixed +
+                    *reinterpret_cast<const i32 *>(&src[0]);
+                *reinterpret_cast<i32 *>(&rec.unfocused_position[1]) =
+                    player_rec.position_y_fixed +
+                    *reinterpret_cast<const i32 *>(&src[1]);
                 u32 id = 0;
                 SpawnOptionEntity(&id, 0x12);
-                WriteUint(record, 0x68, id);
+                rec.sprite_entity_id = id;
             } else if (g_PlayerShotType == 2) {
-                WriteInt(record, 0x44, ScaleAndRound(shot, 0x20));
-                WriteInt(record, 0x48, ScaleAndRound(shot, 0x24));
-                WriteInt(record, 0x4c, ScaleAndRound(shot, 0x98));
-                WriteInt(record, 0x50, ScaleAndRound(shot, 0x9c));
-                if (ReadInt(player, 0x4474) == 0 || ReadInt(record, 0) == 0) {
-                    const i32 x = ReadInt(player, 0x3cc) +
-                                  ReadInt(record, 0x44);
-                    const i32 y = ReadInt(player, 0x3d0) +
-                                  ReadInt(record, 0x48);
-                    WriteInt(record, 0x34, x);
-                    WriteInt(record, 0x38, y);
-                    WriteInt(record, 0x4c, x);
-                    WriteInt(record, 0x50, y);
+                *reinterpret_cast<i32 *>(&rec.offset_source_a[0]) =
+                    ScaleAndRound(shot, 0x20);
+                *reinterpret_cast<i32 *>(&rec.offset_source_a[1]) =
+                    ScaleAndRound(shot, 0x24);
+                *reinterpret_cast<i32 *>(&rec.offset_source_b[0]) =
+                    ScaleAndRound(shot, 0x98);
+                *reinterpret_cast<i32 *>(&rec.offset_source_b[1]) =
+                    ScaleAndRound(shot, 0x9c);
+                if (player_rec.focus_flag == 0 || rec.state == 0) {
+                    const i32 x = player_rec.position_x_fixed +
+                                  *reinterpret_cast<const i32 *>(
+                                      &rec.offset_source_a[0]);
+                    const i32 y = player_rec.position_y_fixed +
+                                  *reinterpret_cast<const i32 *>(
+                                      &rec.offset_source_a[1]);
+                    *reinterpret_cast<i32 *>(&rec.unfocused_position[0]) = x;
+                    *reinterpret_cast<i32 *>(&rec.unfocused_position[1]) = y;
+                    *reinterpret_cast<i32 *>(&rec.offset_source_b[0]) = x;
+                    *reinterpret_cast<i32 *>(&rec.offset_source_b[1]) = y;
                 }
                 u32 id = 0;
                 SpawnOptionEntity(&id, 0x13);
-                WriteUint(record, 0x68, id);
-                if (ReadInt(player, 0x4474) != 0)
-                    SetEntityStateWordEaxEsiAbi(
-                        reinterpret_cast<u32 *>(record + 0x68), 3);
-                *reinterpret_cast<void **>(record + 0x90) =
+                rec.sprite_entity_id = id;
+                if (player_rec.focus_flag != 0)
+                    SetEntityStateWordEaxEsiAbi(&rec.sprite_entity_id, 3);
+                rec.update_callback =
                     reinterpret_cast<void *>(&UpdateAngularOptionRecord);
             }
         }
 
-        WriteInt(record, 0, 2);
+        rec.state = 2;
     }
 
     for (; index < 4; ++index) {
-        u8 *const record = player + 0x32a0 + index * 0x98;
-        WriteInt(record, 0, 0);
-        const u32 old_id = ReadUint(record, 0x68);
+        PlayerOptionRecord &rec = player_rec.options[index];
+        rec.state = 0;
+        const u32 old_id = rec.sprite_entity_id;
         if (old_id != 0)
             ReleaseEntity(old_id, true);
     }
 
-    WriteInt(player, 0x3500, count);
-    WriteInt(player, 0x332c, 1);
-    WriteInt(player, 0x33c4, 1);
-    WriteInt(player, 0x345c, 1);
-    WriteInt(player, 0x34f4, 1);
+    player_rec.option_count = count;
+    // +0x332c/+0x33c4/+0x345c/+0x34f4 = options[0..3].tier_latch.
+    player_rec.options[0].tier_latch = 1;
+    player_rec.options[1].tier_latch = 1;
+    player_rec.options[2].tier_latch = 1;
+    player_rec.options[3].tier_latch = 1;
 }
 
 } // namespace th10

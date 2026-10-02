@@ -34,7 +34,7 @@ i32 TH10_FASTCALL MainChainContext::DrawInitialize(MainChainContext *context)
     ResetDrawOwnerFrameState(g_MainChainRenderOwner);
 
     MainChainCameraWork *work =
-        reinterpret_cast<MainChainCameraWork *>(context->draw_work_026c);
+        &context->camera_work_bank[1];
     context->draw_work_pointer = work;
     UpdateMainChainCameraWorkEdiAbi(work);
 

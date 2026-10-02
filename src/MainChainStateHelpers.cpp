@@ -1,5 +1,7 @@
 #include "MainChainStateHelpers.hpp"
 
+#include "MainChainContext.hpp"
+
 #include <stdio.h>
 #include <string.h>
 
@@ -63,12 +65,12 @@ i32 QueueBgmResumeModeSelect(void)
 i32 SearchReplayHeaderKeyEaxStackAbi(const void *state, const char *key,
                                      i32 value_a, i32 value_b)
 {
-    const u8 *bytes = static_cast<const u8 *>(state);
-    const char *cursor = *reinterpret_cast<const char *const *>(
-        bytes + 0x764);
+    const MainChainContext &ctx =
+        *reinterpret_cast<const MainChainContext *>(state);
+    const char *cursor = ctx.replay_header_text;
     if (cursor == 0)
         return 0;
-    i32 remaining = *reinterpret_cast<const i32 *>(bytes + 0x760);
+    i32 remaining = ctx.replay_header_text_remaining;
     if (strncmp(key, "debug", 5) == 0)
         return 0;
     // TH10 0x0046dc9c vs 0x0046dca4: the native re-compares the two
@@ -97,24 +99,23 @@ i32 SearchReplayHeaderKeyEaxStackAbi(const void *state, const char *key,
 
 void EnterAllStageLoadSectionsEaxAbi(void *state)
 {
-    u8 *bytes = static_cast<u8 *>(state);
+    MainChainContext &ctx = *reinterpret_cast<MainChainContext *>(state);
     for (u32 index = 0; index != 7U; ++index)
-        EnterStageLoadSection(bytes + 0x64c + index * 0x18U);
+        EnterStageLoadSection(&ctx.state_locks[index]);
 }
 
 void LeaveAllStageLoadSectionsEaxAbi(void *state)
 {
-    u8 *bytes = static_cast<u8 *>(state);
+    MainChainContext &ctx = *reinterpret_cast<MainChainContext *>(state);
     for (u32 index = 0; index != 7U; ++index)
-        LeaveStageLoadSection(bytes + 0x64c + index * 0x18U);
+        LeaveStageLoadSection(&ctx.state_locks[index]);
 }
 
 void LeaveStageLoadSectionEdiEsiAbi(void *state, i32 index)
 {
-    u8 *bytes = static_cast<u8 *>(state);
-    LeaveStageLoadSection(bytes + 0x64c +
-                          static_cast<u32>(index) * 0x18U);
-    --(*reinterpret_cast<u8 *>(bytes + static_cast<u32>(index) + 0x6f4));
+    MainChainContext &ctx = *reinterpret_cast<MainChainContext *>(state);
+    LeaveStageLoadSection(&ctx.state_locks[static_cast<u32>(index)]);
+    --ctx.state_update_depths[static_cast<u32>(index)];
 }
 
 void *SelectStageRecordSlotThiscall(void *selector)
@@ -137,45 +138,51 @@ void CrossProductVec3EaxDxEcxAbi(float out[3], const float a[3],
 
 i32 ReadGameFlagBit6EaxAbi(const void *state)
 {
-    const u32 flags = *reinterpret_cast<const u32 *>(
-        static_cast<const u8 *>(state) + 0x150);
+    const MainChainContext &ctx =
+        *reinterpret_cast<const MainChainContext *>(state);
+    const u32 flags = ctx.input_setup_flags_0150;
     return static_cast<i32>((flags >> 6) & 1U);
 }
 
 i32 ReadGameFlagBit5EaxAbi(const void *state)
 {
-    const u32 flags = *reinterpret_cast<const u32 *>(
-        static_cast<const u8 *>(state) + 0x150);
+    const MainChainContext &ctx =
+        *reinterpret_cast<const MainChainContext *>(state);
+    const u32 flags = ctx.input_setup_flags_0150;
     return static_cast<i32>((flags >> 5) & 1U);
 }
 
 i32 ReadGameFlagBit3EaxAbi(const void *state)
 {
-    const u32 flags = *reinterpret_cast<const u32 *>(
-        static_cast<const u8 *>(state) + 0x150);
+    const MainChainContext &ctx =
+        *reinterpret_cast<const MainChainContext *>(state);
+    const u32 flags = ctx.input_setup_flags_0150;
     return static_cast<i32>((flags >> 3) & 1U);
 }
 
 i32 ReadGameFlagBit1EaxAbi(const void *state)
 {
-    const u32 flags = *reinterpret_cast<const u32 *>(
-        static_cast<const u8 *>(state) + 0x150);
+    const MainChainContext &ctx =
+        *reinterpret_cast<const MainChainContext *>(state);
+    const u32 flags = ctx.input_setup_flags_0150;
     return static_cast<i32>((flags >> 1) & 1U);
 }
 
 i32 ReadGameFlagBit2EaxAbi(const void *state)
 {
-    const u32 flags = *reinterpret_cast<const u32 *>(
-        static_cast<const u8 *>(state) + 0x150);
+    const MainChainContext &ctx =
+        *reinterpret_cast<const MainChainContext *>(state);
+    const u32 flags = ctx.input_setup_flags_0150;
     return static_cast<i32>((flags >> 2) & 1U);
 }
 
 void *SeedScoreRecordRetryCountersEaxAbi(void *record)
 {
-    u8 *bytes = static_cast<u8 *>(record);
-    *reinterpret_cast<i32 *>(bytes + 0x38c) = -2;
-    *reinterpret_cast<u32 *>(bytes + 0x390) = 0;
-    return bytes;
+    MainChainContext &ctx = *reinterpret_cast<MainChainContext *>(record);
+    // MainChainState enum fields written as raw dwords (width preserved).
+    *reinterpret_cast<i32 *>(&ctx.previous_state) = -2;
+    *reinterpret_cast<u32 *>(&ctx.requested_state) = 0;
+    return record;
 }
 
 void *ReleaseScoreRecordSlotEsiAbi(void *record)
@@ -253,13 +260,16 @@ i32 TickBgmFadeSequencerEaxAbi(void *state)
 void *ResetGameStateObjectEcxEsiAbi(void *sub_object, void *state)
 {
     u8 *bytes = static_cast<u8 *>(state);
-    InitializeTitleScreenSubObjectNative(sub_object, bytes + 0x48);
-    for (u32 offset = 0x630; offset <= 0x63c; offset += 4)
-        *reinterpret_cast<u32 *>(bytes + offset) = 0;
+    MainChainContext &ctx = *reinterpret_cast<MainChainContext *>(state);
+    InitializeTitleScreenSubObjectNative(sub_object, &ctx.window_0048);
+    ctx.thread_control.thread_handle = 0;
+    ctx.thread_control.thread_id = 0;
+    ctx.thread_control.stop_requested = 0;
+    ctx.thread_control.field_0010 = 0;
     // TH10 0x004703e4: stage-entity vtable.
-    *reinterpret_cast<u32 *>(bytes + 0x62c) = 0x4703e4U;
+    *reinterpret_cast<u32 *>(&ctx.thread_control.marker) = 0x4703e4U;
     memset(bytes, 0, 0x784);
-    *reinterpret_cast<u32 *>(bytes + 0x3cc) |= 0x140U;
+    *reinterpret_cast<u32 *>(&ctx.callback_state_byte) |= 0x140U;
     return bytes;
 }
 

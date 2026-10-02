@@ -11,6 +11,7 @@
 #include "Th10Types.hpp"
 #include "ThreadControl.hpp"
 #include "BgmRuntime.hpp"
+#include "MainChainContext.hpp"
 #include "MainChainRuntime.hpp"
 #include "TimelineContinuation.hpp"
 #include "TimelineRenderObjects.hpp"
@@ -166,22 +167,21 @@ extern u16 g_TitleGeometryWord; // TH10 DAT_00474e98
 // entry +0x644 and flags +0x63c/+0x638, then starts the CRT thread.
 void StartMainChainCallbackThread(void *context, void *entry, void *argument)
 {
-    u8 *const bytes = static_cast<u8 *>(context);
-    EnterCriticalSectionInternal(bytes + 0x6dc);
-    ++*reinterpret_cast<u8 *>(bytes + 0x6fa);
+    MainChainContext &ctx = *reinterpret_cast<MainChainContext *>(context);
+    EnterCriticalSectionInternal(&ctx.state_locks[6]);
+    ++ctx.state_update_depths[6];
 
-    ThreadControl *const control =
-        reinterpret_cast<ThreadControl *>(bytes + 0x630);
-    StopThreadControl(control);
-    *reinterpret_cast<void **>(bytes + 0x644) = entry;
-    *reinterpret_cast<u32 *>(bytes + 0x63c) = 1;
-    *reinterpret_cast<u32 *>(bytes + 0x638) = 0;
-    control->thread_handle = reinterpret_cast<void *>(_beginthreadex(
+    ThreadControl &control = ctx.thread_control;
+    StopThreadControl(&control);
+    control.thread_entry = entry;
+    control.field_0010 = 1;
+    control.stop_requested = 0;
+    control.thread_handle = reinterpret_cast<void *>(_beginthreadex(
         0, 0, reinterpret_cast<CrtThreadStartFn>(entry), argument, 0,
-        &control->thread_id));
+        &control.thread_id));
 
-    LeaveCriticalSectionInternal(bytes + 0x6dc);
-    --*reinterpret_cast<u8 *>(bytes + 0x6fa);
+    LeaveCriticalSectionInternal(&ctx.state_locks[6]);
+    --ctx.state_update_depths[6];
 }
 
 // TH10 0x0042d2e0. Game-manager calculation-channel adapter. The native body

@@ -2,6 +2,7 @@
 
 #include "LargeRenderOwnerLayout.hpp"
 #include "PlayerFrameworkHelpers.hpp"
+#include "PlayerRecord.hpp"
 
 namespace th10 {
 
@@ -33,27 +34,17 @@ inline void WriteUint(u8 *bytes, u32 offset, u32 value)
     *reinterpret_cast<u32 *>(bytes + offset) = value;
 }
 
-inline void WriteInt(u8 *bytes, u32 offset, i32 value)
-{
-    *reinterpret_cast<i32 *>(bytes + offset) = value;
-}
-
-inline u32 ReadUint(const u8 *bytes, u32 offset)
-{
-    return *reinterpret_cast<const u32 *>(bytes + offset);
-}
-
 // Lazy first-use init of a timer block; the caller's unconditional writes
 // overwrite the seeded values, so only the flag and rate pointer survive.
-void EnsureTimerBlockInitialized(u8 *block)
+void EnsureTimerBlockInitialized(TimerNode &block)
 {
-    if ((*reinterpret_cast<u32 *>(block + 0x10) & 1) != 0)
+    if ((block.flags & 1) != 0)
         return;
-    WriteInt(block, 4, 0);
-    WriteUint(block, 0, 0xfff0bdc1U);
-    WriteUint(block, 8, 0);
-    *reinterpret_cast<const float **>(block + 0xc) = &g_FrameTimeScale;
-    *reinterpret_cast<u32 *>(block + 0x10) |= 1;
+    block.count = 0;
+    block.prev = static_cast<i32>(0xfff0bdc1U);
+    block.accum = 0;
+    block.rate = &g_FrameTimeScale;
+    block.flags |= 1;
 }
 
 bool FindEntityById(u32 id, u8 **entity_out)
@@ -99,6 +90,7 @@ void HardKillEntity(u32 id)
 void ProcessPlayerDeathStackAbi(void *player_memory)
 {
     u8 *const player = static_cast<u8 *>(player_memory);
+    PlayerRecord &player_rec = *reinterpret_cast<PlayerRecord *>(player);
 
     // Power penalty: one third of the amount above the 5000 floor.
     const i32 excess = g_PlayerPowerPool - 5000;
@@ -110,32 +102,32 @@ void ProcessPlayerDeathStackAbi(void *player_memory)
     if (g_PlayerLivesRemaining >= 0)
         RefreshLifeIconsEaxStackAbi(g_PlayerLivesRemaining);
 
-    WriteInt(player, 0x458, 2);
+    player_rec.mode = 2;
 
-    EnsureTimerBlockInitialized(player + 0x474);
-    WriteInt(player, 0x478, 0);
-    WriteInt(player, 0x47c, 0);
-    WriteUint(player, 0x474, 0xffffffffU);
+    EnsureTimerBlockInitialized(player_rec.frame_timer);
+    player_rec.frame_timer.count = 0;
+    player_rec.frame_timer.accum = 0;
+    player_rec.frame_timer.prev = static_cast<i32>(0xffffffffU);
 
-    EnsureTimerBlockInitialized(player + 0x430c);
-    WriteInt(player, 0x4310, 0xb4);
-    WriteUint(player, 0x4314, 0x43340000U);
-    WriteInt(player, 0x430c, 0xb3);
+    EnsureTimerBlockInitialized(player_rec.deathbomb_timer);
+    player_rec.deathbomb_timer.count = 0xb4;
+    player_rec.deathbomb_timer.accum = static_cast<i32>(0x43340000U);
+    player_rec.deathbomb_timer.prev = 0xb3;
 
-    SpawnDirectionAnimEcxEaxBbxAbi(
-        *reinterpret_cast<void *const *>(player + 0x10), player + 0x14, 0);
+    SpawnDirectionAnimEcxEaxBbxAbi(player_rec.anm_manager_work,
+                                   &player_rec.anim_vm, 0);
 
     for (u32 index = 0; index != 4; ++index) {
-        u8 *const record = player + 0x32a0 + index * 0x98;
-        WriteInt(record, 0, 0);
-        HardKillEntity(ReadUint(record, 0x68));
-        HardKillEntity(ReadUint(record, 0x6c));
+        PlayerOptionRecord &rec = player_rec.options[index];
+        rec.state = 0;
+        HardKillEntity(rec.sprite_entity_id);
+        HardKillEntity(rec.power_effect_entity_id);
     }
 
-    WriteInt(player, 0x3500, 0);
+    player_rec.option_count = 0;
     if (*reinterpret_cast<const i32 *>(
             static_cast<u8 *>(g_GameModeObject) + 0x10) != 1)
-        ShowCautionText(reinterpret_cast<const float *>(player + 0x3c0));
+        ShowCautionText(&player_rec.position_x);
 
     u8 *const bullet_manager = *static_cast<u8 *const *>(g_SpellBulletBase);
     if (*reinterpret_cast<const i32 *>(bullet_manager + 0x3738) >= 60) {

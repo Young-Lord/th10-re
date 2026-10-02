@@ -17,7 +17,7 @@ extern i32 g_MainChainSharedStatus; // TH10 DAT_00491fb8
 i32 TH10_FASTCALL MainChainContext::Update(MainChainContext *context)
 {
     if (static_cast<signed char>(context->callback_state_byte) < 0 &&
-        context->field_063c == 0) {
+        context->thread_control.field_0010 == 0) {
         g_MainChainSharedStatus = 3;
     }
 
@@ -27,8 +27,8 @@ i32 TH10_FASTCALL MainChainContext::Update(MainChainContext *context)
     if (ServiceManagerWork(g_ManagerWorkOwner) != 0)
         return MainChainAdvance_Failed;
 
-    if (context->field_0648 != 0)
-        return context->field_0648 == 2
+    if (context->thread_control.update_status_001c != 0)
+        return context->thread_control.update_status_001c == 2
             ? MainChainAdvance_Failed
             : MainChainAdvance_Continue;
 

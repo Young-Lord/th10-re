@@ -2,6 +2,7 @@
 
 #include "GameContext.hpp"
 #include "PlayerDeathProcessor.hpp"
+#include "PlayerRecord.hpp"
 #include "PlayerFrameworkHelpers.hpp"
 #include "PlayerStageHelpers.hpp"
 #include "PlayerItemMagnet.hpp"
@@ -18,12 +19,8 @@ namespace th10 {
 
 namespace {
 
-inline float ReadFloat(const u8 *bytes, u32 offset)
-{
-    return *reinterpret_cast<const float *>(bytes + offset);
-}
-
-// Player object fields are addressed with explicit offsets; the layout is
+// Player object fields are accessed through the typed PlayerRecord view
+// (src/PlayerRecord.hpp); the layout is
 // documented in docs/evidence/player-object-lifecycle.md and
 // docs/evidence/player-mode-dispatcher.md.
 
@@ -63,49 +60,50 @@ i32 FloatToI32(float value)
 // rate pointer @0xc, init flag @0x10 (bit 0). A rate inside (0.99, 1.01)
 // steps the count by one; outside the window (or NaN) the count is derived
 // from the accumulator, so a ~zero rate freezes it.
-void AdvancePlayerTimerBlock(u8 *block)
+void AdvancePlayerTimerBlock(TimerNode &block)
 {
-    *reinterpret_cast<i32 *>(block) = *reinterpret_cast<i32 *>(block + 4);
-    const float rate = **reinterpret_cast<float *const *>(block + 0xc);
+    block.prev = block.count;
+    const float rate = *block.rate;
     if (rate > kRateUnityLow && rate < kRateUnityHigh) {
-        *reinterpret_cast<float *>(block + 8) =
-            *reinterpret_cast<float *>(block + 8) + 1.0f;
-        *reinterpret_cast<i32 *>(block + 4) =
-            *reinterpret_cast<i32 *>(block + 4) + 1;
+        *reinterpret_cast<float *>(&block.accum) =
+            *reinterpret_cast<const float *>(&block.accum) + 1.0f;
+        block.count = block.count + 1;
     } else {
-        const float acc = *reinterpret_cast<float *>(block + 8) + rate;
-        *reinterpret_cast<float *>(block + 8) = acc;
-        *reinterpret_cast<i32 *>(block + 4) = FloatToI32(acc);
+        const float acc =
+            *reinterpret_cast<const float *>(&block.accum) + rate;
+        *reinterpret_cast<float *>(&block.accum) = acc;
+        block.count = FloatToI32(acc);
     }
 }
 
 // Returns true when the block was initialized by this call.
-bool EnsureTimerBlockInitialized(u8 *block)
+bool EnsureTimerBlockInitialized(TimerNode &block)
 {
-    if ((*reinterpret_cast<u32 *>(block + 0x10) & 1) != 0)
+    if ((block.flags & 1) != 0)
         return false;
-    *reinterpret_cast<i32 *>(block + 4) = 0;
-    *reinterpret_cast<i32 *>(block) = static_cast<i32>(0xfff0bdc1U);
-    *reinterpret_cast<float *>(block + 8) = 0.0f;
-    *reinterpret_cast<const float **>(block + 0xc) = &g_FrameTimeScale;
-    *reinterpret_cast<u32 *>(block + 0x10) |= 1;
+    block.count = 0;
+    block.prev = static_cast<i32>(0xfff0bdc1U);
+    *reinterpret_cast<float *>(&block.accum) = 0.0f;
+    block.rate = &g_FrameTimeScale;
+    block.flags |= 1;
     return true;
 }
 
 // The 32-entry option-position history ring at player+0x436c (dword pairs).
 void ShiftPositionHistory(u8 *player)
 {
-    const i32 count = *reinterpret_cast<const i32 *>(player + 0x3500);
+    PlayerRecord &player_rec = *reinterpret_cast<PlayerRecord *>(player);
+    const i32 count = player_rec.option_count;
     for (i32 index = 31; index > count; --index) {
-        *reinterpret_cast<u32 *>(player + 0x436c + index * 8) =
-            *reinterpret_cast<const u32 *>(player + 0x436c + (index - 1) * 8);
-        *reinterpret_cast<u32 *>(player + 0x4370 + index * 8) =
-            *reinterpret_cast<const u32 *>(player + 0x4370 + (index - 1) * 8);
+        player_rec.trail_history[index * 2] =
+            player_rec.trail_history[(index - 1) * 2];
+        player_rec.trail_history[index * 2 + 1] =
+            player_rec.trail_history[(index - 1) * 2 + 1];
     }
-    *reinterpret_cast<u32 *>(player + 0x436c) =
-        *reinterpret_cast<const u32 *>(player + 0x3cc);
-    *reinterpret_cast<u32 *>(player + 0x4370) =
-        *reinterpret_cast<const u32 *>(player + 0x3d0);
+    player_rec.trail_history[0] =
+        static_cast<u32>(player_rec.position_x_fixed);
+    player_rec.trail_history[1] =
+        static_cast<u32>(player_rec.position_y_fixed);
 }
 
 // Modes 0 and 1 share the stage-start activation pass.
@@ -146,22 +144,23 @@ void ActivateStageEnemiesAndBullets(bool require_uninitialized)
 
 void RunRespawnIntroBody(u8 *player)
 {
-    const i32 tick = *reinterpret_cast<const i32 *>(player + 0x478);
-    *reinterpret_cast<i32 *>(player + 0x3d0) = 48000 - tick * 8000 / 60;
-    *reinterpret_cast<float *>(player + 0x3c4) =
-        static_cast<float>(*reinterpret_cast<const i32 *>(player + 0x3d0)) *
-        kUnitScale;
-    *reinterpret_cast<i32 *>(player + 0x332c) = 1;
-    *reinterpret_cast<i32 *>(player + 0x33c4) = 1;
-    *reinterpret_cast<i32 *>(player + 0x345c) = 1;
-    *reinterpret_cast<i32 *>(player + 0x34f4) = 1;
+    PlayerRecord &player_rec = *reinterpret_cast<PlayerRecord *>(player);
+    const i32 tick = player_rec.frame_timer.count;
+    player_rec.position_y_fixed = 48000 - tick * 8000 / 60;
+    player_rec.position_y =
+        static_cast<float>(player_rec.position_y_fixed) * kUnitScale;
+    // +0x332c/+0x33c4/+0x345c/+0x34f4 = options[0..3].tier_latch.
+    player_rec.options[0].tier_latch = 1;
+    player_rec.options[1].tier_latch = 1;
+    player_rec.options[2].tier_latch = 1;
+    player_rec.options[3].tier_latch = 1;
     ShiftPositionHistory(player);
 
     if (tick < 30) {
         const float sweep = static_cast<float>(tick) * 17.066668f + 64.0f;
-        const float position[3] = {ReadFloat(player, 0x440),
-                                   ReadFloat(player, 0x444),
-                                   ReadFloat(player, 0x448)};
+        const float position[3] = {player_rec.respawn_position[0],
+                                   player_rec.respawn_position[1],
+                                   player_rec.respawn_position[2]};
         ScanIntroActivations(*reinterpret_cast<void *const *>(0x4776f0U),
                              position, sweep, 0, 1);
         ScanIntroActivations(*reinterpret_cast<void *const *>(0x4776f0U),
@@ -187,10 +186,10 @@ void RunDeathExplosionBody(u8 *player, i32 tick);
 
 void RunDeathbombDecisionBody(u8 *player, i32 tick)
 {
+    PlayerRecord &player_rec = *reinterpret_cast<PlayerRecord *>(player);
     if (tick > 8) {
         ProcessPlayerDeathStackAbi(player);
-        RunDeathExplosionBody(player,
-            *reinterpret_cast<const i32 *>(player + 0x478));
+        RunDeathExplosionBody(player, player_rec.frame_timer.count);
         return;
     }
     GameContext *const game_ctx = static_cast<GameContext *>(g_GameContext);
@@ -200,30 +199,32 @@ void RunDeathbombDecisionBody(u8 *player, i32 tick)
         return;
     if ((g_InputMask & 2) == 0)
         return;
-    TickPlayerTimerEaxStackAbi(player + 0x474, 60);
-    TickPlayerTimerEaxStackAbi(player + 0x430c, 200);
+    TickPlayerTimerEaxStackAbi(&player_rec.frame_timer, 60);
+    TickPlayerTimerEaxStackAbi(&player_rec.deathbomb_timer, 200);
     (void)TickRespawnDeathEffectStackAbi(g_GameContext);
     g_PlayerLivesCounter -= 20;
     RebuildPlayerOptionRecords(player);
     RefreshLivesHud();
-    *reinterpret_cast<i32 *>(player + 0x458) = 1;
+    player_rec.mode = 1;
 }
 
 void RunDeathExplosionBody(u8 *player, i32 tick)
 {
+    PlayerRecord &player_rec = *reinterpret_cast<PlayerRecord *>(player);
     if (tick == 3) {
         g_PlayerLivesCounter -= 0x40;
         if (g_PlayerLivesCounter < 0)
             g_PlayerLivesCounter = 0;
         RefreshLivesHud();
         float burst_target[3] = {0.0f,
-            *reinterpret_cast<const float *>(player + 0x3c4) - 224.0f, 0.0f};
+            player_rec.position_y - 224.0f, 0.0f};
         const float base_angle = ComputeDeathBurstAngleEcxEaxAbi(
             player, burst_target);
         for (i32 index = 0; index != 7; ++index) {
             const i32 color = (index % 2) != 0 ? 4 : 1;
             SpawnExplosionParticleEaxEcxEfxAbi(
-                *reinterpret_cast<void *const *>(0x477818U), player + 0x3c0,
+                *reinterpret_cast<void *const *>(0x477818U),
+                &player_rec.position_x,
                 color, 0xffffffU,
                 static_cast<float>(index) * 0.11219974f + base_angle -
                     0.3926991f, 3.0f);
@@ -241,22 +242,19 @@ void RunDeathExplosionBody(u8 *player, i32 tick)
             RunGameOverPathBStackAbi(g_GameStateManager, 0);
         return;
     }
-    *reinterpret_cast<i32 *>(player + 0x458) = 0;
+    player_rec.mode = 0;
     g_FrameTimeScale = 1.0f;
-    (void)SpawnPlayerSubEffectEcxDxStackAbi(player + 0x3c0, player, 32.0f,
-                                            16.0f, 30, 150);
-    *reinterpret_cast<u32 *>(player + 0x440) =
-        *reinterpret_cast<const u32 *>(player + 0x3c0);
-    *reinterpret_cast<u32 *>(player + 0x444) =
-        *reinterpret_cast<const u32 *>(player + 0x3c4);
-    *reinterpret_cast<u32 *>(player + 0x448) =
-        *reinterpret_cast<const u32 *>(player + 0x3c8);
-    *reinterpret_cast<i32 *>(player + 0x3cc) = 0;
-    *reinterpret_cast<i32 *>(player + 0x3d0) = 48000;
-    *reinterpret_cast<float *>(player + 0x3c0) = 0.0f;
-    *reinterpret_cast<float *>(player + 0x3c4) = 480.0f;
-    TickPlayerTimerEaxStackAbi(player + 0x430c, 0x118);
-    TickPlayerTimerEaxStackAbi(player + 0x474, 0);
+    (void)SpawnPlayerSubEffectEcxDxStackAbi(&player_rec.position_x, player,
+                                            32.0f, 16.0f, 30, 150);
+    player_rec.respawn_position[0] = player_rec.position_x;
+    player_rec.respawn_position[1] = player_rec.position_y;
+    player_rec.respawn_position[2] = player_rec.position_z;
+    player_rec.position_x_fixed = 0;
+    player_rec.position_y_fixed = 48000;
+    player_rec.position_x = 0.0f;
+    player_rec.position_y = 480.0f;
+    TickPlayerTimerEaxStackAbi(&player_rec.deathbomb_timer, 0x118);
+    TickPlayerTimerEaxStackAbi(&player_rec.frame_timer, 0);
 }
 
 void RunBombFreezeBody(u8 *player, i32 tick)
@@ -278,13 +276,13 @@ void RunBombFreezeBody(u8 *player, i32 tick)
 // recomputation, timers, score accumulation, and projectile processing.
 void RunCommonEpilogue(u8 *player)
 {
-    u8 *const record_base = player + 0x350c;
+    PlayerRecord &player_rec = *reinterpret_cast<PlayerRecord *>(player);
     for (u32 index = 0; index != 32; ++index) {
-        u8 *const record = record_base + index * 0x6c;
-        if ((*reinterpret_cast<const u8 *>(record + 0x68) & 1) == 0)
+        PlayerSubEffectRecord &record = player_rec.sub_effects[index];
+        if ((record.flags & 1) == 0)
             continue;
-        u8 *const motion = record + 0x24;
-        if ((*reinterpret_cast<const u8 *>(record + 0x40) & 1) == 0) {
+        u8 *const motion = record.motion_block;
+        if ((*reinterpret_cast<const u8 *>(motion + 0x1c) & 1) == 0) {
             PolarToCartesianEdiAbi(motion,
                 *reinterpret_cast<const float *>(motion + 0x10),
                 *reinterpret_cast<const float *>(motion + 0xc));
@@ -297,92 +295,91 @@ void RunCommonEpilogue(u8 *player)
                 *reinterpret_cast<const float *>(motion + 0xc) +
                 *reinterpret_cast<const float *>(motion + 0x10));
         }
-        IntegrateSubEffectPositionEsiAbi(record + 0x18);
-        *reinterpret_cast<float *>(record) =
-            *reinterpret_cast<const float *>(record) +
-            *reinterpret_cast<const float *>(record + 4);
-        *reinterpret_cast<float *>(record + 8) =
-            *reinterpret_cast<const float *>(record + 8) +
-            *reinterpret_cast<const float *>(record + 0xc);
+        IntegrateSubEffectPositionEsiAbi(record.position);
+        record.velocity[0] =
+            record.velocity[0] + record.velocity[1];
+        record.damage_angle =
+            record.damage_angle +
+            *reinterpret_cast<const float *>(record.unknown_000c);
         // Sub-record timer: prev i32 @0x48, count i32 @0x44, accumulator
         // float @0x4c, rate pointer @0x50; counts down toward deactivation.
-        *reinterpret_cast<i32 *>(record + 0x44) =
-            *reinterpret_cast<i32 *>(record + 0x48);
-        const float rate = **reinterpret_cast<float *const *>(record + 0x50);
+        record.timer_prev = record.timer_count;
+        const float rate = *record.timer_rate;
         float acc;
         if (rate > kRateUnityLow && rate < kRateUnityHigh) {
-            acc = *reinterpret_cast<float *>(record + 0x4c) - 1.0f;
+            acc = record.timer_accum - 1.0f;
         } else {
-            acc = *reinterpret_cast<float *>(record + 0x4c) - rate;
+            acc = record.timer_accum - rate;
         }
-        *reinterpret_cast<float *>(record + 0x4c) = acc;
-        *reinterpret_cast<i32 *>(record + 0x48) = FloatToI32(acc);
-        if (*reinterpret_cast<const i32 *>(record + 0x48) <= 0)
-            *reinterpret_cast<u8 *>(record + 0x68) &=
-                static_cast<u8>(~1U);
+        record.timer_accum = acc;
+        record.timer_count = FloatToI32(acc);
+        if (record.timer_count <= 0)
+            record.flags &= static_cast<u8>(~1U);
     }
 
-    if (*reinterpret_cast<const i32 *>(player + 0x4310) >= 1) {
-        *reinterpret_cast<i32 *>(player + 0x430c) =
-            *reinterpret_cast<i32 *>(player + 0x4310);
-        const float rate = **reinterpret_cast<float *const *>(
-            player + 0x4318);
+    if (player_rec.deathbomb_timer.count >= 1) {
+        player_rec.deathbomb_timer.prev = player_rec.deathbomb_timer.count;
+        const float rate = *player_rec.deathbomb_timer.rate;
         float acc;
         if (rate > kRateUnityLow && rate < kRateUnityHigh) {
-            acc = *reinterpret_cast<float *>(player + 0x4314) - 1.0f;
+            acc = *reinterpret_cast<const float *>(
+                      &player_rec.deathbomb_timer.accum) - 1.0f;
         } else {
-            acc = *reinterpret_cast<float *>(player + 0x4314) - rate;
+            acc = *reinterpret_cast<const float *>(
+                      &player_rec.deathbomb_timer.accum) - rate;
         }
-        *reinterpret_cast<float *>(player + 0x4314) = acc;
-        *reinterpret_cast<i32 *>(player + 0x4310) = FloatToI32(acc);
+        *reinterpret_cast<float *>(&player_rec.deathbomb_timer.accum) = acc;
+        player_rec.deathbomb_timer.count = FloatToI32(acc);
     }
     {
-        const i32 tick = *reinterpret_cast<const i32 *>(player + 0x478);
-        const i32 prev = *reinterpret_cast<const i32 *>(player + 0x474);
+        const i32 tick = player_rec.frame_timer.count;
+        const i32 prev = player_rec.frame_timer.prev;
         if (tick == prev || tick % 3 != 0) {
-            *reinterpret_cast<u32 *>(player + 0x370) &= ~0x8000U;
+            player_rec.anim_vm.flags &= ~0x8000U;
         } else {
-            *reinterpret_cast<u32 *>(player + 0x314) = 0xff0000ffU;
-            *reinterpret_cast<u32 *>(player + 0x370) |= 0x8000U;
+            player_rec.anim_vm.secondary_color = 0xff0000ffU;
+            player_rec.anim_vm.flags |= 0x8000U;
         }
     }
 
-    UpdatePlayerAnimationVmEcxAbi(player, player + 0x14, player + 0x14);
+    UpdatePlayerAnimationVmEcxAbi(player, &player_rec.anim_vm,
+                                  &player_rec.anim_vm);
 
-    const float position_x = *reinterpret_cast<const float *>(player + 0x3c0);
-    const float position_y = *reinterpret_cast<const float *>(player + 0x3c4);
-    const float position_z = *reinterpret_cast<const float *>(player + 0x3c8);
+    const float position_x = player_rec.position_x;
+    const float position_y = player_rec.position_y;
+    const float position_z = player_rec.position_z;
     struct BoxWriter {
-        static void Write(u8 *player, u32 offset, float x, float y, float z,
+        static void Write(float *box, float x, float y, float z,
                           float hx, float hy, float hz)
         {
-            *reinterpret_cast<float *>(player + offset) = x - hx;
-            *reinterpret_cast<float *>(player + offset + 4) = y - hy;
-            *reinterpret_cast<float *>(player + offset + 8) = z - hz;
-            *reinterpret_cast<float *>(player + offset + 0xc) = x + hx;
-            *reinterpret_cast<float *>(player + offset + 0x10) = y + hy;
-            *reinterpret_cast<float *>(player + offset + 0x14) = z + hz;
+            box[0] = x - hx;
+            box[1] = y - hy;
+            box[2] = z - hz;
+            box[3] = x + hx;
+            box[4] = y + hy;
+            box[5] = z + hz;
         }
     };
-    BoxWriter::Write(player, 0x404, position_x, position_y, position_z,
-        *reinterpret_cast<const float *>(player + 0x41c),
-        *reinterpret_cast<const float *>(player + 0x420),
-        *reinterpret_cast<const float *>(player + 0x424));
-    BoxWriter::Write(player, 0x4324, position_x, position_y, position_z,
-        *reinterpret_cast<const float *>(player + 0x428) * 0.5f,
-        *reinterpret_cast<const float *>(player + 0x42c) * 0.5f,
-        *reinterpret_cast<const float *>(player + 0x430) * 0.5f);
-    BoxWriter::Write(player, 0x433c, position_x, position_y, position_z,
-        *reinterpret_cast<const float *>(player + 0x434),
-        *reinterpret_cast<const float *>(player + 0x438),
-        *reinterpret_cast<const float *>(player + 0x43c));
-    BoxWriter::Write(player, 0x4354, position_x, position_y, position_z,
-        *reinterpret_cast<const float *>(player + 0x428),
-        *reinterpret_cast<const float *>(player + 0x42c),
-        *reinterpret_cast<const float *>(player + 0x430));
+    BoxWriter::Write(player_rec.hit_box, position_x, position_y, position_z,
+        player_rec.hit_half_extent[0],
+        player_rec.hit_half_extent[1],
+        player_rec.hit_half_extent[2]);
+    BoxWriter::Write(player_rec.graze_box, position_x, position_y, position_z,
+        player_rec.graze_half_extent[0] * 0.5f,
+        player_rec.graze_half_extent[1] * 0.5f,
+        player_rec.graze_half_extent[2] * 0.5f);
+    BoxWriter::Write(player_rec.item_box, position_x, position_y, position_z,
+        player_rec.item_half_extent[0],
+        player_rec.item_half_extent[1],
+        player_rec.item_half_extent[2]);
+    BoxWriter::Write(player_rec.autocollect_box, position_x, position_y,
+        position_z,
+        player_rec.graze_half_extent[0],
+        player_rec.graze_half_extent[1],
+        player_rec.graze_half_extent[2]);
 
-    AdvancePlayerTimerBlock(player + 0x474);
-    AdvancePlayerTimerBlock(player + 0x488);
+    AdvancePlayerTimerBlock(player_rec.frame_timer);
+    AdvancePlayerTimerBlock(player_rec.move_gate_timer);
 
     const bool in_gameplay = g_AsciiHudOwner != 0 &&
         *reinterpret_cast<const i32 *>(
@@ -390,7 +387,7 @@ void RunCommonEpilogue(u8 *player)
     if (in_gameplay && g_AsciiHudConditionalState != 0 &&
         *reinterpret_cast<const i32 *>(
             static_cast<u8 *>(g_AsciiHudConditionalState) + 0x60) != 0 &&
-        *reinterpret_cast<const i32 *>(player + 0x478) % 60 == 0) {
+        player_rec.frame_timer.count % 60 == 0) {
         g_ScorePenaltyCounter += 1;
         if (g_ScorePenaltyCounter > 0x400)
             g_ScorePenaltyCounter = 0x400;
@@ -402,21 +399,21 @@ void RunCommonEpilogue(u8 *player)
             static_cast<u8 *>(g_AsciiHudConditionalState) + 0x60) != 0) {
         (void)TickItemMagnetEaxAbi(player);
     } else {
-        if ((*reinterpret_cast<u32 *>(player + 0x470) & 1) == 0) {
-            *reinterpret_cast<i32 *>(player + 0x464) = 0;
-            *reinterpret_cast<i32 *>(player + 0x460) =
+        if ((player_rec.autocollect_timer.flags & 1) == 0) {
+            player_rec.autocollect_timer.count = 0;
+            player_rec.autocollect_timer.prev =
                 static_cast<i32>(0xfff0bdc1U);
-            *reinterpret_cast<i32 *>(player + 0x468) = 0;
-            *reinterpret_cast<const float **>(player + 0x46c) =
-                &g_FrameTimeScale;
-            *reinterpret_cast<u32 *>(player + 0x470) |= 1;
+            player_rec.autocollect_timer.accum = 0;
+            player_rec.autocollect_timer.rate = &g_FrameTimeScale;
+            player_rec.autocollect_timer.flags |= 1;
         }
-        *reinterpret_cast<i32 *>(player + 0x464) = -1;
-        *reinterpret_cast<i32 *>(player + 0x468) =
+        player_rec.autocollect_timer.count = -1;
+        // -1.0f stored through the dword view (bit pattern preserved).
+        player_rec.autocollect_timer.accum =
             static_cast<i32>(0xbf800000U);
-        *reinterpret_cast<i32 *>(player + 0x460) = -2;
-        *reinterpret_cast<i32 *>(player + 0x3504) = 0;
-        *reinterpret_cast<u8 *>(player + 0x3508) = 0;
+        player_rec.autocollect_timer.prev = -2;
+        player_rec.homing_target = 0;
+        player_rec.homing_target_latch = 0;
     }
 
     (void)UpdatePlayerProjectilesStackAbi(player);
@@ -427,20 +424,20 @@ void RunCommonEpilogue(u8 *player)
 i32 UpdatePlayerModeDispatcher(void *player_memory)
 {
     u8 *const player = static_cast<u8 *>(player_memory);
-    const u32 mode = static_cast<u32>(
-        *reinterpret_cast<const i32 *>(player + 0x458));
+    PlayerRecord &player_rec = *reinterpret_cast<PlayerRecord *>(player);
+    const u32 mode = static_cast<u32>(player_rec.mode);
     // Typed view over DAT_004776ec; the goto into mode_1 crosses no
     // initialization because the view is established here.
     GameContext *const game_ctx = static_cast<GameContext *>(g_GameContext);
 
     if (mode == 0) {
         RunRespawnIntroBody(player);
-        if (*reinterpret_cast<const i32 *>(player + 0x478) >= 60) {
-            *reinterpret_cast<i32 *>(player + 0x458) = 1;
-            (void)EnsureTimerBlockInitialized(player + 0x474);
-            *reinterpret_cast<i32 *>(player + 0x478) = 0;
-            *reinterpret_cast<i32 *>(player + 0x47c) = 0;
-            *reinterpret_cast<i32 *>(player + 0x474) = -1;
+        if (player_rec.frame_timer.count >= 60) {
+            player_rec.mode = 1;
+            (void)EnsureTimerBlockInitialized(player_rec.frame_timer);
+            player_rec.frame_timer.count = 0;
+            player_rec.frame_timer.accum = 0;
+            player_rec.frame_timer.prev = -1;
             goto mode_1;
         }
     } else if (mode == 1) {
@@ -452,25 +449,22 @@ mode_1:
             game_ctx->popup_state == 0 &&
             static_cast<short>(g_PlayerLivesCounter / 20) != 0 &&
             (g_InputMask & 2) != 0) {
-            TickPlayerTimerEaxStackAbi(player + 0x430c, 0x10e);
+            TickPlayerTimerEaxStackAbi(&player_rec.deathbomb_timer, 0x10e);
             (void)TickRespawnDeathEffectStackAbi(g_GameContext);
             g_PlayerLivesCounter -= 20;
             RebuildPlayerOptionRecords(player);
             RefreshLivesHud();
             AddMaximumScorePenalty(3000);
         }
-        if (*reinterpret_cast<const i32 *>(player + 0x478) < 30)
+        if (player_rec.frame_timer.count < 30)
             ActivateStageEnemiesAndBullets(true);
         (void)UpdatePlayerMovementEdiAbi(player);
     } else if (mode == 2) {
-        RunDeathExplosionBody(player,
-            *reinterpret_cast<const i32 *>(player + 0x478));
+        RunDeathExplosionBody(player, player_rec.frame_timer.count);
     } else if (mode == 3) {
-        RunBombFreezeBody(player,
-            *reinterpret_cast<const i32 *>(player + 0x478));
+        RunBombFreezeBody(player, player_rec.frame_timer.count);
     } else if (mode == 4) {
-        RunDeathbombDecisionBody(player,
-            *reinterpret_cast<const i32 *>(player + 0x478));
+        RunDeathbombDecisionBody(player, player_rec.frame_timer.count);
     }
 
     RunCommonEpilogue(player);

@@ -8,6 +8,7 @@
 #include "Th10Types.hpp"
 #include "GameContext.hpp"
 #include "EntityHelpers.hpp"
+#include "PlayerRecord.hpp"
 #include "PlayerTimerHelpers.hpp"
 #include "PlayerStageHelpers.hpp"
 #include "BgmRuntime.hpp"
@@ -182,11 +183,11 @@ i32 SceneTriggerAimAndSpreadInstructionEaxEcxEcxStackAbi(
         *reinterpret_cast<u32 *>(0x477834U); // DAT_00477834
     float angle = kPiHalf;
     if (player_block != 0) {
-        const float dx =
-            *reinterpret_cast<float *>(player_block + 0x3c0) -
+        PlayerRecord &player =
+            *reinterpret_cast<PlayerRecord *>(player_block);
+        const float dx = player.position_x -
             *reinterpret_cast<float *>(bytes + 0x4);
-        const float dy =
-            *reinterpret_cast<float *>(player_block + 0x3c4) -
+        const float dy = player.position_y -
             *reinterpret_cast<float *>(bytes + 0x8);
         // Native guards both components against +0.0 exactly and falls
         // back to pi/2; otherwise atan2(dy, dx) (fpatan).

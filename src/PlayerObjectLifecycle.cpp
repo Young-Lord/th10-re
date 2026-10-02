@@ -2,6 +2,7 @@
 
 #include "CallbackScheduler.hpp"
 #include "ManagerWork.hpp"
+#include "PlayerRecord.hpp"
 #include "PlayerShotData.hpp"
 
 namespace th10 {
@@ -37,20 +38,15 @@ inline float ReadFloat(const u8 *bytes, u32 offset)
     return *reinterpret_cast<const float *>(bytes + offset);
 }
 
-inline void WriteFloat(u8 *bytes, u32 offset, float value)
-{
-    *reinterpret_cast<float *>(bytes + offset) = value;
-}
-
-void WriteBox(u8 *player, u32 offset, float position_x, float position_y,
+void WriteBox(float *box, float position_x, float position_y,
               float position_z, float half_x, float half_y, float half_z)
 {
-    WriteFloat(player, offset, position_x - half_x);
-    WriteFloat(player, offset + 4, position_y - half_y);
-    WriteFloat(player, offset + 8, position_z - half_z);
-    WriteFloat(player, offset + 0xc, half_x + position_x);
-    WriteFloat(player, offset + 0x10, half_y + position_y);
-    WriteFloat(player, offset + 0x14, half_z + position_z);
+    box[0] = position_x - half_x;
+    box[1] = position_y - half_y;
+    box[2] = position_z - half_z;
+    box[3] = half_x + position_x;
+    box[4] = half_y + position_y;
+    box[5] = half_z + position_z;
 }
 
 } // namespace
@@ -64,10 +60,11 @@ void WriteBox(u8 *player, u32 offset, float position_x, float position_y,
 i32 InitializePlayerObject(void *player_memory)
 {
     u8 *const player = static_cast<u8 *>(player_memory);
+    PlayerRecord &player_rec = *reinterpret_cast<PlayerRecord *>(player);
     const char *resource_name = g_PlayerCharacter == 0 ? "pl00.anm" : "pl01.anm";
     void *const anm_work = RequestManagerWork(g_GlobalLifecycleResourceOwner,
                                               8, resource_name);
-    *reinterpret_cast<void **>(player + 0x10) = anm_work;
+    player_rec.anm_manager_work = anm_work;
     if (anm_work == 0) {
         AppendMainChainErrorText(
             "自機データが見つかりません。データが壊れています\r\n");
@@ -85,7 +82,7 @@ i32 InitializePlayerObject(void *player_memory)
             return -1;
         }
     } else {
-        *reinterpret_cast<void **>(player + 0x45c) = g_PlayerShotEntryCache;
+        player_rec.shot_data = g_PlayerShotEntryCache;
         g_PlayerShotEntryCache = 0;
     }
 
@@ -95,7 +92,7 @@ i32 InitializePlayerObject(void *player_memory)
     update_element->flags &= ~static_cast<u32>(ChainElemFlag_Enabled);
     (void)CallbackSchedulerApi::AddToCalculationChain(g_CallbackScheduler,
                                                       update_element, 0x10);
-    *reinterpret_cast<ChainElem **>(player + 8) = update_element;
+    player_rec.update_element = update_element;
 
     ChainElem *const draw_element =
         CallbackSchedulerApi::Create(RenderPlayerCallbackThunk);
@@ -103,45 +100,47 @@ i32 InitializePlayerObject(void *player_memory)
     draw_element->flags &= ~static_cast<u32>(ChainElemFlag_Enabled);
     (void)CallbackSchedulerApi::AddToDrawChain(g_CallbackScheduler,
                                                draw_element, 0x16);
-    *reinterpret_cast<ChainElem **>(player + 0xc) = draw_element;
+    player_rec.draw_element = draw_element;
 
-    InitializePlayerMainVmEsiStackAbi(player + 0x14, anm_work, 0);
+    InitializePlayerMainVmEsiStackAbi(&player_rec.anim_vm, anm_work, 0);
 
-    WriteFloat(player, 0x3c0, 0.0f);
-    WriteFloat(player, 0x3c4, 400.0f);
-    *reinterpret_cast<u32 *>(player + 0x3cc) = 0;
-    *reinterpret_cast<u32 *>(player + 0x3d0) = 40000;
-    u8 *const shot = *reinterpret_cast<u8 **>(player + 0x45c);
+    player_rec.position_x = 0.0f;
+    player_rec.position_y = 400.0f;
+    player_rec.position_x_fixed = 0;
+    player_rec.position_y_fixed = 40000;
+    u8 *const shot = static_cast<u8 *>(player_rec.shot_data);
     // Each hitbox dimension is the shot-table entry scaled by 100 and
     // truncated through the CRT float-to-int conversion 0x00463b2c.
-    *reinterpret_cast<i32 *>(player + 0x3d4) =
+    player_rec.speed_unfocused =
         static_cast<i32>(ReadFloat(shot, 0x10) * 100.0f);
-    *reinterpret_cast<i32 *>(player + 0x3d8) =
+    player_rec.speed_focused =
         static_cast<i32>(ReadFloat(shot, 0x14) * 100.0f);
-    *reinterpret_cast<i32 *>(player + 0x3dc) =
+    player_rec.speed_unfocused_diagonal =
         static_cast<i32>(ReadFloat(shot, 0x18) * 100.0f);
-    *reinterpret_cast<i32 *>(player + 0x3e0) =
+    player_rec.speed_focused_diagonal =
         static_cast<i32>(ReadFloat(shot, 0x1c) * 100.0f);
 
     for (u32 index = 0; index != 0x21; ++index) {
-        *reinterpret_cast<u32 *>(player + 0x436c + index * 8) =
-            *reinterpret_cast<const u32 *>(player + 0x3cc);
-        *reinterpret_cast<u32 *>(player + 0x4370 + index * 8) =
-            *reinterpret_cast<const u32 *>(player + 0x3d0);
+        player_rec.trail_history[index * 2] =
+            static_cast<u32>(player_rec.position_x_fixed);
+        player_rec.trail_history[index * 2 + 1] =
+            static_cast<u32>(player_rec.position_y_fixed);
     }
 
     // Three init-once entity records seeded with a negative-NaN transient
     // that is immediately overwritten, matching the original's write order.
-    if ((*reinterpret_cast<u32 *>(player + 0x470) & 1) == 0) {
-        *reinterpret_cast<u32 *>(player + 0x464) = 0;
-        *reinterpret_cast<u32 *>(player + 0x460) = 0xfff0bdc1U;
-        *reinterpret_cast<u32 *>(player + 0x468) = 0;
-        *reinterpret_cast<void **>(player + 0x46c) = g_PlayerDefaultDescriptor;
-        *reinterpret_cast<u32 *>(player + 0x470) |= 1;
+    if ((player_rec.autocollect_timer.flags & 1) == 0) {
+        player_rec.autocollect_timer.count = 0;
+        player_rec.autocollect_timer.prev = static_cast<i32>(0xfff0bdc1U);
+        player_rec.autocollect_timer.accum = 0;
+        player_rec.autocollect_timer.rate =
+            static_cast<const float *>(g_PlayerDefaultDescriptor);
+        player_rec.autocollect_timer.flags |= 1;
     }
-    *reinterpret_cast<u32 *>(player + 0x468) = 0xbf800000U;
-    *reinterpret_cast<u32 *>(player + 0x460) = 0xfffffffeU;
-    *reinterpret_cast<u32 *>(player + 0x464) = 0xffffffffU;
+    // -1.0f stored through the dword view (bit pattern preserved).
+    player_rec.autocollect_timer.accum = static_cast<i32>(0xbf800000U);
+    player_rec.autocollect_timer.prev = static_cast<i32>(0xfffffffeU);
+    player_rec.autocollect_timer.count = static_cast<i32>(0xffffffffU);
 
     // Shot-table entries land on the sub-object before the boxes use them;
     // the first half-extent re-reads the just-written hitbox entry.
@@ -160,51 +159,52 @@ i32 InitializePlayerObject(void *player_memory)
         g_PlayerGrazeHalfTable[static_cast<u32>(g_PlayerCharacter)] * 0.5f;
     const float half_extent_c =
         g_PlayerItemBoxHalfTable[static_cast<u32>(g_PlayerCharacter)] * 0.5f;
-    WriteFloat(player, 0x41c, half_extent_a);
-    WriteFloat(player, 0x420, half_extent_a);
-    WriteFloat(player, 0x424, 5.0f);
-    WriteFloat(player, 0x428, half_extent_b);
-    WriteFloat(player, 0x42c, half_extent_b);
-    WriteFloat(player, 0x430, 5.0f);
-    WriteFloat(player, 0x434, half_extent_c);
-    WriteFloat(player, 0x438, half_extent_c);
-    WriteFloat(player, 0x43c, 5.0f);
+    player_rec.hit_half_extent[0] = half_extent_a;
+    player_rec.hit_half_extent[1] = half_extent_a;
+    player_rec.hit_half_extent[2] = 5.0f;
+    player_rec.graze_half_extent[0] = half_extent_b;
+    player_rec.graze_half_extent[1] = half_extent_b;
+    player_rec.graze_half_extent[2] = 5.0f;
+    player_rec.item_half_extent[0] = half_extent_c;
+    player_rec.item_half_extent[1] = half_extent_c;
+    player_rec.item_half_extent[2] = 5.0f;
 
-    const float position_x = ReadFloat(player, 0x3c0);
-    const float position_y = ReadFloat(player, 0x3c4);
-    const float position_z = ReadFloat(player, 0x3c8);
-    WriteBox(player, 0x404, position_x, position_y, position_z,
+    const float position_x = player_rec.position_x;
+    const float position_y = player_rec.position_y;
+    const float position_z = player_rec.position_z;
+    WriteBox(player_rec.hit_box, position_x, position_y, position_z,
              half_extent_a, half_extent_a, 5.0f);
-    WriteBox(player, 0x4324, position_x, position_y, position_z,
+    WriteBox(player_rec.graze_box, position_x, position_y, position_z,
              half_extent_b, half_extent_b, 5.0f);
-    WriteBox(player, 0x433c, position_x, position_y, position_z,
+    WriteBox(player_rec.item_box, position_x, position_y, position_z,
              half_extent_c, half_extent_c, 5.0f);
-    WriteBox(player, 0x4354, position_x, position_y, position_z,
+    WriteBox(player_rec.autocollect_box, position_x, position_y, position_z,
              half_extent_c, half_extent_c, 5.0f);
 
-    if ((*reinterpret_cast<u32 *>(player + 0x484) & 1) == 0) {
-        *reinterpret_cast<u32 *>(player + 0x478) = 0;
-        *reinterpret_cast<u32 *>(player + 0x474) = 0xfff0bdc1U;
-        *reinterpret_cast<u32 *>(player + 0x47c) = 0;
-        *reinterpret_cast<void **>(player + 0x480) = g_PlayerDefaultDescriptor;
-        *reinterpret_cast<u32 *>(player + 0x484) |= 1;
+    if ((player_rec.frame_timer.flags & 1) == 0) {
+        player_rec.frame_timer.count = 0;
+        player_rec.frame_timer.prev = static_cast<i32>(0xfff0bdc1U);
+        player_rec.frame_timer.accum = 0;
+        player_rec.frame_timer.rate =
+            static_cast<const float *>(g_PlayerDefaultDescriptor);
+        player_rec.frame_timer.flags |= 1;
     }
-    *reinterpret_cast<u32 *>(player + 0x478) = 0;
-    *reinterpret_cast<u32 *>(player + 0x47c) = 0;
-    *reinterpret_cast<u32 *>(player + 0x474) = 0xffffffffU;
+    player_rec.frame_timer.count = 0;
+    player_rec.frame_timer.accum = 0;
+    player_rec.frame_timer.prev = static_cast<i32>(0xffffffffU);
 
-    if ((*reinterpret_cast<u32 *>(player + 0x431c) & 1) == 0) {
-        *reinterpret_cast<u32 *>(player + 0x4310) = 0;
-        *reinterpret_cast<u32 *>(player + 0x430c) = 0xfff0bdc1U;
-        *reinterpret_cast<u32 *>(player + 0x4314) = 0;
-        *reinterpret_cast<void **>(player + 0x4318) =
-            g_PlayerDefaultDescriptor;
-        *reinterpret_cast<u32 *>(player + 0x431c) |= 1;
+    if ((player_rec.deathbomb_timer.flags & 1) == 0) {
+        player_rec.deathbomb_timer.count = 0;
+        player_rec.deathbomb_timer.prev = static_cast<i32>(0xfff0bdc1U);
+        player_rec.deathbomb_timer.accum = 0;
+        player_rec.deathbomb_timer.rate =
+            static_cast<const float *>(g_PlayerDefaultDescriptor);
+        player_rec.deathbomb_timer.flags |= 1;
     }
-    *reinterpret_cast<u32 *>(player + 0x4310) = 0x78;
-    *reinterpret_cast<u32 *>(player + 0x4314) = 0x42f00000U;
-    *reinterpret_cast<u32 *>(player + 0x430c) = 0x77;
-    *reinterpret_cast<u32 *>(player + 0x4308) = 0x1e;
+    player_rec.deathbomb_timer.count = 0x78;
+    player_rec.deathbomb_timer.accum = static_cast<i32>(0x42f00000U);
+    player_rec.deathbomb_timer.prev = 0x77;
+    player_rec.deathbomb_lerp_percent = 0x1e;
 
     UpdatePlayerOptionRecords(player);
     return 0;

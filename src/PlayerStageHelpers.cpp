@@ -2,6 +2,7 @@
 
 #include "AsciiAnimationVm.hpp"
 #include "GameContext.hpp"
+#include "PlayerRecord.hpp"
 #include "StageEffectHelpers.hpp"
 #include "BgmRuntime.hpp"
 #include "Th10Platform.hpp"
@@ -90,9 +91,11 @@ i32 TickRespawnDeathEffectStackAbi(void *node_memory)
     ctx.radius = 32.0f;
     ctx.field_0040 = 4.0f;
 
-    const float position[3] = {ReadFloat(g_OptionPositionBase, 0x3c0),
-                               ReadFloat(g_OptionPositionBase, 0x3c4),
-                               ReadFloat(g_OptionPositionBase, 0x3c8)};
+    const PlayerRecord &player_rec =
+        *reinterpret_cast<const PlayerRecord *>(g_OptionPositionBase);
+    const float position[3] = {player_rec.position_x,
+                               player_rec.position_y,
+                               player_rec.position_z};
     ctx.position_x = position[0];
     ctx.position_y = position[1];
     ctx.position_z = position[2];

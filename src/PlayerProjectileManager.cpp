@@ -2,6 +2,7 @@
 
 #include "EntityHelpers.hpp"
 #include "PlayerMotionHelpers.hpp"
+#include "PlayerRecord.hpp"
 #include "PlayerTimerHelpers.hpp"
 
 #include <cmath>
@@ -64,30 +65,26 @@ inline void WriteInt(u8 *bytes, u32 offset, i32 value)
 
 // Advance the age counter (+0x00 snapshot / +0x04 count / +0x08 accumulator
 // / +0x0c rate pointer) with the shared scaled-timer semantics.
-void AdvanceAge(u8 *record)
+void AdvanceAge(PlayerShotRecord *rec)
 {
-    *reinterpret_cast<i32 *>(record) =
-        *reinterpret_cast<const i32 *>(record + 4);
-    const float rate =
-        **reinterpret_cast<float *const *>(record + 0xc);
+    *reinterpret_cast<i32 *>(&rec->timer_prev) = rec->timer_count;
+    const float rate = *rec->timer_rate;
     if (rate > kRateUnityLow && rate < kRateUnityHigh) {
-        *reinterpret_cast<float *>(record + 8) =
-            *reinterpret_cast<float *>(record + 8) + 1.0f;
-        *reinterpret_cast<i32 *>(record + 4) =
-            *reinterpret_cast<const i32 *>(record + 4) + 1;
+        rec->timer_accum = rec->timer_accum + 1.0f;
+        rec->timer_count = rec->timer_count + 1;
     } else {
-        const float acc = *reinterpret_cast<float *>(record + 8) + rate;
-        *reinterpret_cast<float *>(record + 8) = acc;
-        *reinterpret_cast<i32 *>(record + 4) = static_cast<i32>(acc);
+        const float acc = rec->timer_accum + rate;
+        rec->timer_accum = acc;
+        rec->timer_count = static_cast<i32>(acc);
     }
 }
 
-void ExpireType3Shot(u8 *record, u8 *player, i32 slot)
+void ExpireType3Shot(PlayerShotRecord *rec, PlayerRecord &player, i32 slot)
 {
-    ExpireEntityHandleEaxAbi(reinterpret_cast<u32 *>(record + 0x44));
-    ExpireEntityHandleEaxAbi(reinterpret_cast<u32 *>(record + 0x48));
-    *reinterpret_cast<i32 *>(record + 0x40) = 2;
-    WriteFloat(player, 0x42f4 + slot * 4, 0.0f);
+    ExpireEntityHandleEaxAbi(&rec->entity_id);
+    ExpireEntityHandleEaxAbi(&rec->secondary_entity_id);
+    rec->state = 2;
+    *reinterpret_cast<float *>(&player.type3_slot_latches[slot]) = 0.0f;
 }
 
 } // namespace
@@ -95,8 +92,9 @@ void ExpireType3Shot(u8 *record, u8 *player, i32 slot)
 // TH10 0x00428280.
 i32 UpdatePlayerProjectilesStackAbi(void *player_memory)
 {
-    u8 *const player = static_cast<u8 *>(player_memory);
-    const i32 option_count = ReadInt(player, 0x3500);
+    u8 *const player_ptr = static_cast<u8 *>(player_memory);
+    PlayerRecord &player = *reinterpret_cast<PlayerRecord *>(player_ptr);
+    const i32 option_count = player.option_count;
     const bool aborted = (g_AsciiHudOwner != 0 &&
                           *reinterpret_cast<const i32 *>(
                               static_cast<u8 *>(g_AsciiHudOwner) +
@@ -104,68 +102,67 @@ i32 UpdatePlayerProjectilesStackAbi(void *player_memory)
         g_AsciiHudConditionalState == 0;
 
     for (u32 index = 0; index != 128; ++index) {
-        u8 *const record = player + 0x49c + index * 0x5c;
-        const i32 state = ReadInt(record, 0x40);
+        PlayerShotRecord *const record = &player.shots[index];
+        const i32 state = static_cast<i32>(record->state);
         if (state == 0)
             continue;
         u8 *const descriptor =
-            *reinterpret_cast<u8 *const *>(record + 0x58);
+            static_cast<u8 *>(record->descriptor);
         const i32 type = static_cast<const i32>(descriptor[0x1d]);
         const i32 slot = static_cast<const i32>(descriptor[0x1c]);
 
         if (type == 3 && state == 1 &&
-            (ReadInt(player, 0x464) < 0 || slot - 1 >= option_count)) {
+            (player.autocollect_timer.count < 0 ||
+             slot - 1 >= option_count)) {
             ExpireType3Shot(record, player, slot);
         }
-        if (type == 3 && ReadInt(record, 0x40) == 1 && aborted) {
+        if (type == 3 && record->state == 1 && aborted) {
             ExpireType3Shot(record, player, slot);
         }
-        if (type == 3 && ReadInt(record, 0x50) == 0 &&
-            ReadInt(record, 0x40) == 1 && ReadInt(record, 0x54) == 1) {
-            FireEntityHandleEaxAbi(reinterpret_cast<u32 *>(record + 0x44));
-            WriteInt(record, 0x54, 0);
+        if (type == 3 && record->hit_flag == 0 &&
+            record->state == 1 && record->magnet_latch == 1) {
+            FireEntityHandleEaxAbi(&record->entity_id);
+            record->magnet_latch = 0;
         }
-        WriteInt(record, 0x50, 0);
+        record->hit_flag = 0;
 
         if (descriptor[0x28] != 0) {
             const DescriptorUpdateFnPtr update =
                 reinterpret_cast<DescriptorUpdateFnPtr>(descriptor[0x28]);
-            update(player);
+            update(player_ptr);
         }
 
-        const bool self_integrating =
-            (*reinterpret_cast<const u8 *>(record + 0x3c) & 1) != 0;
+        const bool self_integrating = (record->angle_flags & 1) != 0;
         if (!self_integrating) {
-            PolarToCartesianEdiAbi(record + 0x20,
-                ReadFloat(record, 0x30), ReadFloat(record, 0x2c));
-            *reinterpret_cast<u32 *>(record + 0x28) = 0;
+            PolarToCartesianEdiAbi(record->velocity, record->angle,
+                                   record->speed);
+            record->field_0028 = 0;
         } else {
-            WriteFloat(record, 0x34,
-                       ReadFloat(record, 0x34) + ReadFloat(record, 0x38));
-            WriteFloat(record, 0x30,
-                       WrapAngleToPi(ReadFloat(record, 0x30) +
-                                     ReadFloat(record, 0x2c)));
+            record->angle_delta[0] =
+                record->angle_delta[0] + record->angle_delta[1];
+            record->angle = WrapAngleToPi(record->angle +
+                                          record->speed);
         }
-        IntegrateSubEffectPositionEsiAbi(record + 0x14);
+        IntegrateSubEffectPositionEsiAbi(record->position);
 
         u8 *const entity =
             FindEntityEdxStackAbi(g_MainChainRenderOwner,
-                                  static_cast<u32>(ReadInt(record, 0x44)));
+                                  record->entity_id);
         if (entity == 0) {
             // Deactivate: soft-release the secondary entity if present.
-            if (ReadInt(record, 0x48) != 0) {
+            if (record->secondary_entity_id != 0) {
                 ReleaseEntityById(g_MainChainRenderOwner,
-                                  static_cast<u32>(ReadInt(record, 0x48)));
+                                  record->secondary_entity_id);
             }
-            WriteInt(record, 0x48, 0);
-            WriteInt(record, 0x44, 0);
-            *reinterpret_cast<i32 *>(record + 0x40) = 0;
+            record->secondary_entity_id = 0;
+            record->entity_id = 0;
+            record->state = 0;
             continue;
         }
 
-        if (type != 3 && ReadInt(record, 4) >= 10) {
-            float position[2] = {ReadFloat(record, 0x14),
-                                 ReadFloat(record, 0x18)};
+        if (type != 3 && record->timer_count >= 10) {
+            float position[2] = {record->position[0],
+                                 record->position[1]};
             const float half_x =
                 *reinterpret_cast<const float *>(
                     *reinterpret_cast<const u32 *>(
@@ -182,37 +179,36 @@ i32 UpdatePlayerProjectilesStackAbi(void *player_memory)
                     reinterpret_cast<const u8 *>(entity) + 0x3c);
             if (IsOutsidePlayfieldBox(position, half_x, half_y) != 0) {
                 ReleaseEntityById(g_MainChainRenderOwner,
-                                  static_cast<u32>(ReadInt(record, 0x44)));
-                WriteInt(record, 0x44, 0);
-                *reinterpret_cast<i32 *>(record + 0x40) = 0;
+                                  record->entity_id);
+                record->entity_id = 0;
+                record->state = 0;
                 continue;
             }
         }
 
-        WriteFloat(entity, 0x340, ReadFloat(record, 0x14) + 224.0f);
-        WriteFloat(entity, 0x344, ReadFloat(record, 0x18) + 16.0f);
+        WriteFloat(entity, 0x340, record->position[0] + 224.0f);
+        WriteFloat(entity, 0x344, record->position[1] + 16.0f);
         *reinterpret_cast<u32 *>(entity + 0x348) =
-            *reinterpret_cast<const u32 *>(record + 0x1c);
-        if (ReadInt(record, 0x48) != 0) {
+            *reinterpret_cast<const u32 *>(&record->position[2]);
+        if (record->secondary_entity_id != 0) {
             u8 *const secondary =
                 FindEntityEdxStackAbi(g_MainChainRenderOwner,
-                                      static_cast<u32>(ReadInt(record,
-                                                               0x48)));
+                                      record->secondary_entity_id);
             if (secondary == 0) {
-                WriteInt(record, 0x48, 0);
+                record->secondary_entity_id = 0;
             } else {
                 WriteFloat(secondary, 0x340,
-                           ReadFloat(record, 0x14) + 224.0f);
+                           record->position[0] + 224.0f);
                 WriteFloat(secondary, 0x344,
-                           ReadFloat(record, 0x18) + 16.0f);
+                           record->position[1] + 16.0f);
                 *reinterpret_cast<u32 *>(secondary + 0x348) =
-                    *reinterpret_cast<const u32 *>(record + 0x1c);
+                    *reinterpret_cast<const u32 *>(&record->position[2]);
             }
         }
 
         if ((*reinterpret_cast<const u32 *>(entity + 0x35c) &
              0x08000000U) != 0) {
-            WriteFloat(entity, 0x2c, ReadFloat(record, 0x30));
+            WriteFloat(entity, 0x2c, record->angle);
             *reinterpret_cast<u32 *>(entity + 0x35c) |= 4;
         }
         AdvanceAge(record);

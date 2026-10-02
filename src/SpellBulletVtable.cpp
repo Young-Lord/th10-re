@@ -26,6 +26,7 @@
 #include "EntityHelpers.hpp"
 #include "LargeRenderOwnerLayout.hpp"
 #include "PlayerFrameworkHelpers.hpp"
+#include "PlayerRecord.hpp"
 #include "PlayerShotData.hpp"
 #include "ResultScreenState.hpp"
 #include "StageEffectHelpers.hpp"
@@ -460,8 +461,9 @@ i32 UpdateSpellCardStoryStateEcxAbi(void *base_memory)
     }
 
     if (LoadI32At(base, 0x3738U) >= 120) {
-        const float player_y = LoadFloatAt(
-            LoadPointerAt(0x477834U), 0x3c4U);
+        const float player_y =
+            (*reinterpret_cast<PlayerRecord *>(
+                LoadPointerAt(0x477834U))).position_y;
         if ((LoadU8At(base, 0x378cU) & 4U) == 0U) {
             // Phase A: any ordered comparison against 96 proceeds (only
             // NaN is rejected); mark state 3 and latch bit 2.

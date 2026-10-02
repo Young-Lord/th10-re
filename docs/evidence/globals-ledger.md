@@ -524,3 +524,21 @@ ABI 语法经验：__usercall 必须带返回位置注解（@<eax>），否则�
 - 全量编译 exit 0（228 obj）。
 
 剩余裸偏移热点：GameManager/各管理器槽位对象（0x6fc/0x3c8 族）、player 对象族、HUD owner（DAT_0047770c，0x89ac+ 布局）。
+
+## 第 5 轮:PlayerRecord / MainChainContext 字段化(2026-10-02)
+
+- 结构体:PlayerRecord 0x4478(DAT_00477834,内嵌 VmRecord@0x14、
+  PlayerShotRecord[128]@0x49c、PlayerOptionRecord[4]@0x32a0、
+  PlayerSubEffectRecord[32]@0x350c、4 个 TimerNode)、PlayerShotRecord 0x5c、
+  PlayerOptionRecord 0x98、PlayerSubEffectRecord 0x6c;MainChainContext 重声明
+  为 0x784 全布局(camera_work_bank[2]@0x154、anm_manager_work@0x3c8、
+  snapshot 区 0x50c..0x62c、ThreadControl@0x62c、state_locks[7]@0x64c、
+  background_vm_latch@0x6fc)。IDB 已同步(0x477834 → PlayerRecord*)。
+- 裁决:player shot 表基址 = +0x49c(0x00427e90 `a2+295` floats;0x00428630
+  游标 = record+0x44)。PlayerDamageOutput.cpp 旧 pass-1(+0x4a0 视图)整体
+  错位 0x10 且 fade/0.1f 两处张冠李戴,已按反编译修正;hit 回调与
+  IsTimerFrameMultiple 改传当前记录基址,handle 辅助传 &record.entity_id。
+- 改写:约 350 处,32 文件(slot 侧 8 文件 + player 侧 24 文件;PlayerDamageOutput
+  亲自修复)。全量构建 exit 0(229 obj)。证据:docs/evidence/player-record-layout.md。
+- 剩余热点:HUD owner(DAT_0047770c,~0x9ed0 布局)、0x2a78 title state、
+  ManagerWork/HUD 大对象、散点 gap 访问。

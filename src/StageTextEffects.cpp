@@ -11,6 +11,7 @@
 #include "CallbackScheduler.hpp"
 #include "MainChainRuntime.hpp"
 #include "ManagerReleaseWrappers.hpp"
+#include "PlayerRecord.hpp"
 
 namespace th10 {
 
@@ -228,11 +229,11 @@ void DrawTextEffectRecordsEdiAbi(void *owner)
 
         // Glyph size from the squared camera distance (NaN distances fall
         // through the native signed compares into the "small" 80 branch).
-        const u8 *const camera =
-            static_cast<const u8 *>(g_ScreenTargetBlock);
-        const float dx = LoadF32From(camera + 0x3c0U)
+        PlayerRecord &player =
+            *reinterpret_cast<PlayerRecord *>(g_ScreenTargetBlock);
+        const float dx = player.position_x
                        - LoadF32From(record + 0x0cU);
-        const float dy = LoadF32From(camera + 0x3c4U)
+        const float dy = player.position_y
                        - LoadF32From(record + 0x10U);
         const i32 distance = FloatToI32(dx * dx + dy * dy);
 
