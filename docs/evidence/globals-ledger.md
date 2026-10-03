@@ -625,3 +625,30 @@ ABI 语法经验：__usercall 必须带返回位置注解（@<eax>），否则�
   A/B 0xd58/0xd74(0x47781c)、bullet record 0x3f0×2198(0x477818)、spell/
   bullet base 0x4776f4、frame-state 0x474c40 族、score-save 0x47783c、hint
   tip 0x88、MIDI/replay-reuse/0x477838 等。
+
+## 第 10 轮:EclScriptObject 0x2518 字段化 + IDB 类型库重建(2026-10-03)
+
+- 环境变更:/tmp/th10ref.exe.i64 丢失(tmp 清理),IDA 会话 th10ref 改绑项目内
+  resources/th10.exe.i64(该库为早期快照)。已用脚本从 src/*.hpp 机械重建
+  全部 75 个结构体声明并重绑 12 个全局(0x4776ec..0x47784c)。
+- 结构体:EclScriptObject 0x2518(vtable 0x46d0c0;+0x10..0x100f 为 dispatcher
+  scratch、VmRecord 命名不适用)+ EclScriptWork 0x14d8(@+0x103c;工作块[11]、
+  base_pos@+0x2c=rec+0x1068、双 motion anchor、published_ids[10]、
+  六个缓动块 vec3×0x4c/vec2×0x3c、command_slots[8][0x210]、hp@0x13c0、
+  death_score@0x13bc、kind@0x13cc、flags@0x1444、published_id_index@0x1450
+  无界、request_slots[8][16])+ EclVec3AnimBlock 0x4c / EclVec2AnimBlock
+  0x3c。IDB 已声明四个类型(0x40cfb0/0x40dc80 加注释)。
+- bug 修复:①死亡分读取 rec+0x13c8(dispatcher scratch,从未写入)→
+  work.death_score_13bc(原生 0x40e23d);②"script manager"@rec+0x14d8 实为
+  self_2514,+0x2404 读经 0x43dd10 仲裁;③AsciiHudGameplayUpdate 子链头
+  双解引用→单解引用(0x415213);④0x40d750 遍历先取 next 再运行记录
+  (0x40d76c 顺序,防自拆记录破坏遍历);⑤列表节点注释角色纠正。
+- 改写:约 290 处,7 文件(EclScriptLibrary ~200、EclEasedTransforms ~60、
+  AsciiHudGameplayUpdate ~25、PlayerShotHoming 5、teardown/subrecords 等)。
+  全量构建 exit 0(232 obj)。
+- 采证完成待结构体化(下一轮):stage-object manager 0x45c(0x47781c)+ 两种
+  stage 对象 0xd58/0xd74(kSobOff* 全验证;B 种活参数在描述符镜像内)、
+  bullet manager 0x21cec0(0x477818;第三个计数器 +0x21ceb8 = kind-8 环游标;
+  spawner 0x41bb00;slot 0x3f0 全图)。TitleBulletUpdate KillPendingBullets
+  注释 +0x30/+0x34 → +0x3dc/+0x3e0 待改。
+  证据:docs/evidence/ecl-script-object-stage-bullet.md。

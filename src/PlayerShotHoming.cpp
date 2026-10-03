@@ -11,6 +11,7 @@
 // callback with ECX = player and EDX = record.
 #include <cmath>
 
+#include "EclScriptObject.hpp"
 #include "PlayerMotionHelpers.hpp"
 #include "PlayerRecord.hpp"
 #include "PlayerShotHoming.hpp"
@@ -18,18 +19,6 @@
 namespace th10 {
 
 namespace {
-
-inline u32 LoadU32At(const void *base, u32 offset)
-{
-    return *reinterpret_cast<const u32 *>(
-        static_cast<const u8 *>(base) + offset);
-}
-
-inline float LoadF32At(const void *base, u32 offset)
-{
-    return *reinterpret_cast<const float *>(
-        static_cast<const u8 *>(base) + offset);
-}
 
 const float k_pi = 3.14159274f;        // 0x470b18
 const float k_two_pi = 6.28318548f;    // 0x470b14
@@ -43,9 +32,10 @@ const float k_straight_angle = 0.2617994f; // 0x470c3c (pi/12, bits 0x3E860A92)
 const float k_quarter_turn = 0.7853982f;  // 0x470c48 (pi/4)
 const u32 k_homing_age_gate = 0x78U;   // 120 frames
 
-const u32 k_target_flags_offset = 0x2480U;
-const u32 k_target_x_offset = 0x1068U;
-const u32 k_target_y_offset = 0x106cU;
+// The homing target is the ECL script object record itself: the record
+// publishes its +0x14d8 self slot into player+0x3504 (0x40e42b), so the
+// target offsets are work fields (record+0x2480 = work.flags_1444,
+// record+0x1068/0x106c = work.base_pos_002c[0]/[1]).
 
 bool IsFloatUnordered(float left, float right)
 {
@@ -77,7 +67,9 @@ void AcquireHomingTargetEcxEdxStackAbi(void *player, void *shot_record)
         return;
 
     shot.homing_target = target;
-    const float target_x = LoadF32At(target, k_target_x_offset);
+    // record+0x1068 = work.base_pos_002c[0].
+    EclScriptObject &target_record = *static_cast<EclScriptObject *>(target);
+    const float target_x = target_record.work.base_pos_002c[0];
     // |x| > 224 ordered drops the target; a NaN comparison keeps it
     // (the native jne is taken on the unordered flags).
     if (target_x > k_target_limit_x || target_x < -k_target_limit_x)
@@ -92,11 +84,13 @@ i32 TickHomingShotMovementEdxAbi(void *shot_record)
     if (shot.state == 2U)
         return 0;
 
-    // Drop the target once its flag dword shows bits 0x1/0x10 or
-    // 0xc0000 (dead / untouchable states).
+    // Drop the target once its flag dword (work.flags_1444 at
+    // record+0x2480) shows bits 0x1/0x10 or 0xc0000 (dead / untouchable
+    // states).
     void *target = shot.homing_target;
     if (target != 0U) {
-        const u32 flags = LoadU32At(target, k_target_flags_offset);
+        const u32 flags =
+            static_cast<EclScriptObject *>(target)->work.flags_1444;
         if ((flags & 0x11U) != 0U || (flags & 0xc0000U) != 0U)
             shot.homing_target = 0;
     }
@@ -111,11 +105,12 @@ i32 TickHomingShotMovementEdxAbi(void *shot_record)
         return 0;
     }
 
-    const u8 *const target_bytes = reinterpret_cast<const u8 *>(target);
+    // record+0x1068/0x106c = work.base_pos_002c[0]/[1].
+    EclScriptObject &target_record = *static_cast<EclScriptObject *>(target);
     const float direction = static_cast<float>(std::atan2(
-        static_cast<double>(LoadF32At(target_bytes, k_target_y_offset)
+        static_cast<double>(target_record.work.base_pos_002c[1]
                             - shot.position[1]),
-        static_cast<double>(LoadF32At(target_bytes, k_target_x_offset)
+        static_cast<double>(target_record.work.base_pos_002c[0]
                             - shot.position[0])));
     const float delta = WrapAngleDeltaStackAbi(direction, shot.angle);
 

@@ -2,6 +2,7 @@
 
 #include "ConditionalStateObject.hpp"
 #include "EclScriptLibrary.hpp"
+#include "EclScriptObject.hpp"
 #include "VmLeafHelpers.hpp"
 
 #include <cmath>
@@ -156,22 +157,25 @@ i32 ScaleIntComponent(i32 component, float weight)
 // +0x204) and clears bit 0 of the two trailing state dwords.
 void ResetEclSubObjectFlags(void *sub_memory)
 {
-    u8 *sub = static_cast<u8 *>(sub_memory);
-    const u32 flag_offsets[7] = {
-        0x12cU, 0x17cU, 0x1c8U, 0x204U, 0x240U, 0x27cU, 0x2b8U
-    };
-    for (u32 index = 0; index != 7U; ++index) {
-        const u32 offset = flag_offsets[index];
-        StoreU32(sub, offset, LoadU32(sub, offset) & 0xfffffffeU);
-    }
+    EclScriptWork &work = *static_cast<EclScriptWork *>(sub_memory);
+    // The seven per-tick flag dwords: the frame-tail timer first, then the
+    // six eased-anim blocks (vec3 pair, then the four vec2 blocks in the
+    // A0/A1/A2/A3 order).
+    work.frame_tail_011c.flags &= 0xfffffffeU; // sub+0x12c
+    work.vec3_a_013c.flags &= 0xfffffffeU;     // sub+0x17c
+    work.vec3_b_0188.flags &= 0xfffffffeU;     // sub+0x1c8
+    work.vec2_a0_01d4.flags &= 0xfffffffeU;    // sub+0x204
+    work.vec2_a1_0210.flags &= 0xfffffffeU;    // sub+0x240
+    work.vec2_a2_024c.flags &= 0xfffffffeU;    // sub+0x27c
+    work.vec2_a3_0288.flags &= 0xfffffffeU;    // sub+0x2b8
     for (u32 block = 0; block != 8U; ++block) {
-        u8 *slot = sub + 0x2c4U + block * 0x210U;
+        u8 *slot = work.command_slots_02c4[block];
         for (u32 index = 0; index != 0x210U; ++index)
             slot[index] = 0;
-        StoreU32(slot, 0x204U, 0xffffffffU);
+        StoreU32(slot, 0x204U, 0xffffffffU); // per-slot pending marker
     }
-    StoreU32(sub, 0x142cU, LoadU32(sub, 0x142cU) & 0xfffffffeU);
-    StoreU32(sub, 0x1440U, LoadU32(sub, 0x1440U) & 0xfffffffeU);
+    work.shift_timer_a_141c.flags &= 0xfffffffeU; // sub+0x142c
+    work.shift_timer_b_1430.flags &= 0xfffffffeU; // sub+0x1440
 }
 
 // Ribbon texture-coordinate scroll: the triggered accumulator takes the
@@ -383,73 +387,106 @@ void *TickScaleInterpolationEsiEdiAbi(void *block_memory, float out_xy[2])
 // the record; returns the record in EAX.
 void *ConstructEclScriptObjectEsiStackAbi(void *record_memory, i32 ctor_arg)
 {
-    u8 *const record = static_cast<u8 *>(record_memory);
+    EclScriptObject &obj = *static_cast<EclScriptObject *>(record_memory);
+    EclScriptWork &work = obj.work;
 
-    StoreU32(record, 0U, 0x46d0c0U); // vtable
-    StoreU32(record, 0x1010U, 0U);
-    StoreU32(record, 0x1014U, 0U);
-    ResetEclSubObjectFlags(record + 0x103cU);
-    // Zero the whole tail (0x537 dwords from +0x103c to the 0x2518 end);
-    // this runs after the sub-record reset and overwrites its -1 markers.
+    obj.vtable_0000 = reinterpret_cast<void *>(0x46d0c0U); // vtable
+    obj.field_1010 = 0;
+    obj.field_1014 = 0;
+    ResetEclSubObjectFlags(&work);
+    // Zero the whole tail (0x537 dwords from +0x103c to the 0x2518 end,
+    // i.e. the working sub-record plus the +0x2514 self slot); this runs
+    // after the sub-record reset and overwrites its -1 markers.
+    u32 *const tail_zero = reinterpret_cast<u32 *>(&work);
     for (u32 index = 0; index != 0x537U; ++index)
-        StoreU32(record, 0x103cU + index * 4U, 0U);
+        tail_zero[index] = 0;
 
-    StoreU32(record, 8U, 0U);
-    StoreU32(record, 0xcU, 0U);
-    StoreU32(record, 0x101cU, reinterpret_cast<u32>(record));
-    StoreU32(record, 0x1028U, LoadU32(record, 0x1028U) & 0xfffffffeU);
-    StoreU32(record, 0x1020U, 0U);
-    StoreU32(record, 4U, reinterpret_cast<u32>(record + 8U));
-    StoreU32(record, 0x1018U, static_cast<u32>(-1));
-    StoreU32(record, 0x1030U, reinterpret_cast<u32>(record + 8U));
-    StoreU32(record, 0x1034U, 0U);
-    StoreU32(record, 0x1038U, 0U);
-    StoreU32(record, 0x2514U, reinterpret_cast<u32>(record));
-    StoreU32(record, 0x11bcU, 0U);
-    StoreU32(record, 0x1208U, 0U);
-    StoreU32(record, 0x1244U, 0U);
-    StoreU32(record, 0x1280U, 0U);
-    StoreU32(record, 0x12bcU, 0U);
-    StoreU32(record, 0x12f8U, 0U);
-    for (u32 index = 0; index != 11U; ++index) {
-        StoreU32(record, 0x10c0U + index * 4U, 0U);
-        StoreU32(record, 0x1094U + index * 4U, 0U);
-        StoreU32(record, 0x1068U + index * 4U, 0U);
-    }
-    for (u32 index = 0; index != 4U; ++index)
-        StoreF32(record, 0x10ecU + index * 4U, 24.0f); // 0x41c00000
-    StoreU32(record, 0x248cU, static_cast<u32>(-1));
-    // Embedded list node at +0x116c: next points at the record itself,
-    // prev is null.
-    StoreU32(record, 0x116cU, reinterpret_cast<u32>(record));
-    StoreU32(record, 0x1170U, 0U);
-    StoreU32(record, 0x1174U, 0U);
-    for (u32 index = 0; index != 15U; ++index)
-        StoreU32(record, 0x2408U + index * 4U, 0U);
-    StoreF32(record, 0x243cU, 32.0f); // 0x42000000
-    StoreF32(record, 0x2440U, 32.0f);
+    obj.bind_node_0008 = 0;
+    obj.script_table_id_000c = 0;
+    obj.self_101c = &obj;
+    obj.flags_1028 &= 0xfffffffeU;
+    obj.field_1020 = 0;
+    obj.bind_node_self_0004 = &obj.bind_node_0008;
+    obj.sentinel_1018 = -1;
+    obj.bind_node_ptr_1030 = &obj.bind_node_0008;
+    obj.alloc_list_1034 = 0;
+    obj.field_1038 = 0;
+    obj.self_2514 = &obj;
 
-    // Three animation tails {prev, timer, accumulator, rate, flags} at
-    // +0x1158, +0x2458 and +0x246c. Each takes the one-time init behind
-    // flag bit 0 (poison prev, zero timer/accumulator, rate = 1.0f) and
-    // then the unconditional stopped-state arm with prev = -1.
-    const u32 tail_bases[3] = { 0x1158U, 0x2458U, 0x246cU };
+    // Disarm the six eased-anim blocks (each block's arm dword is its
+    // duration: work+0x180/0x1cc/0x208/0x244/0x280/0x2bc).
+    work.vec3_a_013c.duration = 0;
+    work.vec3_b_0188.duration = 0;
+    work.vec2_a0_01d4.duration = 0;
+    work.vec2_a1_0210.duration = 0;
+    work.vec2_a2_024c.duration = 0;
+    work.vec2_a3_0288.duration = 0;
+
+    // The native zeroes three 11-dword runs covering the base block
+    // (sub+0x2c), the anchor1 block (sub+0x58) and the anchor2 block
+    // (sub+0x84); each run ends with the polar-mode flags byte plus its
+    // 3-byte gap dword.
     for (u32 index = 0; index != 3U; ++index) {
-        const u32 base = tail_bases[index];
-        const u32 flags_offset = base + 0x10U;
-        u32 flags = LoadU32(record, flags_offset);
-        if ((flags & 1U) == 0U) {
-            flags |= 1U;
-            StoreU32(record, base + 4U, 0U); // timer
-            StoreU32(record, base, static_cast<u32>(kTimerPoison));
-            StoreU32(record, base + 8U, 0U); // accumulator
-            *reinterpret_cast<const float **>(record + base + 0xcU) =
-                &g_FrameTimeScale; // &flt_476F78
-            StoreU32(record, flags_offset, flags);
+        work.base_pos_002c[index] = 0.0f;
+        work.base_velocity_0038[index] = 0.0f;
+    }
+    u32 *const base_gap = reinterpret_cast<u32 *>(work.unknown_0044);
+    for (u32 index = 0; index != 5U; ++index)
+        base_gap[index] = 0;
+    for (u32 index = 0; index != 3U; ++index) {
+        work.anchor1_pos_0058[index] = 0.0f;
+        work.anchor1_delta_0064[index] = 0.0f;
+    }
+    work.anchor1_radius_0070 = 0;
+    work.anchor1_angle_0074 = 0.0f;
+    work.anchor1_radius2_0078 = 0;
+    work.anchor1_angle2_007c = 0.0f;
+    *reinterpret_cast<u32 *>(&work.anchor1_flags_0080) = 0;
+    for (u32 index = 0; index != 3U; ++index) {
+        work.anchor2_pos_0084[index] = 0.0f;
+        work.anchor2_delta_0090[index] = 0.0f;
+    }
+    work.anchor2_radius_009c = 0;
+    work.anchor2_angle_00a0 = 0.0f;
+    work.anchor2_radius2_00a4 = 0;
+    work.anchor2_angle2_00a8 = 0.0f;
+    *reinterpret_cast<u32 *>(&work.anchor2_flags_00ac) = 0;
+    for (u32 index = 0; index != 4U; ++index)
+        work.hitbox_params_00b0[index] = 24.0f; // 0x41c00000
+    work.published_id_index_1450 = -1;
+    // Embedded list node (work+0x130 = record+0x116c): list_self_0130 is
+    // the back-pointer to the record itself; list_next_0134 and
+    // list_prev_0138 are null.
+    work.list_self_0130 = &obj;
+    work.list_next_0134 = 0;
+    work.list_prev_0138 = 0;
+    work.kind_13cc = 0;
+    u32 *const kind_gap = reinterpret_cast<u32 *>(work.unknown_13d0);
+    for (u32 index = 0; index != 12U; ++index)
+        kind_gap[index] = 0;
+    work.sprite_size_1400[0] = 32.0f; // 0x42000000
+    work.sprite_size_1400[1] = 32.0f;
+
+    // Three timer tails: frame_tail_011c (record+0x1158), shift_timer_a
+    // (+0x2458) and shift_timer_b (+0x246c). Each takes the one-time init
+    // behind flag bit 0 (poison prev, zero timer/accumulator, rate =
+    // 1.0f) and then the unconditional stopped-state arm with prev = -1.
+    TimerNode *const tails[3] = {
+        &work.frame_tail_011c,
+        &work.shift_timer_a_141c,
+        &work.shift_timer_b_1430,
+    };
+    for (u32 index = 0; index != 3U; ++index) {
+        TimerNode &tail_timer = *tails[index];
+        if ((tail_timer.flags & 1U) == 0U) {
+            tail_timer.flags |= 1U;
+            tail_timer.count = 0;
+            tail_timer.prev = kTimerPoison;
+            tail_timer.rate = &g_FrameTimeScale; // &flt_476F78
         }
-        StoreU32(record, base + 4U, 0U);
-        StoreU32(record, base + 8U, 0U);
-        StoreU32(record, base, static_cast<u32>(-1));
+        tail_timer.count = 0;
+        tail_timer.accum = 0;
+        tail_timer.prev = -1;
     }
 
     // Presentation slot from the HUD conditional state: the native reads
@@ -458,23 +495,23 @@ void *ConstructEclScriptObjectEsiStackAbi(void *record_memory, i32 ctor_arg)
     // null at +0).
     ConditionalState *const conditional_state =
         static_cast<ConditionalState *>(g_AsciiHudConditionalState);
-    StoreU32(record, 0x102cU,
-             reinterpret_cast<u32>(conditional_state->name_registry_0054));
+    obj.name_registry_102c = conditional_state->name_registry_0054;
     const i32 table_id = ResolveScriptTableIndexEaxAbi(ctor_arg);
-    StoreU32(record, 0xcU, static_cast<u32>(table_id));
-    StoreU32(record, 8U, 0U);
-    StoreU32(record, 0x23fcU, 0U);
-    StoreU32(record, 0x2400U, 0U);
-    StoreU32(record, 0x2404U, 0U);
+    obj.script_table_id_000c = table_id;
+    obj.bind_node_0008 = 0;
+    work.hp_13c0 = 0;
+    work.unknown_13c4 = 0;
+    work.unknown_13c8 = 0;
 
-    // Eight {-1, -1, 0} triples from +0x2494 at a 0x10 stride.
+    // Eight {-1, -1, 0} triples from +0x2494 at a 0x10 stride (the request
+    // slots; the trailing 4 bytes of each 16-byte slot stay untouched).
     for (u32 index = 0; index != 8U; ++index) {
-        const u32 base = 0x2494U + index * 0x10U;
-        StoreU32(record, base, static_cast<u32>(-1));
-        StoreU32(record, base + 4U, static_cast<u32>(-1));
-        StoreU32(record, base + 8U, 0U);
+        u8 *const slot = work.request_slots_1458[index];
+        StoreU32(slot, 0U, static_cast<u32>(-1));
+        StoreU32(slot, 4U, static_cast<u32>(-1));
+        StoreU32(slot, 8U, 0U);
     }
-    return record;
+    return &obj;
 }
 
 // FUNCTION: TH10 0x00445620

@@ -1,6 +1,7 @@
 #include "EclScriptLibrary.hpp"
 
 #include "AsciiHudOwner.hpp"
+#include "EclScriptObject.hpp"
 #include "EclScriptVm.hpp"
 #include "EntityHelpers.hpp"
 #include "GameContext.hpp"
@@ -45,14 +46,17 @@ u32 LoadU32(const u8 *record, u32 offset)
          | (static_cast<u32>(record[offset + 3]) << 24);
 }
 
-// Replaces one bit in the +0x2480 flag dword with an incoming bit.
-void ReplaceFlagBit(u8 *record, u32 bit, u32 incoming)
+// Replaces one bit in the ECL script object's flags_1444 dword (the native
+// reads the flag dword at record+0x2480 and rewrites it whole).
+void ReplaceWorkFlagBit(EclScriptWork &work, u32 bit, u32 incoming)
 {
-    const u32 flags = LoadU32(record, 0x2480U);
-    StoreU32(record, 0x2480U, (flags & ~bit) | (incoming ? bit : 0U));
+    const u32 flags = work.flags_1444;
+    work.flags_1444 = (flags & ~bit) | (incoming ? bit : 0U);
 }
 
-// Float/int helpers over the same little-endian byte layout.
+// Float/int helpers over the same little-endian byte layout (kept for the
+// byte-level record images that stay RAW: script-manager slots, entity
+// records, owner lists).
 void StoreF32(u8 *record, u32 offset, float value)
 {
     StoreU32(record, offset,
@@ -80,16 +84,13 @@ void StoreI32(u8 *record, u32 offset, i32 value)
     StoreU32(record, offset, static_cast<u32>(value));
 }
 
-// ECL script object field offsets are relative to the +0x103c sub-record
-// passed to RunEclScriptSetupStackAbi (native callers push record+0x103c:
-// 0x40d0b3 and 0x40d771); this helper dereferences a pointer
-// field of that sub-record.
 void StoreU16(u8 *record, u32 offset, u16 value)
 {
     record[offset] = static_cast<u8>(value);
     record[offset + 1] = static_cast<u8>(value >> 8);
 }
 
+// Dereferences a pointer field stored at `offset` of a raw record image.
 u8 *LoadPointer(const u8 *record, u32 offset)
 {
     return reinterpret_cast<u8 *>(LoadU32(record, offset));
@@ -132,10 +133,11 @@ void RebindEntitySlotEaxStackAbi(u32 *id_slot, u32 new_id);
 i32 CollectItemCollisionsStackAbi(void *item_records, const float *position,
                                   const float *size);
 
-// TH10 0x004127a0. Native ECX (this) = script manager. Pops the next
-// pending script-name request (see the body below); implemented at the end
-// of this file.
-i32 AcquireScriptNameRequestThisAbi(void *script_manager);
+// TH10 0x004127a0. Native __thiscall ECX = the ECL script object record
+// itself (0x40dc80 loads ECX from record+0x2514, the ctor-planted self
+// handle). Pops the next pending script-name request (see the body below);
+// implemented at the end of this file.
+i32 AcquireScriptNameRequestThisAbi(EclScriptObject &obj);
 
 // TH10 0x0040c6e0 / 0x0040c730. Native EAX = script manager; paired update
 // steps around the script bind.
@@ -185,101 +187,108 @@ void *CreateEclScriptObjectEaxStackAbi(const u32 *descriptor,
     }
 
     // The native keeps writing through the (possibly null) record.
-    StoreU32(record, 0x1094U, descriptor[0]);
-    StoreU32(record, 0x1098U, descriptor[1]);
-    StoreU32(record, 0x109cU, descriptor[2]);
-    StoreU32(record, 0x23f8U, descriptor[3]);
-    StoreU32(record, 0x23fcU, descriptor[5]);
-    StoreU32(record, 0x2408U, descriptor[4]);
-    ReplaceFlagBit(record, 0x800U, descriptor[6] & 1U);
+    EclScriptObject &obj = *reinterpret_cast<EclScriptObject *>(record);
+    EclScriptWork &work = obj.work;
+
+    // Creator descriptor dwords 0..2 -> anchor1 position (record+0x1094).
+    work.anchor1_pos_0058[0] = *reinterpret_cast<const float *>(&descriptor[0]);
+    work.anchor1_pos_0058[1] = *reinterpret_cast<const float *>(&descriptor[1]);
+    work.anchor1_pos_0058[2] = *reinterpret_cast<const float *>(&descriptor[2]);
+    work.death_score_13bc = static_cast<i32>(descriptor[3]);   // +0x23f8
+    work.hp_13c0 = static_cast<i32>(descriptor[5]);            // +0x23fc
+    work.kind_13cc = static_cast<i32>(descriptor[4]);          // +0x2408
+    ReplaceWorkFlagBit(work, 0x800U, descriptor[6] & 1U);      // +0x2480
 
     const u32 difficulty = ReadGlobalU32(k_difficulty_index);
-    record[0x1024U] = static_cast<u8>(1U << difficulty);
+    obj.difficulty_mask_1024 = static_cast<u8>(1U << difficulty);
 
-    for (u32 i = 0; i < 0x20U; ++i) {
-        record[0x1138U + i] =
-            reinterpret_cast<const u8 *>(descriptor + 8)[i];
+    // 0x20 bytes at descriptor+0x20 -> work.descriptor_vars_00fc[8]
+    // (record+0x1138; the ECL variables -9985..-9978).
+    for (u32 i = 0; i != 8U; ++i)
+        work.descriptor_vars_00fc[i] = descriptor[8U + i];
+
+    // Shift-timer A (= the score-anim block, record+0x2458..0x246c):
+    // initialize once (TimerNode flag bit 0), then unconditionally arm it
+    // with count 2 and the 2.0f accumulator.
+    if ((work.shift_timer_a_141c.flags & 1U) == 0U) {
+        work.shift_timer_a_141c.count = 0;
+        work.shift_timer_a_141c.prev = static_cast<i32>(-999999);
+        work.shift_timer_a_141c.accum = 0;
+        work.shift_timer_a_141c.rate =
+            reinterpret_cast<const float *>(0x476f78U); // &flt_476F78
+        work.shift_timer_a_141c.flags |= 1U;
     }
+    work.shift_timer_a_141c.count = 2;
+    work.shift_timer_a_141c.accum = static_cast<i32>(0x40000000U); // 2.0f
+    work.shift_timer_a_141c.prev = 1;
 
-    // Score-anim block: initialize once (flag bit 0 at +0x2468), then
-    // unconditionally arm it with mode 2 and the 2.0f rate.
-    const u32 anim_state = LoadU32(record, 0x2468U);
-    if ((anim_state & 1U) == 0U) {
-        StoreU32(record, 0x245cU, 0U);
-        StoreU32(record, 0x2458U, static_cast<u32>(-999999));
-        StoreU32(record, 0x2460U, 0U);
-        StoreU32(record, 0x2464U, 0x476f78U); // &flt_476F78
-        StoreU32(record, 0x2468U, anim_state | 1U);
-    }
-    StoreU32(record, 0x245cU, 2U);
-    StoreU32(record, 0x2460U, 0x40000000U);
-    StoreU32(record, 0x2458U, 1U);
+    ReplaceWorkFlagBit(work, 0x40000U, descriptor[7] & 1U);
 
-    ReplaceFlagBit(record, 0x40000U, descriptor[7] & 1U);
+    RunEclScriptSetupStackAbi(&work);
 
-    RunEclScriptSetupStackAbi(record + 0x103cU);
-
-    // Bit 0x8000 of the flag dword remaps the +0x2408 kind (1 -> 10,
-    // 4 -> 11).
-    if ((LoadU32(record, 0x2480U) & 0x8000U) != 0U) {
-        u32 kind = LoadU32(record, 0x2408U);
+    // Bit 0x8000 of flags_1444 remaps the kind (1 -> 10, 4 -> 11).
+    if ((work.flags_1444 & 0x8000U) != 0U) {
+        u32 kind = static_cast<u32>(work.kind_13cc);
         if (kind == 1U) {
             kind = 10U;
         } else if (kind == 4U) {
             kind = 11U;
         }
-        StoreU32(record, 0x2408U, kind);
+        work.kind_13cc = static_cast<i32>(kind);
     }
 
     // Presentation pair: par-count kind from the owner list parity and a
     // per-file accent value driven by the descriptor's embedded kind pair
-    // (only when record+0x1128 == 1).
+    // (only when the mode gate == 1).
     u8 *const owner = static_cast<u8 *>(list_owner);
-    StoreU32(record, 0x2444U,
-             (LoadU32(owner, 0x64U) & 1U) + 2U);
-    StoreU32(record, 0x2448U, 359U);
-    if (LoadU32(record, 0x1128U) == 1U) {
-        switch (LoadU32(record, 0x112cU)) {
+    work.layer_variant_1408 =
+        static_cast<i32>((LoadU32(owner, 0x64U) & 1U) + 2U);
+    work.table_value_140c = 359;
+    if (work.mode_gate_00ec == 1) {
+        switch (static_cast<u32>(work.sub_mode_00f0)) {
         case 0x00U:
         case 0x14U:
         case 0x31U:
-            StoreU32(record, 0x2448U, 359U);
+            work.table_value_140c = 359;
             break;
         case 0x05U:
         case 0x19U:
         case 0x32U:
-            StoreU32(record, 0x2448U, 356U);
+            work.table_value_140c = 356;
             break;
         case 0x0aU:
         case 0x1eU:
         case 0x33U:
-            StoreU32(record, 0x2448U, 362U);
+            work.table_value_140c = 362;
             break;
         case 0x0fU:
         case 0x23U:
-            StoreU32(record, 0x2448U, 365U);
+            work.table_value_140c = 365;
             break;
         default:
             break;
         }
     }
-    StoreU32(record, 0x244cU, 0U);
+    work.resource_index_1410 = 0;
 
-    // Append the embedded list node (record+0x116c; next at +0x1170, prev
-    // at +0x1174) after the owner's current last node.
-    u8 *const node = record + 0x116cU;
+    // Append the embedded list node (work.list_self_0130 / list_next_0134 /
+    // list_prev_0138; record+0x116c, next at +0x1170, prev at +0x1174) after
+    // the owner's current last node.
+    void *const node = &work.list_self_0130;
     const u32 head = LoadU32(owner, 0x58U);
     if (head != 0U) {
         const u32 last = LoadU32(owner, 0x5cU);
+        // `last` / `last_next` are foreign embedded list nodes (raw next at
+        // node+4, prev at node+8), so their fields stay RAW.
         const u32 last_next = LoadU32(reinterpret_cast<const u8 *>(last), 4U);
         if (last_next != 0U) {
-            StoreU32(node, 4U, last_next);
+            work.list_next_0134 = reinterpret_cast<void *>(last_next);
             StoreU32(reinterpret_cast<u8 *>(last_next), 8U,
                      reinterpret_cast<u32>(node));
         }
         StoreU32(reinterpret_cast<u8 *>(last), 4U,
                  reinterpret_cast<u32>(node));
-        StoreU32(node, 8U, last);
+        work.list_prev_0138 = reinterpret_cast<void *>(last);
     } else {
         StoreU32(owner, 0x58U, reinterpret_cast<u32>(node));
     }
@@ -293,148 +302,179 @@ void *CreateEclScriptObjectEaxStackAbi(const u32 *descriptor,
 // FUNCTION: TH10 0x0040dc80
 // Native ABI: one stack argument (ret 4) = the +0x103c sub-record of an ECL
 // script object (both native callers push record+0x103c: 0x40d0b3 and
-// 0x40d771). All offsets below are relative to that sub-record ("rec").
+// 0x40d771), modeled here as the typed th10::EclScriptWork view ("work").
 // Motion blocks follow the shared {pos xyz @0, vel xyz @0xc, radius @0x18,
 // angle @0x1c, flags @0x28} layout used by IntegrateSubEffectPositionEsiAbi.
 i32 RunEclScriptSetupStackAbi(void *sub_record)
 {
     u8 *const rec = static_cast<u8 *>(sub_record);
+    EclScriptWork &work = *reinterpret_cast<EclScriptWork *>(rec);
 
-    // Run gate: bit 0x400 of +0x1444. A second invocation is a no-op that
+    // Run gate: bit 0x400 of flags_1444. A second invocation is a no-op that
     // returns 0; otherwise the bit is armed before anything else runs.
-    u32 flags = LoadU32(rec, 0x1444U);
+    u32 flags = work.flags_1444;
     if ((flags & 0x400U) != 0U)
         return 0;
-    StoreU32(rec, 0x1444U, flags | 0x400U);
+    work.flags_1444 = flags | 0x400U;
     flags |= 0x400U;
 
-    // Refresh the working block (rec+0x00, 0x2c bytes) from the base block
-    // at +0x2c before any animation output is applied.
+    // Refresh the working block (working_block_0000, 0x2c bytes) from the
+    // base block at base_pos_002c (+0x2c; qmemcpy 0x2c @0x40dcbb) before any
+    // animation output is applied.
+    u8 *const working_block = reinterpret_cast<u8 *>(work.working_block_0000);
+    const u8 *const base_block =
+        reinterpret_cast<const u8 *>(work.base_pos_002c);
     for (u32 i = 0; i < 0x2cU; ++i)
-        rec[i] = rec[0x2cU + i];
+        working_block[i] = base_block[i];
 
-    // Four 0x3c-byte vec2 animation blocks, armed by the duration dword at
-    // +0x34 of each (stride 0x3c):
-    //   A0 +0x1d4, A1 +0x210, A2 +0x24c, A3 +0x288. Outputs:
-    //   A0 -> angle at +0x74 (wrapped), slope at +0x70
-    //   A1 -> angle at +0xa0 (wrapped), slope at +0x9c
-    //   A2 -> radius slope at +0x78 / +0x7c (direct pair)
-    //   A3 -> radius slope at +0xa4 / +0xa8 (direct pair)
+    // Four 0x3c-byte vec2 animation blocks, armed by their duration dword:
+    //   vec2_a0_01d4 -> anchor1_angle_0074 (wrapped) / anchor1_radius_0070
+    //   vec2_a2_024c -> anchor1_radius2_0078 / anchor1_angle2_007c (direct)
+    //   vec2_a1_0210 -> anchor2_angle_00a0 (wrapped) / anchor2_radius_009c
+    //   vec2_a3_0288 -> anchor2_radius2_00a4 / anchor2_angle2_00a8 (direct)
     float anim_out[2];
-    if (LoadU32(rec, 0x208U) != 0U) {
-        TickVec2AnimInterpolator(anim_out, rec + 0x1d4U);
-        StoreF32(rec, 0x74U, WrapAngleToPi(anim_out[0]));
-        StoreF32(rec, 0x70U, anim_out[1]);
+    if (work.vec2_a0_01d4.duration != 0) {
+        TickVec2AnimInterpolator(anim_out, &work.vec2_a0_01d4);
+        work.anchor1_angle_0074 = WrapAngleToPi(anim_out[0]);
+        work.anchor1_radius_0070 =
+            *reinterpret_cast<const i32 *>(&anim_out[1]);
     }
-    if (LoadU32(rec, 0x280U) != 0U) {
-        TickVec2AnimInterpolator(anim_out, rec + 0x24cU);
-        StoreF32(rec, 0x78U, anim_out[0]);
-        StoreF32(rec, 0x7cU, anim_out[1]);
+    if (work.vec2_a2_024c.duration != 0) {
+        TickVec2AnimInterpolator(anim_out, &work.vec2_a2_024c);
+        work.anchor1_radius2_0078 =
+            *reinterpret_cast<const i32 *>(&anim_out[0]);
+        work.anchor1_angle2_007c = anim_out[1];
     }
-    if (LoadU32(rec, 0x244U) != 0U) {
-        TickVec2AnimInterpolator(anim_out, rec + 0x210U);
-        StoreF32(rec, 0xa0U, WrapAngleToPi(anim_out[0]));
-        StoreF32(rec, 0x9cU, anim_out[1]);
+    if (work.vec2_a1_0210.duration != 0) {
+        TickVec2AnimInterpolator(anim_out, &work.vec2_a1_0210);
+        work.anchor2_angle_00a0 = WrapAngleToPi(anim_out[0]);
+        work.anchor2_radius_009c =
+            *reinterpret_cast<const i32 *>(&anim_out[1]);
     }
-    if (LoadU32(rec, 0x2bcU) != 0U) {
-        TickVec2AnimInterpolator(anim_out, rec + 0x288U);
-        StoreF32(rec, 0xa4U, anim_out[0]);
-        StoreF32(rec, 0xa8U, anim_out[1]);
-    }
-
-    // Motion block 1 (pos +0x58, vel +0x64, radius +0x70, angle +0x74,
-    // flags +0x80). Velocity source: a vec3 animation at +0x13c (armed by
-    // +0x180) yielding a target position, else the radius/angle pair.
-    if (LoadU32(rec, 0x180U) != 0U) {
-        float target[3];
-        TickVec3Interpolator(rec + 0x13cU, target);
-        StoreF32(rec, 0x64U, target[0] - LoadF32(rec, 0x58U));
-        StoreF32(rec, 0x68U, target[1] - LoadF32(rec, 0x5cU));
-        StoreF32(rec, 0x6cU, target[2] - LoadF32(rec, 0x60U));
-    } else if ((LoadU32(rec, 0x80U) & 1U) != 0U) {
-        StoreF32(rec, 0x78U, LoadF32(rec, 0x78U) + LoadF32(rec, 0x7cU));
-        StoreF32(rec, 0x74U, WrapAngleToPi(LoadF32(rec, 0x70U) +
-                                           LoadF32(rec, 0x74U)));
-    } else {
-        PolarToCartesianEdiAbi(rec + 0x64U, LoadF32(rec, 0x74U),
-                               LoadF32(rec, 0x70U));
-        StoreU32(rec, 0x6cU, 0U);
+    if (work.vec2_a3_0288.duration != 0) {
+        TickVec2AnimInterpolator(anim_out, &work.vec2_a3_0288);
+        work.anchor2_radius2_00a4 =
+            *reinterpret_cast<const i32 *>(&anim_out[0]);
+        work.anchor2_angle2_00a8 = anim_out[1];
     }
 
-    // Motion block 2 (pos +0x84, vel +0x90, radius +0x9c, angle +0xa0,
-    // flags +0xac). Same three modes; the vec3 animation lives at +0x188
-    // (armed by +0x1cc).
-    if (LoadU32(rec, 0x1ccU) != 0U) {
+    // Motion block 1 (anchor1_pos_0058 / anchor1_delta_0064 /
+    // anchor1_radius_0070 / anchor1_angle_0074 / anchor1_flags_0080).
+    // Velocity source: vec3_a_013c (armed by its duration) yielding a target
+    // position, else the radius/angle pair.
+    if (work.vec3_a_013c.duration != 0) {
         float target[3];
-        TickVec3Interpolator(rec + 0x188U, target);
-        StoreF32(rec, 0x90U, target[0] - LoadF32(rec, 0x84U));
-        StoreF32(rec, 0x94U, target[1] - LoadF32(rec, 0x88U));
-        StoreF32(rec, 0x98U, target[2] - LoadF32(rec, 0x8cU));
-    } else if ((LoadU32(rec, 0xacU) & 1U) != 0U) {
-        StoreF32(rec, 0xa4U, LoadF32(rec, 0xa4U) + LoadF32(rec, 0xa8U));
-        StoreF32(rec, 0xa0U, WrapAngleToPi(LoadF32(rec, 0x9cU) +
-                                           LoadF32(rec, 0xa0U)));
+        TickVec3Interpolator(&work.vec3_a_013c, target);
+        work.anchor1_delta_0064[0] =
+            target[0] - work.anchor1_pos_0058[0];
+        work.anchor1_delta_0064[1] =
+            target[1] - work.anchor1_pos_0058[1];
+        work.anchor1_delta_0064[2] =
+            target[2] - work.anchor1_pos_0058[2];
+    } else if ((work.anchor1_flags_0080 & 1U) != 0U) {
+        *reinterpret_cast<float *>(&work.anchor1_radius2_0078) =
+            *reinterpret_cast<const float *>(&work.anchor1_radius2_0078)
+            + work.anchor1_angle2_007c;
+        work.anchor1_angle_0074 = WrapAngleToPi(
+            *reinterpret_cast<const float *>(&work.anchor1_radius_0070)
+            + work.anchor1_angle_0074);
     } else {
-        PolarToCartesianEdiAbi(rec + 0x90U, LoadF32(rec, 0xa0U),
-                               LoadF32(rec, 0x9cU));
-        StoreU32(rec, 0x98U, 0U);
+        PolarToCartesianEdiAbi(
+            work.anchor1_delta_0064, work.anchor1_angle_0074,
+            *reinterpret_cast<const float *>(&work.anchor1_radius_0070));
+        work.anchor1_delta_0064[2] = 0.0f;
+    }
+
+    // Motion block 2 (anchor2_pos_0084 / anchor2_delta_0090 /
+    // anchor2_radius_009c / anchor2_angle_00a0 / anchor2_flags_00ac). Same
+    // three modes; the vec3 animation lives at vec3_b_0188.
+    if (work.vec3_b_0188.duration != 0) {
+        float target[3];
+        TickVec3Interpolator(&work.vec3_b_0188, target);
+        work.anchor2_delta_0090[0] =
+            target[0] - work.anchor2_pos_0084[0];
+        work.anchor2_delta_0090[1] =
+            target[1] - work.anchor2_pos_0084[1];
+        work.anchor2_delta_0090[2] =
+            target[2] - work.anchor2_pos_0084[2];
+    } else if ((work.anchor2_flags_00ac & 1U) != 0U) {
+        *reinterpret_cast<float *>(&work.anchor2_radius2_00a4) =
+            *reinterpret_cast<const float *>(&work.anchor2_radius2_00a4)
+            + work.anchor2_angle2_00a8;
+        work.anchor2_angle_00a0 = WrapAngleToPi(
+            *reinterpret_cast<const float *>(&work.anchor2_radius_009c)
+            + work.anchor2_angle_00a0);
+    } else {
+        PolarToCartesianEdiAbi(
+            work.anchor2_delta_0090, work.anchor2_angle_00a0,
+            *reinterpret_cast<const float *>(&work.anchor2_radius_009c));
+        work.anchor2_delta_0090[2] = 0.0f;
     }
 
     // Integrate block 1; with flag bit 0x40000 the block-2 position is
     // shifted by the global base-position offsets before its integration.
-    IntegrateSubEffectPositionEsiAbi(rec + 0x58U);
+    IntegrateSubEffectPositionEsiAbi(work.anchor1_pos_0058);
     if ((flags & 0x40000U) != 0U) {
-        StoreF32(rec, 0x84U, g_EclBasePosShift[0] + LoadF32(rec, 0x84U));
-        StoreF32(rec, 0x88U, g_EclBasePosShift[1] + LoadF32(rec, 0x88U));
-        StoreF32(rec, 0x8cU, g_EclBasePosShift[2] + LoadF32(rec, 0x8cU));
+        work.anchor2_pos_0084[0] =
+            g_EclBasePosShift[0] + work.anchor2_pos_0084[0];
+        work.anchor2_pos_0084[1] =
+            g_EclBasePosShift[1] + work.anchor2_pos_0084[1];
+        work.anchor2_pos_0084[2] =
+            g_EclBasePosShift[2] + work.anchor2_pos_0084[2];
     }
-    IntegrateSubEffectPositionEsiAbi(rec + 0x84U);
+    IntegrateSubEffectPositionEsiAbi(work.anchor2_pos_0084);
 
     // The base block's velocity is the summed position delta, and the base
     // block itself is integrated afterwards.
-    StoreF32(rec, 0x38U,
-             LoadF32(rec, 0x84U) + LoadF32(rec, 0x58U) - LoadF32(rec, 0x2cU));
-    StoreF32(rec, 0x3cU,
-             LoadF32(rec, 0x88U) + LoadF32(rec, 0x5cU) - LoadF32(rec, 0x30U));
-    StoreF32(rec, 0x40U,
-             LoadF32(rec, 0x8cU) + LoadF32(rec, 0x60U) - LoadF32(rec, 0x34U));
-    IntegrateSubEffectPositionEsiAbi(rec + 0x2cU);
+    work.base_velocity_0038[0] =
+        work.anchor2_pos_0084[0] + work.anchor1_pos_0058[0]
+        - work.base_pos_002c[0];
+    work.base_velocity_0038[1] =
+        work.anchor2_pos_0084[1] + work.anchor1_pos_0058[1]
+        - work.base_pos_002c[1];
+    work.base_velocity_0038[2] =
+        work.anchor2_pos_0084[2] + work.anchor1_pos_0058[2]
+        - work.base_pos_002c[2];
+    IntegrateSubEffectPositionEsiAbi(work.base_pos_002c);
 
     // Flag bit 0x200: clamp the base position into the rectangle centered
-    // at (+0x13ac, +0x13b0) with half extents (+0x13b4, +0x13b8), then
+    // at clamp_center_13ac with half extents clamp_half_extent_13b4, then
     // re-derive block-1's position as base - block2.
     if ((flags & 0x200U) != 0U) {
-        const float half_x = LoadF32(rec, 0x13b4U) * 0.5f;
-        const float lo_x = LoadF32(rec, 0x13acU) - half_x;
-        if (lo_x <= LoadF32(rec, 0x2cU)) {
-            const float hi_x = half_x + LoadF32(rec, 0x13acU);
-            if (hi_x < LoadF32(rec, 0x2cU))
-                StoreF32(rec, 0x2cU, hi_x);
+        const float half_x = work.clamp_half_extent_13b4[0] * 0.5f;
+        const float lo_x = work.clamp_center_13ac[0] - half_x;
+        if (lo_x <= work.base_pos_002c[0]) {
+            const float hi_x = half_x + work.clamp_center_13ac[0];
+            if (hi_x < work.base_pos_002c[0])
+                work.base_pos_002c[0] = hi_x;
         } else {
-            StoreF32(rec, 0x2cU, lo_x);
+            work.base_pos_002c[0] = lo_x;
         }
-        const float half_y = LoadF32(rec, 0x13b8U) * 0.5f;
-        const float lo_y = LoadF32(rec, 0x13b0U) - half_y;
-        if (lo_y <= LoadF32(rec, 0x30U)) {
-            const float hi_y = half_y + LoadF32(rec, 0x13b0U);
-            if (hi_y < LoadF32(rec, 0x30U))
-                StoreF32(rec, 0x30U, hi_y);
+        const float half_y = work.clamp_half_extent_13b4[1] * 0.5f;
+        const float lo_y = work.clamp_center_13ac[1] - half_y;
+        if (lo_y <= work.base_pos_002c[1]) {
+            const float hi_y = half_y + work.clamp_center_13ac[1];
+            if (hi_y < work.base_pos_002c[1])
+                work.base_pos_002c[1] = hi_y;
         } else {
-            StoreF32(rec, 0x30U, lo_y);
+            work.base_pos_002c[1] = lo_y;
         }
-        StoreF32(rec, 0x58U, LoadF32(rec, 0x2cU) - LoadF32(rec, 0x84U));
-        StoreF32(rec, 0x5cU, LoadF32(rec, 0x30U) - LoadF32(rec, 0x88U));
-        StoreF32(rec, 0x60U, LoadF32(rec, 0x34U) - LoadF32(rec, 0x8cU));
+        work.anchor1_pos_0058[0] =
+            work.base_pos_002c[0] - work.anchor2_pos_0084[0];
+        work.anchor1_pos_0058[1] =
+            work.base_pos_002c[1] - work.anchor2_pos_0084[1];
+        work.anchor1_pos_0058[2] =
+            work.base_pos_002c[2] - work.anchor2_pos_0084[2];
     }
 
     // Playfield gate: the base position must sit inside x=[-192,192] and
-    // y=[0,448] (adjusted by the +0x13a4/+0x13a8 half extents). Leaving the
+    // y=[0,448] (adjusted by the hitbox_size_13a4 half extents). Leaving the
     // region without the 0x4 stay flag aborts when the 0x100 latch was
     // already set; entering it sets the latch.
-    const float half_w = LoadF32(rec, 0x13a4U) * 0.5f;
-    const float half_h = LoadF32(rec, 0x13a8U) * 0.5f;
-    const float pos_x = LoadF32(rec, 0x2cU);
-    const float pos_y = LoadF32(rec, 0x30U);
+    const float half_w = work.hitbox_size_13a4[0] * 0.5f;
+    const float half_h = work.hitbox_size_13a4[1] * 0.5f;
+    const float pos_x = work.base_pos_002c[0];
+    const float pos_y = work.base_pos_002c[1];
     const bool inside = pos_x + half_w >= -192.0f &&
                         pos_x - half_w <= 192.0f &&
                         pos_y + half_h >= 0.0f && pos_y - half_h <= 448.0f;
@@ -443,12 +483,13 @@ i32 RunEclScriptSetupStackAbi(void *sub_record)
             return -1;
     } else {
         flags |= 0x100U;
-        StoreU32(rec, 0x1444U, flags);
+        work.flags_1444 = flags;
     }
 
-    // Flag bit 0x100000: publish the bind id (+0x1448 or, with bit 0x200000,
-    // +0x144c) into +0xf4 and rebind the first entity slot. With no active
-    // stage node the 0x200000 path clears bits 0x200000|1 instead.
+    // Flag bit 0x100000: publish the bind id (primary_bind_id_1448 or, with
+    // bit 0x200000, alternate_bind_id_144c) into bind_id_00f4 and rebind the
+    // first entity slot. With no active stage node the 0x200000 path clears
+    // bits 0x200000|1 instead.
     if ((flags & 0x100000U) != 0U) {
         // g_StageNode holds the 0x48-byte game context (DAT_004776ec); the
         // +0x28 popup-state dword doubles as the stage-active gate.
@@ -456,41 +497,50 @@ i32 RunEclScriptSetupStackAbi(void *sub_record)
         const u32 stage_active = stage_ctx.popup_state;
         if (stage_active == 0U) {
             if ((flags & 0x200000U) != 0U) {
-                const u32 id = LoadU32(rec, 0x144cU);
-                StoreU32(rec, 0xf4U, id);
-                RebindEntitySlotEaxStackAbi(reinterpret_cast<u32 *>(rec + 0xc0U),
-                                            id);
-                StoreU32(rec, 0x1444U, LoadU32(rec, 0x1444U) & 0xffdffffeU);
+                const u32 id = work.alternate_bind_id_144c;
+                work.bind_id_00f4 = static_cast<i32>(id);
+                RebindEntitySlotEaxStackAbi(work.published_ids_00c0, id);
+                work.flags_1444 = work.flags_1444 & 0xffdffffeU;
             }
         } else if ((flags & 0x200000U) == 0U) {
-            const u32 id = LoadU32(rec, 0x1448U);
-            StoreU32(rec, 0xf4U, id);
-            RebindEntitySlotEaxStackAbi(reinterpret_cast<u32 *>(rec + 0xc0U),
-                                        id);
-            StoreU32(rec, 0x1444U, LoadU32(rec, 0x1444U) | 0x200001U);
+            const u32 id = work.primary_bind_id_1448;
+            work.bind_id_00f4 = static_cast<i32>(id);
+            RebindEntitySlotEaxStackAbi(work.published_ids_00c0, id);
+            work.flags_1444 = work.flags_1444 | 0x200001U;
         }
     }
 
-    // Entity-list scan over the script manager; a nonzero result aborts.
-    void *const script_manager = LoadPointer(rec, 0x14d8U);
-    const float scan_value = LoadF32(LoadPointer(rec, 0x128U), 0U);
-    if (RunEclContextListEdiStackAbi(script_manager, scan_value) != 0)
+    // The record's self handle: the ctor (0x40d89f) stores the record base
+    // at record+0x2514 (self_2514, the dword immediately past the 0x14d8
+    // -byte work view — the native loads it as [work+0x14d8] at 0x40e242 /
+    // 0x40e275 / 0x40e4be / 0x40e4da). The script-manager helpers below
+    // (0x44fd10 / 0x4127a0 / 0x40c6e0 / 0x40c730 / 0x40e5f0) all take this
+    // record as their manager.
+    EclScriptObject &owning_object = *reinterpret_cast<EclScriptObject *>(
+        rec - offsetof(EclScriptObject, work));
+    EclScriptObject &self =
+        *static_cast<EclScriptObject *>(owning_object.self_2514);
+
+    // Entity-list scan over the record; a nonzero result aborts.
+    const float scan_value = *work.frame_tail_011c.rate;
+    if (RunEclContextListEdiStackAbi(&self, scan_value) != 0)
         return -1;
 
-    // Clear the flicker-arm bit, then decide the pass.
-    flags = LoadU32(rec, 0x1444U) & 0xffffdfffU;
-    StoreU32(rec, 0x1444U, flags);
+    // Clear the flicker-arm bit (0x2000; the native reads the low flag byte
+    // for the 0x11 mask, which is equivalent), then decide the pass.
+    flags = work.flags_1444 & 0xffffdfffU;
+    work.flags_1444 = flags;
     if ((flags & 0x11U) != 0U)
         goto post_damage_pass;
 
     {
         // Damage pass: run the item collision over the 128 player-item
         // records (this = null at the native call site), scale it down on
-        // modes 0/2, and drain the boss HP at +0x13c0.
+        // modes 0/2, and drain the boss HP (hp_13c0).
         i32 damage = CollectItemCollisionsStackAbi(
             g_PlayerStateBlock,
-            reinterpret_cast<const float *>(rec + 0x2cU),
-            reinterpret_cast<const float *>(rec + 0xb0U));
+            work.base_pos_002c,
+            work.hitbox_params_00b0);
         const u32 player_mode = static_cast<u32>(
             reinterpret_cast<PlayerRecord *>(g_PlayerStateBlock)->mode);
         if (player_mode == 2U || player_mode == 0U)
@@ -505,64 +555,70 @@ i32 RunEclScriptSetupStackAbi(void *sub_record)
             if (damage <= 0)
                 damage = 1;
         }
-        if ((flags & 0x8U) == 0U && LoadI32(rec, 0x1420U) <= 0)
-            StoreI32(rec, 0x13c0U, LoadI32(rec, 0x13c0U) - damage);
+        if ((flags & 0x8U) == 0U && work.shift_timer_a_141c.count <= 0)
+            work.hp_13c0 -= damage;
 
         // Pending script-name request handling.
-        const i32 request = AcquireScriptNameRequestThisAbi(script_manager);
+        const i32 request = AcquireScriptNameRequestThisAbi(self);
         if (request != 0) {
-            UpdateScriptManagerAEaxAbi(script_manager);
-            UpdateScriptManagerBEaxAbi(script_manager);
+            UpdateScriptManagerAEaxAbi(&self);
+            UpdateScriptManagerBEaxAbi(&self);
             const i32 resolved = ResolveScriptTableIndexEaxAbi(request);
-            u8 *const bind_buffer = LoadPointer(static_cast<const u8 *>(script_manager), 4U);
+            // The bind chain goes through bind_node_self_0004 (-> +0x0008);
+            // the writes land on bind_node_0008 (+0x8) and
+            // script_table_id_000c (+0xc).
+            u8 *const bind_buffer = static_cast<u8 *>(self.bind_node_self_0004);
             StoreU32(bind_buffer, 4U, static_cast<u32>(resolved));
             StoreU32(bind_buffer, 0U, 0U);
-            if (RunEclContextListEdiStackAbi(script_manager,
-                                                 scan_value) != 0)
+            if (RunEclContextListEdiStackAbi(&self, scan_value) != 0)
                 return -1;
         }
 
         // Kill/score handling: without flag bit 0x40, a drained HP adds the
-        // +0x13c8 score value and can run the death sequence.
-        if ((flags & 0x40U) == 0U && LoadI32(rec, 0x13c0U) <= 0) {
+        // death score (death_score_13bc; the native passes *(work+0x13bc) at
+        // 0x40e23d) and can run the death sequence.
+        if ((flags & 0x40U) == 0U && work.hp_13c0 <= 0) {
             AddScoreBlockValueEcxStackAbi(reinterpret_cast<void *>(0x474c40U),
-                                          LoadI32(rec, 0x13c8U));
-            if (TriggerEnemyDeathSequenceStdcallAbi(script_manager) != 0)
+                                          work.death_score_13bc);
+            if (TriggerEnemyDeathSequenceStdcallAbi(&self) != 0)
                 return 1;
         }
         flags |= 0x2000U;
-        StoreU32(rec, 0x1444U, flags);
+        work.flags_1444 = flags;
         g_BossDefeatedFlag = 1;
     }
 
 post_damage_pass:
     {
         // Pending script-name request handling (shared tail).
-        const i32 request = AcquireScriptNameRequestThisAbi(script_manager);
+        const i32 request = AcquireScriptNameRequestThisAbi(self);
         if (request != 0) {
-            UpdateScriptManagerAEaxAbi(script_manager);
-            UpdateScriptManagerBEaxAbi(script_manager);
-            u8 *const bind_buffer = LoadPointer(static_cast<const u8 *>(script_manager), 4U);
+            UpdateScriptManagerAEaxAbi(&self);
+            UpdateScriptManagerBEaxAbi(&self);
+            // See the damage-pass note: writes land on bind_node_0008 /
+            // script_table_id_000c through bind_node_self_0004.
+            u8 *const bind_buffer = static_cast<u8 *>(self.bind_node_self_0004);
             StoreU32(bind_buffer, 4U,
                      static_cast<u32>(ResolveScriptTableIndexEaxAbi(request)));
             StoreU32(bind_buffer, 0U, 0U);
         }
 
         // Timeout region check; skipped with flag bits 0x2|0x10 or a
-        // positive +0x1434 timer count.
-        if ((flags & 0x12U) == 0U && LoadI32(rec, 0x1434U) <= 0)
+        // positive shift_timer_b_1430 count.
+        if ((flags & 0x12U) == 0U && work.shift_timer_b_1430.count <= 0)
             CheckEnemyTimeoutRegionEaxEdxEcxAbi(
-                reinterpret_cast<const float *>(rec + 0x2cU),
+                work.base_pos_002c,
                 g_PlayerStateBlock,
-                reinterpret_cast<const float *>(rec + 0xb0U));
+                work.hitbox_params_00b0);
 
         // Flag bit 0x1000: direction state machine over the base-block X
-        // delta, driving animation-id switches through +0xf4.
+        // delta (base_velocity_0038[0]), driving animation-id switches
+        // through bind_id_00f4.
         if ((flags & 0x1000U) != 0U) {
-            const float dx = LoadF32(rec, 0x38U);
+            const float dx = work.base_velocity_0038[0];
             const i32 direction =
                 dx < -0.1f ? -1 : (dx > 0.1f ? 1 : 0);
-            const i32 previous = LoadI32(rec, 0xf8U);
+            const i32 previous = work.facing_dir_00f8;
             if (previous != direction) {
                 i32 step = 0;
                 if (previous == -1)
@@ -571,19 +627,22 @@ post_damage_pass:
                     step = (direction != -1 ? 1 : 0) + 1;
                 else if (previous == 1)
                     step = direction != 0 ? 1 : 4;
-                StoreI32(rec, 0xf8U, direction);
+                work.facing_dir_00f8 = direction;
                 RebindEntitySlotEaxStackAbi(
-                    reinterpret_cast<u32 *>(rec + 0xc0U),
-                    LoadU32(rec, 0xf4U) + static_cast<u32>(step));
+                    work.published_ids_00c0,
+                    static_cast<u32>(work.bind_id_00f4)
+                    + static_cast<u32>(step));
             }
         }
 
-        // Publish the base-block position into the eight entity id slots at
-        // +0xc0; flag bit 0x40000 selects the verbatim over the offset path.
-        const float position[3] = {LoadF32(rec, 0x2cU), LoadF32(rec, 0x30U),
-                                   LoadF32(rec, 0x34U)};
+        // Publish the base-block position into the eight entity id slots
+        // published_ids_00c0[0..7]; flag bit 0x40000 selects the verbatim
+        // over the offset path.
+        const float position[3] = {work.base_pos_002c[0],
+                                   work.base_pos_002c[1],
+                                   work.base_pos_002c[2]};
         for (u32 slot = 0; slot != 8U; ++slot) {
-            const u32 id = LoadU32(rec, 0xc0U + slot * 4U);
+            const u32 id = work.published_ids_00c0[slot];
             if ((flags & 0x40000U) != 0U)
                 SetEntityPositionDirectEsiAbi(g_MainChainRenderOwner, id,
                                               position);
@@ -601,9 +660,13 @@ post_damage_pass:
             const u8 *const old_target =
                 static_cast<const u8 *>(player.homing_target);
             const float player_x = player.position_x;
-            const float new_distance = LoadF32(rec, 0x2cU) - player_x;
+            const float new_distance =
+                work.base_pos_002c[0] - player_x;
             bool farther = old_target == 0;
             if (!farther) {
+                // +0x1068 of the foreign target record = its
+                // EclScriptWork::base_pos_002c[0]; kept RAW because the
+                // target is not guaranteed to be an ECL script object.
                 const float old_distance =
                     LoadF32(old_target, 0x1068U) - player_x;
                 farther = (new_distance < 0.0f ? -new_distance
@@ -613,17 +676,18 @@ post_damage_pass:
             }
             if (farther) {
                 if (player.homing_target_latch == 0U)
-                    player.homing_target = script_manager;
+                    player.homing_target = &self;
                 player.homing_target_latch = 1U;
             }
         }
 
-        // Resolve the primary entity slot and drive the hit-flicker state.
+        // Resolve the primary entity slot (published_ids_00c0[0]) and drive
+        // the hit-flicker state.
         u8 *entity = FindEntityEdxStackAbi(
-            g_MainChainRenderOwner, LoadU32(rec, 0xc0U));
+            g_MainChainRenderOwner, work.published_ids_00c0[0]);
         if (entity == 0)
-            StoreU32(rec, 0xc0U, 0U);
-        if (LoadI32(rec, 0x1414U) != 0) {
+            work.published_ids_00c0[0] = 0;
+        if (work.hit_flicker_timer_1414 != 0) {
             // Native quirk: the entity pointer is dereferenced even when
             // the lookup failed (unchecked pointer, preserved).
             StoreU32(entity, 0x35cU,
@@ -632,150 +696,136 @@ post_damage_pass:
                 reinterpret_cast<AsciiHudOwner *>(g_AsciiHudOwner)
                     ->aux_vm.flags &= 0xffff7fffU;
             }
-            StoreI32(rec, 0x1414U, LoadI32(rec, 0x1414U) - 1);
+            --work.hit_flicker_timer_1414;
         } else if ((flags & 0x2000U) != 0U) {
             StoreU32(entity, 0x35cU, LoadU32(entity, 0x35cU) | 0x8000U);
             StoreU32(entity, 0x300U, 0xff0000ffU);
-            StoreI32(rec, 0x1414U, 4);
+            work.hit_flicker_timer_1414 = 4;
             if ((flags & 0x8000U) != 0U) {
                 // Loud hit sound gated by the stage flags word and the
-                // manager timer at +0x2404; otherwise the quiet variant.
+                // deadline delta the request popper publishes at
+                // record+0x2404 (= work.unknown_13c8; the native loads the
+                // self handle at 0x40e4bc/0x40e4da and reads +0x2404 through
+                // it, so this aliases the work field).
                 bool loud = false;
-                if (LoadI32(static_cast<const u8 *>(script_manager), 0x2404U) < 900) {
+                if (self.work.unknown_13c8 < 900) {
                     const u32 stage_flags =
                         LoadU32(static_cast<const u8 *>(g_SpellBulletBase),
                                 0x378cU);
                     if ((stage_flags & 1U) == 0U)
                         loud = true;
                     else if ((stage_flags & 8U) == 0U &&
-                             LoadI32(static_cast<const u8 *>(script_manager), 0x2404U) < 300)
+                             self.work.unknown_13c8 < 300)
                         loud = true;
                 }
                 EnqueueSoundEffectEbxStackAbi(
                     loud ? 0x23U : 0x13U,
                     reinterpret_cast<void *>(0x492590U),
-                    LoadF32(rec, 0x2cU));
+                    work.base_pos_002c[0]);
             } else {
                 EnqueueSoundEffectEbxStackAbi(
                     0x13U, reinterpret_cast<void *>(0x492590U),
-                    LoadF32(rec, 0x2cU));
+                    work.base_pos_002c[0]);
             }
         }
 
-        // Two shift timers (blocks at +0x141c and +0x1430) tick down while
-        // their counts at +0x1420/+0x1434 are positive.
-        if (LoadI32(rec, 0x1420U) > 0)
-            ShiftTimerByEsiStackAbi(rec + 0x141cU, -1.0f);
-        if (LoadI32(rec, 0x1434U) > 0)
-            ShiftTimerByEsiStackAbi(rec + 0x1430U, -1.0f);
+        // Two shift timers (shift_timer_a_141c / shift_timer_b_1430) tick
+        // down while their counts are positive.
+        if (work.shift_timer_a_141c.count > 0)
+            ShiftTimerByEsiStackAbi(&work.shift_timer_a_141c, -1.0f);
+        if (work.shift_timer_b_1430.count > 0)
+            ShiftTimerByEsiStackAbi(&work.shift_timer_b_1430, -1.0f);
 
-        // Frame counter advance over the {prev +0x11c, count +0x120,
-        // accumulator +0x124, rate pointer +0x128} block. Outside the
-        // 0.99..1.01 rate window the count re-derives from the accumulator;
-        // the native conversion truncates through an unsigned 64-bit path.
-        const u32 current = LoadU32(rec, 0x120U);
-        StoreU32(rec, 0x11cU, current);
-        const float rate = LoadF32(LoadPointer(rec, 0x128U), 0U);
+        // Frame counter advance over frame_tail_011c (the shared 0x14-byte
+        // TimerNode). Outside the 0.99..1.01 rate window the count re-derives
+        // from the accumulator; the native conversion truncates through an
+        // unsigned 64-bit path.
+        const u32 current = static_cast<u32>(work.frame_tail_011c.count);
+        work.frame_tail_011c.prev = static_cast<i32>(current);
+        const float rate = *work.frame_tail_011c.rate;
         if (rate <= 0.99f || rate >= 1.01f) {
-            const float accumulated = rate + LoadF32(rec, 0x124U);
-            StoreF32(rec, 0x124U, accumulated);
-            StoreU32(rec, 0x120U, static_cast<u32>(static_cast<i32>(
-                                      accumulated)));
+            const float accumulated = rate +
+                *reinterpret_cast<const float *>(&work.frame_tail_011c.accum);
+            *reinterpret_cast<float *>(&work.frame_tail_011c.accum) =
+                accumulated;
+            work.frame_tail_011c.count = static_cast<i32>(accumulated);
         } else {
-            StoreF32(rec, 0x124U, LoadF32(rec, 0x124U) + 1.0f);
-            StoreU32(rec, 0x120U, current + 1U);
+            *reinterpret_cast<float *>(&work.frame_tail_011c.accum) =
+                *reinterpret_cast<const float *>(&work.frame_tail_011c.accum)
+                + 1.0f;
+            work.frame_tail_011c.count = static_cast<i32>(current + 1U);
         }
     }
     return 0;
 }
 
 // TH10 0x00412ac0. Native EDI = out vec2, ESI = the 0x3c-byte vec2
-// animation block {cur[2]@0x00, end[2]@0x08, handle1[2]@0x10,
-// velocity/handle2[2]@0x18, timer {prev@0x20, cur@0x24, accum@0x28,
-// rate ptr@0x2c, flags@0x30}, duration@0x34, mode@0x38}. Same timer
-// behavior as the vec3 interpolator (unity rate window, 0xfff0bdc1 poison,
-// rate reset to DAT_00476f78), except the completion additionally zeroes
-// the duration and the vec2 Hermite gives handle2 the proper (t-1)*t^2
-// basis. Duration <= 0 skips the timer and interpolates with
-// t = accum / duration, so a zero duration yields inf/NaN. Mode 7 adds the
-// end pair into cur, 0x11 integrates velocity, 8 rides the cubic Hermite,
-// and every other mode eases through the 0x44c350 curve selector.
+// animation block, modeled here as the typed th10::EclVec2AnimBlock view.
+// Same timer behavior as the vec3 interpolator (unity rate window,
+// 0xfff0bdc1 poison, rate reset to DAT_00476f78), except the completion
+// additionally zeroes the duration and the vec2 Hermite gives handle2 the
+// proper (t-1)*t^2 basis. Duration <= 0 skips the timer and interpolates
+// with t = accum / duration, so a zero duration yields inf/NaN. Mode 7 adds
+// the end pair into cur, 0x11 integrates velocity, 8 rides the cubic
+// Hermite, and every other mode eases through the 0x44c350 curve selector.
 void TickVec2AnimInterpolator(float out_vec2[2], void *block_memory)
 {
-    u8 *const block = static_cast<u8 *>(block_memory);
-    const i32 duration =
-        *reinterpret_cast<const i32 *>(block + 0x34);
+    EclVec2AnimBlock &a = *static_cast<EclVec2AnimBlock *>(block_memory);
+    const i32 duration = a.duration;
     if (duration > 0) {
-        *reinterpret_cast<i32 *>(block + 0x20) =
-            *reinterpret_cast<const i32 *>(block + 0x24);
-        const float rate = **reinterpret_cast<float *const *>(block + 0x2c);
+        a.timer_prev = static_cast<i32>(a.timer_count);
+        const float rate = *a.timer_rate;
         if (rate > 0.99f && rate < 1.01f) {
-            *reinterpret_cast<float *>(block + 0x28) =
-                *reinterpret_cast<float *>(block + 0x28) + 1.0f;
-            *reinterpret_cast<i32 *>(block + 0x24) =
-                *reinterpret_cast<const i32 *>(block + 0x24) + 1;
+            a.timer_accum = a.timer_accum + 1.0f;
+            a.timer_count = a.timer_count + 1U;
         } else {
-            const float accum = *reinterpret_cast<float *>(block + 0x28) +
-                rate;
-            *reinterpret_cast<float *>(block + 0x28) = accum;
-            *reinterpret_cast<i32 *>(block + 0x24) = FloatToI32(accum);
+            const float accum = a.timer_accum + rate;
+            a.timer_accum = accum;
+            a.timer_count = static_cast<u32>(FloatToI32(accum));
         }
-        if (*reinterpret_cast<const i32 *>(block + 0x24) >= duration) {
-            if ((*reinterpret_cast<u32 *>(block + 0x30) & 1U) == 0U) {
-                *reinterpret_cast<i32 *>(block + 0x24) = 0;
-                *reinterpret_cast<i32 *>(block + 0x20) =
-                    static_cast<i32>(0xfff0bdc1U);
-                *reinterpret_cast<float *>(block + 0x28) = 0.0f;
-                *reinterpret_cast<float **>(block + 0x2c) =
-                    &g_FrameTimeScale;
-                *reinterpret_cast<u32 *>(block + 0x30) |= 1U;
+        if (static_cast<i32>(a.timer_count) >= duration) {
+            if ((a.flags & 1U) == 0U) {
+                a.timer_count = 0;
+                a.timer_prev = static_cast<i32>(0xfff0bdc1U);
+                a.timer_accum = 0.0f;
+                a.timer_rate = &g_FrameTimeScale;
+                a.flags |= 1U;
             }
-            *reinterpret_cast<i32 *>(block + 0x24) = duration;
-            *reinterpret_cast<i32 *>(block + 0x20) = duration - 1;
-            *reinterpret_cast<float *>(block + 0x28) =
-                static_cast<float>(duration);
-            *reinterpret_cast<i32 *>(block + 0x34) = 0;
-            const u32 source =
-                *reinterpret_cast<const i32 *>(block + 0x38) == 7 ? 0 : 8;
-            out_vec2[0] = *reinterpret_cast<const float *>(block + source);
-            out_vec2[1] = *reinterpret_cast<const float *>(block + source + 4);
+            a.timer_count = static_cast<u32>(duration);
+            a.timer_prev = duration - 1;
+            a.timer_accum = static_cast<float>(duration);
+            a.duration = 0;
+            const float *const source = a.mode == 7 ? a.cur : a.dst;
+            out_vec2[0] = source[0];
+            out_vec2[1] = source[1];
             return;
         }
     }
 
-    const i32 mode = *reinterpret_cast<const i32 *>(block + 0x38);
-    const float t = *reinterpret_cast<float *>(block + 0x28) /
-                    static_cast<float>(duration);
+    const i32 mode = a.mode;
+    const float t = a.timer_accum / static_cast<float>(duration);
     for (u32 component = 0; component != 2U; ++component) {
-        const float cur = *reinterpret_cast<const float *>(block +
-            component * 4);
-        const float end = *reinterpret_cast<const float *>(block + 8 +
-            component * 4);
+        const float cur = a.cur[component];
+        const float end = a.dst[component];
         float value;
         if (mode == 7) {
             value = cur + end;
-            *reinterpret_cast<float *>(block + component * 4) = value;
+            a.cur[component] = value;
         } else if (mode == 0x11) {
-            value = cur + *reinterpret_cast<const float *>(block + 0x18 +
-                component * 4);
-            *reinterpret_cast<float *>(block + component * 4) = value;
-            *reinterpret_cast<float *>(block + 0x18 + component * 4) =
-                *reinterpret_cast<const float *>(block + 0x18 +
-                    component * 4) + end;
+            value = cur + a.handle2_vel[component];
+            a.cur[component] = value;
+            a.handle2_vel[component] = a.handle2_vel[component] + end;
         } else if (mode == 8) {
             const float w_start = (1.0f + 2.0f * t) * (t - 1.0f) * (t - 1.0f);
             const float w_end = (3.0f - 2.0f * t) * t * t;
             const float w_handle1 = (1.0f - t) * (1.0f - t) * t;
             const float w_handle2 = (t - 1.0f) * t * t;
             value = w_start * cur + w_end * end +
-                w_handle1 * *reinterpret_cast<const float *>(block + 0x10 +
-                    component * 4) +
-                w_handle2 * *reinterpret_cast<const float *>(block + 0x18 +
-                    component * 4);
+                w_handle1 * a.handle1[component] +
+                w_handle2 * a.handle2_vel[component];
         } else {
             const double factor = EasingCurveSelectorEaxStackAbi(
-                mode, *reinterpret_cast<float *>(block + 0x28),
-                static_cast<float>(duration));
+                mode, a.timer_accum, static_cast<float>(duration));
             value = cur + (end - cur) * static_cast<float>(factor);
         }
         out_vec2[component] = value;
@@ -785,86 +835,101 @@ void TickVec2AnimInterpolator(float out_vec2[2], void *block_memory)
 // ---------------------------------------------------------------------------
 // TH10 0x004127a0 - pending script-name request popper.
 //
-// The script manager holds eight request slots at +0x2494 (0x10 stride):
+// Native __thiscall ECX = the ECL script object record itself (0x40dc80
+// loads ECX from record+0x2514, the ctor-planted self handle), so the old
+// raw "mgr" offsets map onto the typed record as follows:
+//   +0x23fc -> work.hp_13c0  (the boss HP dword doubles as the request
+//             timebase natively; a consumed deadline overwrites it),
+//   +0x2404 -> work.unknown_13c8 (the deadline delta published for the
+//             hit-sound gate; read back at 0x40e4bc..0x40e4e4),
+//   +0x2480 -> work.flags_1444 (bit 0x10000 = secondary countdown expiry),
+//   +0x2494 -> work.request_slots_1458[8][16] (0x10-byte slots),
+//   +0x1158 -> work.frame_tail_011c (the 0x14-byte TimerNode; its flags
+//             dword at +0x10 is the animation-tail arm latch).
+//
+// The eight request slots at work.request_slots_1458 (0x10 stride, kept RAW
+// inside each slot):
 //   +0x00 scheduled battle-frame deadline (-1 = empty)
 //   +0x04 secondary countdown deadline (-1 = disarmed), relative to the
-//         +0x115c animation-tail timer
+//         frame_tail_011c count
 //   +0x08 the request id returned to the caller (resolved through
 //         0x450470 ResolveScriptTableIndexEaxAbi by the call sites)
-// Related manager state: the battle timer at +0x23fc, the deadline delta
-// published at +0x2404, the +0x1158 animation tail (flags at +0x1168), and
-// the +0x2480 flag dword (bit 0x10000 = secondary countdown expiry).
 // ---------------------------------------------------------------------------
 
 namespace {
 
-// The one-time init + unconditional stopped-state arm of the +0x1158
-// animation tail, shared by both consume paths (same shape as the tail
-// resets documented in EclEasedTransforms.cpp).
-void ResetScriptManagerRequestTail(u8 *mgr)
+// The one-time init + unconditional stopped-state arm of the
+// frame_tail_011c animation tail, shared by both consume paths (same shape
+// as the tail resets documented in EclEasedTransforms.cpp).
+void ResetScriptManagerRequestTail(EclScriptWork &work)
 {
-    u32 flags = LoadU32(mgr, 0x1168U);
+    u32 flags = work.frame_tail_011c.flags;
     if ((flags & 1U) == 0U) {
         flags |= 1U;
-        StoreU32(mgr, 0x115cU, 0U);
-        StoreU32(mgr, 0x1158U, 0xFFF0BDC1U); // NaN poison
-        StoreU32(mgr, 0x1160U, 0U);
-        StoreU32(mgr, 0x1164U, 0x476F78U); // &flt_476f78 rate pointer
-        StoreU32(mgr, 0x1168U, flags);
+        work.frame_tail_011c.count = 0;
+        work.frame_tail_011c.prev = static_cast<i32>(0xFFF0BDC1U); // NaN poison
+        work.frame_tail_011c.accum = 0;
+        work.frame_tail_011c.rate =
+            reinterpret_cast<const float *>(0x476F78U); // &flt_476f78 rate ptr
+        work.frame_tail_011c.flags = flags;
     }
-    StoreU32(mgr, 0x115cU, 0U);
-    StoreU32(mgr, 0x1160U, 0U);
-    StoreU32(mgr, 0x1158U, 0xFFFFFFFFU); // prev = -1
+    work.frame_tail_011c.count = 0;
+    work.frame_tail_011c.accum = 0;
+    work.frame_tail_011c.prev = -1; // prev = -1
 }
 
 } // namespace
 
-i32 AcquireScriptNameRequestThisAbi(void *script_manager)
+i32 AcquireScriptNameRequestThisAbi(EclScriptObject &obj)
 {
-    u8 *const mgr = static_cast<u8 *>(script_manager);
-    const i32 battle_timer = LoadI32(mgr, 0x23fcU);
+    EclScriptWork &work = obj.work;
+    // +0x23fc: the boss HP dword doubles as the request timebase natively
+    // (AcquireScriptNameRequestThisAbi runs on the ECL script object).
+    const i32 battle_timer = work.hp_13c0;
 
     // First pass: the first slot whose primary deadline is non-negative.
     for (u32 index = 0; index != 8U; ++index) {
-        const u32 slot = 0x2494U + index * 0x10U;
-        if (LoadI32(mgr, slot) < 0)
+        u8 *const slot = work.request_slots_1458[index];
+        if (LoadI32(slot, 0) < 0)
             continue;
 
-        // Publish the manager-frame delta regardless of the branch taken.
-        StoreI32(mgr, 0x2404U, battle_timer - LoadI32(mgr, slot));
-        if (battle_timer > LoadI32(mgr, slot))
+        // Publish the manager-frame delta regardless of the branch taken
+        // (-> work.unknown_13c8, the hit-sound gate value).
+        work.unknown_13c8 = battle_timer - LoadI32(slot, 0);
+        if (battle_timer > LoadI32(slot, 0))
             break; // deadline not reached; fall into the secondary pass
 
-        // Consume: the deadline becomes the new battle timer.
-        StoreI32(mgr, 0x23fcU, LoadI32(mgr, slot));
-        StoreI32(mgr, slot, -1);
-        ResetScriptManagerRequestTail(mgr);
-        StoreU32(mgr, 0x2480U, LoadU32(mgr, 0x2480U) & ~0x10000U);
-        return LoadI32(mgr, slot + 8U);
+        // Consume: the deadline becomes the new battle timer (overwriting
+        // the hp_13c0 dword; native behavior).
+        work.hp_13c0 = LoadI32(slot, 0);
+        StoreI32(slot, 0, -1);
+        ResetScriptManagerRequestTail(work);
+        work.flags_1444 = work.flags_1444 & ~0x10000U;
+        return LoadI32(slot, 8);
     }
 
     // Second pass: slots armed with a secondary countdown (deadline > 0).
     for (u32 index = 0; index != 8U; ++index) {
-        const u32 slot = 0x2494U + index * 0x10U;
-        if (LoadI32(mgr, slot) < 0 || LoadI32(mgr, slot + 4U) <= 0)
+        u8 *const slot = work.request_slots_1458[index];
+        if (LoadI32(slot, 0) < 0 || LoadI32(slot, 4) <= 0)
             continue;
 
         // HUD countdown in seconds until the secondary deadline, measured
-        // against the +0x115c tail timer and clamped at 99 (native signed
-        // divide-by-60 magic 0x88888889).
+        // against the frame_tail_011c count and clamped at 99 (native
+        // signed divide-by-60 magic 0x88888889).
         const i32 countdown
-            = (LoadI32(mgr, slot + 4U) - LoadI32(mgr, 0x115cU) + 59) / 60;
+            = (LoadI32(slot, 4) - work.frame_tail_011c.count + 59) / 60;
         reinterpret_cast<AsciiHudOwner *>(g_AsciiHudOwner)
             ->spell_countdown = countdown > 99 ? 99 : countdown;
 
-        if (LoadI32(mgr, 0x115cU) < LoadI32(mgr, slot + 4U))
+        if (work.frame_tail_011c.count < LoadI32(slot, 4))
             return 0; // countdown still running (but the HUD value updated)
 
         // Consume with the full expiry side effects.
-        StoreI32(mgr, 0x23fcU, LoadI32(mgr, slot));
-        StoreI32(mgr, slot, -1);
-        ResetScriptManagerRequestTail(mgr);
-        StoreU32(mgr, 0x2480U, LoadU32(mgr, 0x2480U) | 0x10000U);
+        work.hp_13c0 = LoadI32(slot, 0);
+        StoreI32(slot, 0, -1);
+        ResetScriptManagerRequestTail(work);
+        work.flags_1444 = work.flags_1444 | 0x10000U;
 
         // Score block +0xc (0x474c4c): subtract 3000, clamp at 5000.
         {
@@ -895,7 +960,7 @@ i32 AcquireScriptNameRequestThisAbi(void *script_manager)
             }
         }
 
-        return LoadI32(mgr, slot + 8U);
+        return LoadI32(slot, 8);
     }
 
     return 0;

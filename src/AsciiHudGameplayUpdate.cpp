@@ -6,11 +6,13 @@
 
 #include "AsciiAnimationVm.hpp"
 #include "AsciiHudOwner.hpp"
+#include "EclScriptObject.hpp"
 #include "EntityHelpers.hpp"
 #include "GameManagerState.hpp"
 #include "PlayerRecord.hpp"
 #include "ResultScreenScript.hpp"
 #include "TimelineRenderObjectSetup.hpp"
+#include "VmRecord.hpp"
 
 namespace th10 {
 
@@ -125,19 +127,19 @@ i32 TickPointerRateTimer(u8 *base, u32 offset)
 // the +0x14 child-chain propagation used by the +0x9eb8 teardown.
 void SetEntityKillFlagByHandleSlot(u32 *slot)
 {
-    u8 *const entity =
-        FindEntityEdxStackAbi(g_MainChainRenderOwner, *slot);
+    VmRecord *const entity = reinterpret_cast<VmRecord *>(
+        FindEntityEdxStackAbi(g_MainChainRenderOwner, *slot));
     if (entity == 0)
         return;
-    StoreU32(entity, 0x35cU, LoadU32(entity, 0x35cU) | 0x4000000U);
-    if (LoadU32(entity, 0x18U) == 0U) {
-        u32 *child = *reinterpret_cast<u32 **>(
-            LoadU32(entity, 0x14U));
+    entity->flags |= 0x4000000U; // +0x35c kill flag (VmRecordFlag_SoftRelease)
+    if (entity->parent_link == 0) {
+        // The child chain runs through the children's link nodes: node[0]
+        // (link_self) is the child record back-pointer and node[1]
+        // (link_next) the next node (native 0x415213/0x415220/0x415228).
+        u32 **child = static_cast<u32 **>(entity->first_child);
         for (; child != 0;
-             child = *reinterpret_cast<u32 **>(child[1]))
-            StoreU32(reinterpret_cast<u8 *>(child[0]), 0x35cU,
-                     LoadU32(reinterpret_cast<u8 *>(child[0]), 0x35cU)
-                         | 0x4000000U);
+             child = reinterpret_cast<u32 **>(child[1]))
+            reinterpret_cast<VmRecord *>(child[0])->flags |= 0x4000000U;
     }
 }
 
@@ -153,12 +155,12 @@ void TearDownHandleSlot(u32 *slot)
 // The inline pool-VM spawn used at +0x9e24 and in the +0x9e28 fill loop:
 // pool alloc, 0x40000000 flag, +0x20 = 0xf, script bind, list-A back
 // append with the id counter, id published to the VM and the slot.
-u8 *SpawnHudPoolVm(u32 script, void *resource)
+VmRecord *SpawnHudPoolVm(u32 script, void *resource)
 {
-    u8 *const vm = static_cast<u8 *>(
+    VmRecord *const vm = static_cast<VmRecord *>(
         AllocatePoolVmEsiAbi(g_MainChainRenderOwner));
-    StoreU32(vm, 0x35cU, LoadU32(vm, 0x35cU) | 0x40000000U);
-    StoreU32(vm, 0x20U, 0xfU);
+    vm->flags |= 0x40000000U;   // +0x35c script-bind/alive marker
+    vm->render_kind = 0xfU;     // +0x20
     AssignPoolVmScriptEcxEaxAbi(vm, static_cast<i32>(script));
     u32 id = 0;
     LinkEntityAndAssignIdEaxEsiAbi(&id, vm);
@@ -241,20 +243,25 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
     (void)FinalizeTimelineRenderObjectSetup(&hud.pool_f[6]);
 
     // ---- boss battle block ----
+    // The battle record at state+0x10 is the primary stage/battle ECL
+    // script object published in ConditionalState::published_ids[0].
     if (g_BossBattleState != 0
         && *reinterpret_cast<void **>(
                static_cast<u8 *>(g_BossBattleState) + 0x10U)
                != 0
         && hud.result_script_state == 0) {
-        u8 *const battle = *reinterpret_cast<u8 **>(
-            static_cast<u8 *>(g_BossBattleState) + 0x10U);
+        EclScriptObject *const battle = static_cast<EclScriptObject *>(
+            *reinterpret_cast<void **>(
+                static_cast<u8 *>(g_BossBattleState) + 0x10U));
 
         // HP fill: +0x9e84 rises by 0.025 toward hp/hp_max (+0x9e88) and
-        // is clamped down to it.
-        const i32 hp = LoadI32(battle, 0x23fcU);
+        // is clamped down to it. The HP pair lives in the ECL record's
+        // working sub-record: record+0x23fc = work.hp_13c0, record+0x2400
+        // = work.unknown_13c4 (the hp_max denominator).
+        const i32 hp = battle->work.hp_13c0;
         hud.boss_hp_raw = hp;
         const float frac = static_cast<float>(hp)
-            / static_cast<float>(LoadI32(battle, 0x2400U));
+            / static_cast<float>(battle->work.unknown_13c4);
         hud.boss_hp_fraction = frac;
         if (frac > hud.boss_hp_fill)
             hud.boss_hp_fill = hud.boss_hp_fill + kHpFillStep;
@@ -334,8 +341,8 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
                 break;
             }
             {
-                u8 *vm = SpawnHudPoolVm(script, hud.front_anm_work);
-                hud.stage_boss_handle = LoadU32(vm, 0);
+                VmRecord *vm = SpawnHudPoolVm(script, hud.front_anm_work);
+                hud.stage_boss_handle = static_cast<u32>(vm->entity_id);
             }
         }
     skip_spawn:
@@ -345,11 +352,11 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
             const i32 wanted = static_cast<i32>(hud.bench_child_count);
             for (u32 i = 0; i != 10U; ++i) {
                 if (static_cast<i32>(i) < wanted) {
-                    if (slots[i] == 0U) {
-                        u8 *vm = SpawnHudPoolVm(i + 0x5bU,
-                                                hud.front_anm_work);
-                        slots[i] = LoadU32(vm, 0);
-                    }
+                if (slots[i] == 0U) {
+                    VmRecord *vm = SpawnHudPoolVm(i + 0x5bU,
+                                                  hud.front_anm_work);
+                    slots[i] = static_cast<u32>(vm->entity_id);
+                }
                 } else if (slots[i] != 0U) {
                     SetEntityStateWordByHandleSlot(&slots[i], 1);
                     slots[i] = 0U;
@@ -362,14 +369,15 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
         if (hud.stage_boss_handle != 0U)
             SetEntityStateWordByHandleSlot(&hud.stage_boss_handle, 1);
         hud.stage_boss_handle = 0U;
-        // Deliberate raw dword clears: the spell-bar values are float
-        // bit patterns (0x9e9c additionally overlaps the open-script
-        // handle documented in AsciiHudOwner.hpp).
-        StoreU32(hud_raw, 0x9e84U, 0U); // boss_hp_fill
-        StoreU32(hud_raw, 0x9e94U, 0U); // spell_bars[0].value
-        StoreU32(hud_raw, 0x9e9cU, 0U); // overlaps spell_bars[1].value
-        StoreU32(hud_raw, 0x9ea4U, 0U); // spell_bars[2].value
-        StoreU32(hud_raw, 0x9eacU, 0U); // spell_bars[3].value
+        // Zero the spell-bar values (float bit patterns: writing 0.0f is
+        // the same dword store; 0x9e9c additionally overlaps the
+        // open-script handle documented in AsciiHudOwner.hpp).
+        hud.boss_hp_fill = 0.0f;          // +0x9e84
+        hud.spell_bars[0].value = 0.0f;   // +0x9e94
+        hud.spell_bars[1].value = 0.0f;   // +0x9e9c (overlaps the
+                                          //   open-script handle)
+        hud.spell_bars[2].value = 0.0f;   // +0x9ea4
+        hud.spell_bars[3].value = 0.0f;   // +0x9eac
     }
 
     // ---- result-screen script state (+0x9eb8) ----
@@ -397,10 +405,11 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
     }
 
     // ---- spell/timer block (gated on the battle record) ----
-    u8 *battle = 0;
+    EclScriptObject *battle = 0;
     if (g_BossBattleState != 0)
-        battle = *reinterpret_cast<u8 **>(
-            static_cast<u8 *>(g_BossBattleState) + 0x10U);
+        battle = static_cast<EclScriptObject *>(
+            *reinterpret_cast<void **>(
+                static_cast<u8 *>(g_BossBattleState) + 0x10U));
     if (battle != 0) {
         const i32 seconds = hud.spell_countdown;
         if (seconds >= 0 && hud.result_script_state == 0) {
@@ -440,12 +449,16 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
             }
         }
 
-        // Spell-card flag block: needs battle+0x2480 bits {0 set, 4 set}.
-        const u32 misc = LoadU32(battle, 0x2480U);
+        // Spell-card flag block: needs work.flags_1444 (record+0x2480)
+        // bits {0 set, 4 set}.
+        const u32 misc = battle->work.flags_1444;
         const bool bit4 = ((misc >> 4) & 1U) != 0U;
         const bool bit0 = (misc & 1U) != 0U;
         if (bit4 && !bit0) {
-            const u32 spell_timer = LoadU32(battle, 0x2404U);
+            // record+0x2404 = work.unknown_13c8 (the spell countdown
+            // timer the ECL script drains).
+            const u32 spell_timer =
+                static_cast<u32>(battle->work.unknown_13c8);
             const bool practice =
                 (LoadU32(static_cast<u8 *>(g_StageState), 0x378cU)
                  & 1U) != 0U;
@@ -511,15 +524,17 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
             if (apply)
                 hud.hud_mode_flags = flags;
 
-            // Boss overlay anchor/alpha, and the +0x9a48 VM run.
+            // Boss overlay anchor/alpha, and the +0x9a48 VM run. The boss
+            // X is the ECL record's work.base_pos_002c[0] (record+0x1068).
             (void)FinalizeTimelineRenderObjectSetup(&hud.aux_vm);
             hud.aux_vm.delta_pos_y = 480.0f;
             hud.aux_vm.delta_pos_x =
-                LoadFloat(battle, 0x1068U) + kBossBaseX;
+                battle->work.base_pos_002c[0] + kBossBaseX;
             const float boss_x =
                 (*reinterpret_cast<const PlayerRecord *>(
                     g_ScreenTargetBlock)).position_x;
-            const float diff = LoadFloat(battle, 0x1068U) - boss_x;
+            const float diff =
+                battle->work.base_pos_002c[0] - boss_x;
             const float abs_diff = diff < 0.0f ? -diff : diff;
             if (abs_diff < kBossNearX) {
                 // byte +0x9d47 = 0x40 - (i32)(|dx| * -2.984375) low byte
@@ -535,8 +550,8 @@ i32 UpdateAsciiHudGameplayStackAbi(void *owner)
             } else {
                 StoreU8(hud_raw, 0x9d47U, 0xffU);
             }
-            if (LoadFloat(battle, 0x1068U) < kBossOffLow
-                || LoadFloat(battle, 0x1068U) > kBossOffHigh)
+            if (battle->work.base_pos_002c[0] < kBossOffLow
+                || battle->work.base_pos_002c[0] > kBossOffHigh)
                 StoreU8(hud_raw, 0x9d47U, 0U);
         }
     }

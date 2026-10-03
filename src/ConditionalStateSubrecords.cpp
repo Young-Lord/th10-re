@@ -23,6 +23,7 @@
 #include "CallbackScheduler.hpp"
 #include "ConditionalStateObject.hpp"
 #include "EclScriptLibrary.hpp"
+#include "EclScriptObject.hpp"
 
 namespace th10 {
 
@@ -33,11 +34,6 @@ extern CallbackScheduler *g_CallbackScheduler; // TH10 DAT_00491be4
 extern void *g_EffectManagerRoot;              // TH10 DAT_004776f0
 extern i32 ConvertFloatToI32TowardZeroX87(float value);
 extern const float g_AsciiOverlayInitialRate;  // TH10 flt_476F78 (1.0f)
-
-u32 LoadU32At(const void *address)
-{
-    return *reinterpret_cast<const u32 *>(address);
-}
 
 void StoreU32At(void *address, u32 value)
 {
@@ -62,27 +58,33 @@ i32 NotifyEclScriptObjectEcxStackAbi(void *record /* ECX */, i32 argument);
 i32 TickConditionalStateRecords(void *state)
 {
     // Typed view of the 0x68-byte conditional state (the scheduler passes it
-    // in ECX); the list nodes themselves stay raw (they are embedded in the
-    // ECL records at record+0x116c, not part of ConditionalState).
+    // in ECX). The walked list nodes are the EclScriptWork node triple
+    // embedded in each ECL script object at record+0x116c (work+0x130:
+    // list_self_0130 / list_next_0134 / list_prev_0138), so the walk reads
+    // the typed record back-pointer for the object itself.
     ConditionalState &cond = *static_cast<ConditionalState *>(state);
 
     // One forced update per ECL script object in the state's list. Records
-    // with the +0x2480 bit 0x20000 set skip the ECL run and are notified
-    // directly; otherwise the ECL per-frame update runs and its nonzero
-    // result also notifies. On a zero result the run-gate bit 0x400 is
-    // cleared so the record can run again next frame.
+    // with the work.flags_1444 (record+0x2480) bit 0x20000 set skip the ECL
+    // run and are notified directly; otherwise the ECL per-frame update
+    // runs and its nonzero result also notifies. On a zero result the
+    // run-gate bit 0x400 is cleared so the record can run again next frame.
+    // The native latches the next node (list_next_0134) before running the
+    // record, since the run may tear the record down and unlink it.
     for (u32 *node = static_cast<u32 *>(cond.script_list_head_0058);
-         node != 0; node = reinterpret_cast<u32 *>(node[1])) {
-        u8 *const record = reinterpret_cast<u8 *>(node[0]);
+         node != 0;) {
+        u32 *const next = reinterpret_cast<u32 *>(node[1]);
+        EclScriptObject &record =
+            *reinterpret_cast<EclScriptObject *>(node[0]);
         // (The native dereferences the record without a null check.)
-        if ((LoadU32At(record + 0x2480U) & 0x20000U) != 0U) {
-            (void)NotifyEclScriptObjectEcxStackAbi(record, 1);
-        } else if (RunEclScriptSetupStackAbi(record + 0x103cU) != 0) {
-            (void)NotifyEclScriptObjectEcxStackAbi(record, 1);
+        if ((record.work.flags_1444 & 0x20000U) != 0U) {
+            (void)NotifyEclScriptObjectEcxStackAbi(&record, 1);
+        } else if (RunEclScriptSetupStackAbi(&record.work) != 0) {
+            (void)NotifyEclScriptObjectEcxStackAbi(&record, 1);
         } else {
-            StoreU32At(record + 0x2480U,
-                LoadU32At(record + 0x2480U) & ~0x400U);
+            record.work.flags_1444 &= ~0x400U;
         }
+        node = next;
     }
 
     // Score/countdown advance (the shared overlay time pattern already

@@ -2,14 +2,17 @@
 // script object) and 0x0040cc50 (its scalar deleting destructor wrapper).
 //
 // This is the counterpart of CreateEclScriptObjectEaxStackAbi in
-// EclScriptLibrary.cpp: the record's embedded list node (+0x116c, next at
-// +0x1170, prev at +0x1174) is removed from the conditional state's object
-// list, the entity ids published at +0x10fc are soft-released on the render
+// EclScriptLibrary.cpp: the record's embedded list node (the
+// work.list_self_0130 / list_next_0134 / list_prev_0138 triple at
+// record+0x116c, next at +0x1170, prev at +0x1174) is removed from the
+// conditional state's object list, the entity ids published in
+// work.published_ids_00c0 (record+0x10fc) are soft-released on the render
 // owner, and the player-block back references are dropped.
 
 #include "EclScriptObjectTeardown.hpp"
 
 #include "ConditionalStateObject.hpp"
+#include "EclScriptObject.hpp"
 #include "EntityHelpers.hpp"
 #include "PlayerRecord.hpp"
 
@@ -22,14 +25,8 @@ extern void *g_MainChainRenderOwner;                // TH10 DAT_00491c10
 extern void *g_AsciiHudConditionalState;            // TH10 DAT_00477704
 extern void *g_PlayerStateBlock;                    // TH10 DAT_00477834
 
-u32 LoadU32From(const void *address)
-{
-    const u8 *const bytes = static_cast<const u8 *>(address);
-    return static_cast<u32>(bytes[0]) | (static_cast<u32>(bytes[1]) << 8)
-         | (static_cast<u32>(bytes[2]) << 16)
-         | (static_cast<u32>(bytes[3]) << 24);
-}
-
+// Byte-level store for the foreign images that stay RAW: the neighbour
+// list nodes and the malloc'd name-list nodes.
 void StoreU32To(void *address, u32 value)
 {
     u8 *const bytes = static_cast<u8 *>(address);
@@ -44,11 +41,12 @@ void StoreU32To(void *address, u32 value)
 // TH10 0x0040dae0. Stack argument = record, ret 4.
 void DestroyEclScriptObjectInPlaceStackAbi(void *record)
 {
-    u8 *const rec = static_cast<u8 *>(record);
+    EclScriptObject &obj = *static_cast<EclScriptObject *>(record);
+    EclScriptWork &work = obj.work;
 
     // Plant the live vtable first (the native destructor prologue restores
     // the final-class vtable before any release work).
-    StoreU32To(rec, 0x46d0c0U);
+    obj.vtable_0000 = reinterpret_cast<void *>(0x46d0c0U);
 
     // Unlink the embedded node from the conditional state's list. Only the
     // +0x60 count is decremented here even though creation bumps both
@@ -58,29 +56,32 @@ void DestroyEclScriptObjectInPlaceStackAbi(void *record)
     u8 *const state_bytes = static_cast<u8 *>(g_AsciiHudConditionalState);
     ConditionalState &cond =
         *reinterpret_cast<ConditionalState *>(state_bytes);
-    u32 *const node = reinterpret_cast<u32 *>(rec + 0x116cU);
+    void *const node = &work.list_self_0130;
     if (cond.script_list_head_0058 == node) // +0x58
-        cond.script_list_head_0058 = reinterpret_cast<void *>(node[1]);
+        cond.script_list_head_0058 = work.list_next_0134;
     if (cond.script_list_tail_005c == node) // +0x5c
-        cond.script_list_tail_005c = reinterpret_cast<void *>(node[2]);
+        cond.script_list_tail_005c = work.list_prev_0138;
 
-    const u32 next = node[1];
-    if (next != 0U)
-        StoreU32To(reinterpret_cast<void *>(next + 8U), node[2]);
-    const u32 previous = node[2];
-    if (previous != 0U)
-        StoreU32To(reinterpret_cast<void *>(previous + 4U), node[1]);
+    // The neighbour nodes are foreign records' embedded list nodes (raw
+    // next at node+4, prev at node+8), so their fields stay RAW.
+    if (work.list_next_0134 != 0)
+        StoreU32To(static_cast<u8 *>(work.list_next_0134) + 8U,
+                   reinterpret_cast<u32>(work.list_prev_0138));
+    if (work.list_prev_0138 != 0)
+        StoreU32To(static_cast<u8 *>(work.list_prev_0138) + 4U,
+                   reinterpret_cast<u32>(work.list_next_0134));
 
-    node[1] = 0U;
-    node[2] = 0U;
+    work.list_next_0134 = 0;
+    work.list_prev_0138 = 0;
     --cond.script_count_0060; // +0x60 (the +0x64 aux count never unwinds)
 
-    // Published-id slot clear: the index is the record's +0x248c field and
-    // is unbounded natively (the constructor even seeds 0xffffffff there),
-    // so the +0x10 store stays RAW — see the bounds note in
+    // Published-id slot clear: the index is work.published_id_index_1450
+    // (record+0x248c) and is unbounded natively (the constructor even seeds
+    // 0xffffffff there), so the indexed store into the ConditionalState
+    // published_ids stays RAW — see the bounds note in
     // src/ConditionalStateObject.hpp.
-    if ((LoadU32From(rec + 0x2480U) & 0x8000U) != 0U) {
-        const u32 slot = LoadU32From(rec + 0x248cU);
+    if ((work.flags_1444 & 0x8000U) != 0U) {
+        const u32 slot = static_cast<u32>(work.published_id_index_1450);
         StoreU32To(state_bytes + 0x10U + slot * 4U, 0U);
     }
 
@@ -88,40 +89,44 @@ void DestroyEclScriptObjectInPlaceStackAbi(void *record)
     // The native inlines 0x004492a0 (list-A/list-B scan over
     // owner+0x72dad4/+0x72dadc, flag 0x4000000 at entity+0x35c, propagated
     // to the +0x14 child list while entity+0x18 is clear), which the
-    // reconstructed ReleaseEntityById models.
+    // reconstructed ReleaseEntityById models. Every slot is cleared after
+    // the scan (native `*v6++ = 0` at 0x40dbe5).
     if (g_MainChainRenderOwner != 0) {
         for (u32 index = 0; index != 10U; ++index) {
-            const u32 id = LoadU32From(rec + 0x10fcU + index * 4U);
+            const u32 id = work.published_ids_00c0[index];
             if (id != 0U)
                 ReleaseEntityById(g_MainChainRenderOwner, id);
+            work.published_ids_00c0[index] = 0U;
         }
     }
 
     // Player-block back references: the primary slot at +0x3504 also owns
-    // the byte flag at +0x3508; the 0x80-entry table at +0x4e8 (stride
-    // 0x5c) is scanned unconditionally.
+    // the byte flag at +0x3508; the 128-entry shot table at +0x4e8 (stride
+    // 0x5c, shot+0x4c homing target) is scanned unconditionally and is
+    // reached through the typed PlayerShotRecord fields.
     u8 *const player_ptr = static_cast<u8 *>(g_PlayerStateBlock);
     if (player_ptr != 0) {
         PlayerRecord &player =
             *reinterpret_cast<PlayerRecord *>(player_ptr);
-        if (player.homing_target == rec) {
+        if (player.homing_target == &obj) {
             player.homing_target = 0;
             player.homing_target_latch = 0U;
         }
         for (u32 index = 0; index != 0x80U; ++index) {
-            if (player.shots[index].homing_target == rec)
+            if (player.shots[index].homing_target == &obj)
                 player.shots[index].homing_target = 0;
         }
     }
 
     // Destruction vtable planted before the name-list release, as in the
     // native epilogue.
-    StoreU32To(rec, 0x46d0d8U);
+    obj.vtable_0000 = reinterpret_cast<void *>(0x46d0d8U);
 
-    // Free the script-name list at +0x1034: each node owns the name buffer
-    // in node[0] and the next node in node[1]; both are released through
-    // the shared delete.
-    u32 *name_node = reinterpret_cast<u32 *>(LoadU32From(rec + 0x1034U));
+    // Free the script-name list (alloc_list_1034): each malloc'd node owns
+    // the name buffer in node[0] and the next node in node[1]; the node
+    // layout is foreign, so it stays RAW. Both allocations are released
+    // through the shared delete.
+    u32 *name_node = static_cast<u32 *>(obj.alloc_list_1034);
     while (name_node != 0) {
         const u32 next = name_node[1];
         FreeMainChainObject(reinterpret_cast<void *>(name_node[0]));
