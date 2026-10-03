@@ -8,6 +8,12 @@ version = "1.00a"
 encoding = "shift_jis"
 
 [toolchain]
-compiler = "Visual C++ Toolkit 2003 13.10"
-linker = "7.10.3077"
+# 2026-10-03 Rich header fingerprint (scripts/rich_header_fingerprint.py):
+# 199 of 203 cl objects at build 6030 (131 C, 15 C++, 52 LTCG, 1 MASM, 33 IDL
+# markers); zero build-3077 markers. The stray 2179/4035 entries are
+# linker-adjacent DLL inputs. See docs/EVIDENCE-RICH-HEADER.md.
+compiler = "Microsoft (R) 32-bit C/C++ Optimizing Compiler Version 13.10.6030 for 80x86"
+compiler_short = "VC7.1 SP1 13.10.6030"
+compiler_build = 6030
+linker = "Microsoft (R) Incremental Linker Version 7.10.6030"
 directx_sdk = "October 2006"
