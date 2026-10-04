@@ -8,6 +8,8 @@ struct Float2 {
 };
 
 // FUNCTION: TH10 0x0041f800
-void SetVectorFromAngle(Float2 *output, float angle, float length);
+// Original ABI: output pointer in ECX, angle/length on the stack, `ret 8` —
+// MSVC __fastcall with a leading pointer and trailing float arguments.
+void __fastcall SetVectorFromAngle(Float2 *output, float angle, float length);
 
 } // namespace th10

@@ -57,7 +57,7 @@ def load_obj_symbols(obj: bytes):
             name = obj[strtab_off + soff:end].decode("latin1")
         else:
             name = rec[:8].rstrip(b"\x00").decode("latin1")
-        aux = rec[16]
+        aux = rec[17]  # NumberOfAuxSymbols; rec[16] is StorageClass
         if aux == 0:
             value, secnum = struct.unpack_from("<IH", rec, 8)
             syms[name] = (secnum, value)

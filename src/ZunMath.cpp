@@ -5,10 +5,10 @@
 namespace th10 {
 
 // FUNCTION: TH10 0x0041f800
-void SetVectorFromAngle(Float2 *output, float angle, float length)
+void __fastcall SetVectorFromAngle(Float2 *output, float angle, float length)
 {
-    output->x = cosf(angle) * length;
-    output->y = sinf(angle) * length;
+    output->x = (float)(cos(angle) * length);
+    output->y = (float)(sin(angle) * length);
 }
 
 } // namespace th10
