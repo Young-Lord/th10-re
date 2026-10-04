@@ -1,40 +1,54 @@
-# fsincos 助手函数族结论：保留 .asm（2026-10-04）
+# 16 个 object-matched 单元归属结论（2026-10-04 终版）
 
-## 对象
+## 结论
 
-原 `src/ZunMath.asm` 等手写汇编覆盖的 ECX-ABI 向量数学助手，特征序列
-`51 89 0c 24 8b 04 24`（push ecx; mov [esp],ecx; mov eax,[esp]——ECX 参数
-落栈槽）+ `d9 fb`（fsincos）。全库命中 8 处函数入口：
+**16 个函数全部属于原版构建中的非标准 ABI 代码区——最可能是 ZUN 的单一
+手写 MASM 模块（Rich header: 恰好 1 个 MASM 对象, build 6030）。
+`.asm` 即忠实重建，"C++ 化"目标方法论上不成立，撤销。**
 
-```
-0x408750 0x413270 0x41BEB0 0x41F800(ZunMath) 0x441EF0 0x4458B0 0x44C5D0 0x4501B0
-```
+## 证据
 
-另 14 处 `d9 fb`（fsincos）中的其余 6 处位于大函数内联位置
-（如 0x4436ED，弹幕函数内联 trig），属编译器合并产物，与本族无关。
+1. **cl 13.10.6030 无法从任何 C++ 源形状/旗标组合复现本区的代码形状**。
+   已测矩阵（ZunMath 0x41F800 为样本）：
+   - `/O2 /Os /Og /Oi /Gy`、`+ /Op`、`sin(f)/cos(f)` 双版本、源码顺序两变体
+     → 均输出 `fld;fcos;fmul;fstp;fld;fsin;...`（非合并）+ ECX 直接使用；
+   - `/GL` 单函数 + `/LTCG` + data-anchor 链接（`__fltused` 锚点）→ 同上；
+   - **全程序 /GL 复现**（helper + 8 调用点 + 取地址引用，整链 LTCG）→ 仍同上。
+   目标形状是 `fld;fsincos;fmul;fstp;fmul;fstp` + `push ecx/mov [esp],ecx/
+   mov eax,[esp]` 参数落栈槽。
+2. **自定义寄存器 ABI 遍布本区**：
+   - `0x447810`（释放助手）从 **EDI** 取参（`mov eax,[edi+108h]`），26 个
+     调用方（0x401260/0x40B7B0/0x41F930/0x42BC30…）全部"EDI 装值直接 call"，
+     无 ECX 搬运；
+   - `0x449AE0/0x449B70`（链注册助手）EDI+ESI 双寄存器传参；
+   - `FUN_00401530`（AsciiManager 字符串 worker）**ECX+EAX** 双寄存器传参。
+   cl 的任何标准约定（cdecl/stdcall/fastcall/thiscall）都不使用
+   EDI/ESI/EAX 传参；这些函数彼此调用、成片分布于 0x4012xx-0x4501B0。
+3. **反例核查**：14 处 fsincos 中其余 6 处为大函数内联位置（如 0x4436ED，
+   弹幕函数内的 cl 风格 x87 比较 `fucompp/fnstsw/test ah,44h`），属编译器
+   正常合并——说明 fsincos 本身不是禁区，**助手函数的特殊性在自定义 ABI
+   与落栈槽习惯，而非指令本身**。
+4. **旁证**：本区函数与编译器生成区风格断裂（手工回调注册、原始 vtable
+   调用、`mov esi,ecx` 手工寄存器搬移、无 SEH/cookie 习惯差异）。
 
-## 证据链
+## 处置
 
-1. **cl 13.10.6030 在已测旗标组合下均不从小助手源码生成 fsincos**：
-   `/O2 /Os /Og /Oi /Gy`、加 `/Op`（退化为 59B + CRT 调用，更糟）、
-   `sinf/cosf` 与 `sin/cos`（double）两种源码、`/GL + /LTCG`（整链
-   data-anchor 链接后提取，仍是非合并 fcos/fsin 序列）。sinf/cosf 的
-   调用顺序（V0/V1 变体）不影响产物。
-2. **Rich header：MASM 输入恰好 1 个对象**（prodid 0x005A, build 6030,
-   count 1）。8 个助手函数共享同一 28 字节形状、同一手写风格的 ECX 落栈
-   槽（该形状在 cl 生成的代码里无 C++ 动机），与"单一手写 MASM 模块"自洽。
-3. 结论：这 8 个函数在 ZUN 原始构建里就是**手写汇编模块**（一个 .asm 编译
-   单元）。忠实的重建载体就是我们的 .asm（现状 object-matched 正确），
-   **不应也不会被 C++ 替换**。
+| 单元 | 函数 | 处置 |
+| --- | --- | --- |
+| ZunMath / ZunMathBounds | 2 | 保留 .asm（fsincos/x87 族） |
+| GlobalBufferRelease | 1 | 保留 .asm（0x447810 EDI 族） |
+| GlobalManager×5 | 6 | 保留 .asm（同族） |
+| MainChainDrawInitialize/Callbacks/Registration | 4 | 保留 .asm（0x4215A0/0x449xxx 族） |
+| AsciiManagerStrings | 3 | 保留 .asm（FUN_00401530 ECX+EAX 族；0x401630/1690 含 GS cookie 需后续单独裁决） |
 
-## 对项目的影响
+- ZunMath 的 `__fastcall` ABI 修正保留（调用方 ECX 传参与原版一致）。
+- 已验证设施：`compare-obj-function.py`（重定位感知比对）、
+  `verify-zunmath.py`、LTCG data-anchor 链接流程（`/GL + /LTCG +
+  /nodefaultlib + __fltused 锚点 + /map` 提取）——后续 VERIFY_OURS/
+  adopt 工作直接复用。
 
-- 撤销"16 个 object-matched 全部 C++ 化"中涉及本族的 8 个函数的目标；
-  剩余可 C++ 化的是 GlobalBufferRelease、GlobalManager×5、
-  MainChainDraw×3、AsciiManagerStrings（非 fsincos 族）。
-- `ZunMath.hpp/cpp` 的 `__fastcall` ABI 修正**保留**：原版调用点就是
-  ECX 传参（10 个调用方在 StageObjectVtable.cpp 等），语义 C++ 声明与
-  原始 ABI 对齐后调用方代码形状更接近原版。
-- 验证设施：`scripts/compare-obj-function.py`（重定位感知比对器）、
-  `scripts/verify-zunmath.py`（本族专用验证）——两者修复了 COFF 符号表
-  解析 bug（NumberOfAuxSymbols 在 +17，此前误读 +16 的 StorageClass）。
+## 战略含义
+
+C++ 字节匹配的真实战场在**编译器生成区**：VERIFY_OURS 668 个 +
+adopt 252 个（标准 ABI，Lzss 试点已证明管线可用）。本区 16 个以 .asm
+为最终形态，与原版的构建方式一致——这正是 matching decomp 的本义。
