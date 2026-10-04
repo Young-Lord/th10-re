@@ -50,3 +50,37 @@ DOS stub 中 Rich header（XOR key `0x3152a748`，DanS @ 0x80，Rich @ 0x108）
   其 `verify-toolchain.py --execute` 提供横幅/散列 + 无头 COFF/LTCG 冒烟验证）。
 - 已有的 16 个 object-matched 结果需复核：若当年是拿 3077 编出来的，其有效性
   存疑，应改用 6030 重放一遍。
+
+## 工具链落地（2026-10-04 复核）
+
+**获取与校验**
+
+- 来源：`https://github.com/archaic-msvc/msvc710_sp1.git` @ `cf62606`，装至
+  `~/.local/share/th10-re/tools/msvc710_sp1`，并复制进 wine 前缀
+  `drive_c/MSVC710SP1/`。
+- 8 个关键二进制（cl/c1/c1xx/c2/link/mspdb71/rc/cvtres）SHA-256 与
+  N0zoM1z0 `config/tools.lock.toml` **逐一相符**。
+- wine（11.17，wow64 模式运行 win32 工具）横幅验证：
+  `cl` = `Version 13.10.6030 for 80x86`，`link` = `Version 7.10.6030`。
+- env.sh 新增 `th10_sp1_cl` / `th10_sp1_link` / `th10_sp1_rc`（与旧
+  `th10_cl` 3077 链并存，仅作 A/B 用；新编译一律走 `th10_sp1_*`）。
+- 冒烟：`scripts/obj-compid.py` 读取 COFF `@comp.id`——6030 链产物
+  `0x60178e`、3077 链产物 `0x600c05`，与 Rich header 判据一致。
+
+**"重放 16 个 object-matched" 一项撤销**
+
+- 16 个 object-matched 函数的宿主对象**全部是手写 .asm**
+  （ZunMath.asm、GlobalBufferRelease.asm、MainChain*.asm、
+  GlobalManager*.asm、AsciiManagerStrings.asm），经汇编器（ml/NASM）产出，
+  **与 cl 版本无关**，无需重验。3077 风险只影响 C++ 管线。
+
+**3077 → 6030 codegen A/B（PlayerMovement.cpp）**
+
+| flags | 指令流差异 |
+| --- | --- |
+| `/c /TP`（现管线默认） | 0 行 |
+| `/c /TP /O2 /Os /Og` | 0 行 |
+
+两个版本在当前代码库的代表性 TU 上生成**逐指令相同**的代码（obj 文件仅
+`@comp.id`/时间戳元数据不同）。单样本不能证明全库等价，但切换风险判定为
+低；后续新 C++ 单元直接用 6030 链编译，历史 build/cpp/ 基线无需重编。
