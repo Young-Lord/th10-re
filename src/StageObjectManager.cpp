@@ -1,6 +1,7 @@
 #include "StageObjectManager.hpp"
 
 #include "AsciiRenderModeDispatcher.hpp"
+#include "StageObjectManagerObject.hpp"
 #include "TitleScreenObject.hpp"
 
 #include <cmath>
@@ -55,78 +56,81 @@ const u32 kStageEntityVtable = 0x4703e4U; // TH10 off_004703e4
 
 } // namespace
 
-void LinkStageObjectNodeEaxEcxAbi(void *manager, void *node)
+void LinkStageObjectNodeEaxEcxAbi(void *manager, void *node_memory)
 {
-    u8 *bytes = static_cast<u8 *>(manager);
-    u32 *list_head = reinterpret_cast<u32 *>(bytes + 0x434);
-    u32 *node_words = static_cast<u32 *>(node);
-    node_words[1] = *list_head;             // node->prev = old head
-    u32 *previous = reinterpret_cast<u32 *>(*list_head);
-    previous[2] = reinterpret_cast<u32>(node); // old head->next = node
-    *list_head = reinterpret_cast<u32>(node);
-    ++(*reinterpret_cast<u32 *>(bytes + 0x438));
+    StageObjectManager &mgr =
+        *reinterpret_cast<StageObjectManager *>(manager);
+    StageObjectHeader &node =
+        *reinterpret_cast<StageObjectHeader *>(node_memory);
+    node.list_prev_0004 = mgr.list_head_0434;   // node->prev = old head
+    mgr.list_head_0434->list_next_0008 = &node; // old head->next = node
+    mgr.list_head_0434 = &node;
+    ++mgr.node_count_0438;
 }
 
 i32 InitializeStageObjectManagerEbxAbi(void *manager)
 {
-    u8 *bytes = static_cast<u8 *>(manager);
+    StageObjectManager &mgr =
+        *reinterpret_cast<StageObjectManager *>(manager);
     void *work = RequestManagerWorkSlotNative(
         g_RenderOwner, kStageObjectWorkName, 7);
-    *reinterpret_cast<void **>(bytes + 0x458) = work;
+    mgr.bullet_anm_work_0458 = work;
     if (work == 0) {
         ReportStageObjectError(kStageObjectFailureText);
         return -1;
     }
 
-    u8 *calc_node = static_cast<u8 *>(AllocSchedulerCallbackNode(
-        reinterpret_cast<void *>(&StageObjectManagerCalcCallback)));
-    *reinterpret_cast<u32 *>(calc_node + 0x4) &= ~2U;
-    *reinterpret_cast<u32 *>(calc_node + 0x20) =
-        reinterpret_cast<u32>(bytes);
-    RegisterSchedulerCalcCallback(calc_node, &g_SchedulerHeap, 0x13);
-    *reinterpret_cast<u32 *>(bytes + 8) =
-        reinterpret_cast<u32>(calc_node);
+    ChainElem *calc_element = static_cast<ChainElem *>(
+        AllocSchedulerCallbackNode(
+            reinterpret_cast<void *>(&StageObjectManagerCalcCallback)));
+    calc_element->flags &= ~2U;
+    calc_element->arg = manager;
+    RegisterSchedulerCalcCallback(calc_element, &g_SchedulerHeap, 0x13);
+    mgr.calc_element = calc_element;
 
-    u8 *draw_node = static_cast<u8 *>(AllocSchedulerCallbackNode(
-        reinterpret_cast<void *>(&StageObjectManagerDrawCallback)));
-    *reinterpret_cast<u32 *>(draw_node + 0x4) &= ~2U;
-    *reinterpret_cast<u32 *>(draw_node + 0x20) =
-        reinterpret_cast<u32>(bytes);
-    RegisterSchedulerDrawCallback(draw_node, &g_SchedulerHeap, 0x1b);
-    *reinterpret_cast<u32 *>(bytes + 0xc) =
-        reinterpret_cast<u32>(draw_node);
+    ChainElem *draw_element = static_cast<ChainElem *>(
+        AllocSchedulerCallbackNode(
+            reinterpret_cast<void *>(&StageObjectManagerDrawCallback)));
+    draw_element->flags &= ~2U;
+    draw_element->arg = manager;
+    RegisterSchedulerDrawCallback(draw_element, &g_SchedulerHeap, 0x1b);
+    mgr.draw_element = draw_element;
 
-    *reinterpret_cast<u32 *>(bytes + 0x434) =
-        reinterpret_cast<u32>(bytes + 0x10);
+    mgr.list_head_0434 = &mgr.list_sentinel_0010;
     return 0;
 }
 
 void DestroyStageObjectManagerStackAbi(void *manager)
 {
-    u8 *bytes = static_cast<u8 *>(manager);
+    StageObjectManager &mgr =
+        *reinterpret_cast<StageObjectManager *>(manager);
 
-    void *calc_node = *reinterpret_cast<void **>(bytes + 8);
-    if (calc_node != 0)
-        ReleaseSchedulerCallback(calc_node, &g_SchedulerHeap);
-    void *draw_node = *reinterpret_cast<void **>(bytes + 0xc);
-    if (draw_node != 0)
-        ReleaseSchedulerCallback(draw_node, &g_SchedulerHeap);
+    ChainElem *calc_element = mgr.calc_element;
+    if (calc_element != 0)
+        ReleaseSchedulerCallback(calc_element, &g_SchedulerHeap);
+    ChainElem *draw_element = mgr.draw_element;
+    if (draw_element != 0)
+        ReleaseSchedulerCallback(draw_element, &g_SchedulerHeap);
 
     // Vtable slot 4 (+0x10) releases each node before the unlink.
     typedef void (*ReleaseThunk)(void *);
-    u8 *node = *reinterpret_cast<u8 **>(bytes + 0x18);
+    StageObjectHeader *node = static_cast<StageObjectHeader *>(
+        mgr.list_sentinel_0010.list_next_0008);
     while (node != 0) {
-        u8 *next = *reinterpret_cast<u8 **>(node + 8);
+        // The next link is read before the release runs.
+        StageObjectHeader *next = static_cast<StageObjectHeader *>(
+            node->list_next_0008);
         void **vtable = *reinterpret_cast<void ***>(node);
         reinterpret_cast<ReleaseThunk>(vtable[4])(node);
         // Unlink: node->prev->next = node->next; node->next->prev =
         // node->prev (the 0x41c0d0 twin), then the node is freed.
-        u32 *node_words = reinterpret_cast<u32 *>(node);
-        u32 *previous = reinterpret_cast<u32 *>(node_words[1]);
-        u32 *following = reinterpret_cast<u32 *>(node_words[2]);
-        previous[2] = reinterpret_cast<u32>(following);
+        StageObjectHeader *previous = static_cast<StageObjectHeader *>(
+            node->list_prev_0004);
+        StageObjectHeader *following = static_cast<StageObjectHeader *>(
+            node->list_next_0008);
+        previous->list_next_0008 = following;
         if (following != 0)
-            following[1] = node_words[1];
+            following->list_prev_0004 = previous;
         FreeHeapBlock(node);
         node = next;
     }
@@ -137,7 +141,9 @@ void *CreateStageObjectManagerEbxAbi(void *manager)
 {
     u8 *record = AllocateHeapBlock(0x45c);
     if (record != 0) {
-        InitStageObjectHeaderDefaultsEdxNative(record + 0x10);
+        StageObjectManager &mgr =
+            *reinterpret_cast<StageObjectManager *>(record);
+        InitStageObjectHeaderDefaultsEdxNative(&mgr.list_sentinel_0010);
         // The native zeroes the whole block after the header defaults,
         // erasing them; preserved verbatim.
         memset(record, 0, 0x45c);
@@ -176,10 +182,13 @@ i32 StageObjectManagerCalcCallbackEcxAbi(void *manager)
 namespace {
 
 // TH10 0x0041c4e0 / 0x0041c760 / 0x0041c880 shared walk: nodes with
-// kind 1 (+0xc) are skipped by every caller.
-u8 *NodeChainHead(void *manager)
+// state_000c == 1 (+0x00c) are skipped by every caller.
+StageObjectHeader *NodeChainHead(void *manager)
 {
-    return *reinterpret_cast<u8 **>(static_cast<u8 *>(manager) + 0x18);
+    StageObjectManager &mgr =
+        *reinterpret_cast<StageObjectManager *>(manager);
+    return static_cast<StageObjectHeader *>(
+        mgr.list_sentinel_0010.list_next_0008);
 }
 
 } // namespace
@@ -192,9 +201,9 @@ i32 StageObjectManagerDrawCallbackEcxAbi(void *manager)
     if ((*reinterpret_cast<const u8 *>(&ts.flags) & 4U) != 0U)
         return 1;
     typedef void (*NotifyThunk)(void *);
-    for (u8 *node = NodeChainHead(manager); node != 0;
-         node = *reinterpret_cast<u8 **>(node + 8)) {
-        if (*reinterpret_cast<u32 *>(node + 0xc) == 1U)
+    for (StageObjectHeader *node = NodeChainHead(manager); node != 0;
+         node = static_cast<StageObjectHeader *>(node->list_next_0008)) {
+        if (node->state_000c == 1)
             continue;
         void **vtable = *reinterpret_cast<void ***>(node);
         reinterpret_cast<NotifyThunk>(vtable[3])(node);
@@ -207,21 +216,22 @@ i32 BroadcastStageObjectSpawnEaxEbxStackAbi(void *manager,
                                             const u32 position[3],
                                             i32 argument)
 {
-    u8 *bytes = static_cast<u8 *>(manager);
-    u32 *pos_slot = reinterpret_cast<u32 *>(bytes + 0x440);
-    pos_slot[0] = position[0];
-    pos_slot[1] = position[1];
-    pos_slot[2] = position[2];
-    u32 *vel_slot = reinterpret_cast<u32 *>(bytes + 0x44c);
-    vel_slot[0] = velocity[0];
-    vel_slot[1] = velocity[1];
-    vel_slot[2] = velocity[2];
+    StageObjectManager &mgr =
+        *reinterpret_cast<StageObjectManager *>(manager);
+    // The native copies the raw position/velocity dwords into the
+    // float cache fields, so the stores keep the bit patterns.
+    *reinterpret_cast<u32 *>(&mgr.tween_target_x_0440) = position[0];
+    *reinterpret_cast<u32 *>(&mgr.tween_target_y_0444) = position[1];
+    *reinterpret_cast<u32 *>(&mgr.tween_target_z_0448) = position[2];
+    *reinterpret_cast<u32 *>(&mgr.broadcast_vel_x_044c) = velocity[0];
+    *reinterpret_cast<u32 *>(&mgr.broadcast_vel_y_0450) = velocity[1];
+    *reinterpret_cast<u32 *>(&mgr.broadcast_vel_z_0454) = velocity[2];
 
     typedef i32 (*SpawnThunk)(void *, const u32 *, const u32 *, i32);
     i32 total = 0;
-    for (u8 *node = NodeChainHead(manager); node != 0;
-         node = *reinterpret_cast<u8 **>(node + 8)) {
-        if (*reinterpret_cast<u32 *>(node + 0xc) == 1U)
+    for (StageObjectHeader *node = NodeChainHead(manager); node != 0;
+         node = static_cast<StageObjectHeader *>(node->list_next_0008)) {
+        if (node->state_000c == 1)
             continue;
         void **vtable = *reinterpret_cast<void ***>(node);
         total += reinterpret_cast<SpawnThunk>(vtable[6])(
@@ -232,12 +242,12 @@ i32 BroadcastStageObjectSpawnEaxEbxStackAbi(void *manager,
 
 i32 MarkStageObjectsPendingEaxAbi(void *manager)
 {
-    for (u8 *node = NodeChainHead(manager); node != 0;
-         node = *reinterpret_cast<u8 **>(node + 8)) {
-        if (*reinterpret_cast<u32 *>(node + 0xc) == 1U)
+    for (StageObjectHeader *node = NodeChainHead(manager); node != 0;
+         node = static_cast<StageObjectHeader *>(node->list_next_0008)) {
+        if (node->state_000c == 1)
             continue;
-        if (*reinterpret_cast<u8 *>(node + 0x50) == 0)
-            *reinterpret_cast<u8 *>(node + 0x50) = 1;
+        if (node->done_latch_0050 == 0)
+            node->done_latch_0050 = 1;
     }
     return 0;
 }
@@ -247,9 +257,9 @@ i32 SumStageObjectCounterVirtualEaxStackAbi(void *manager, u32 value,
 {
     typedef i32 (*CountThunk)(void *, u32, u32);
     i32 total = 0;
-    for (u8 *node = NodeChainHead(manager); node != 0;
-         node = *reinterpret_cast<u8 **>(node + 8)) {
-        if (*reinterpret_cast<u32 *>(node + 0xc) == 1U)
+    for (StageObjectHeader *node = NodeChainHead(manager); node != 0;
+         node = static_cast<StageObjectHeader *>(node->list_next_0008)) {
+        if (node->state_000c == 1)
             continue;
         void **vtable = *reinterpret_cast<void ***>(node);
         total += reinterpret_cast<CountThunk>(vtable[8])(node, value,
@@ -258,34 +268,38 @@ i32 SumStageObjectCounterVirtualEaxStackAbi(void *manager, u32 value,
     return total;
 }
 
-i32 SpawnBossDropItemVmsEcxAbi(void *boss)
+// The boss record shares the kind A layout (StageObjectKindA, 0xd58):
+// the two VM records sit at +0x600 (vm1_0600) and +0x9ac (vm2_09ac).
+i32 SpawnBossDropItemVmsEcxAbi(void *boss_memory)
 {
-    u8 *bytes = static_cast<u8 *>(boss);
+    StageObjectKindA &boss =
+        *reinterpret_cast<StageObjectKindA *>(boss_memory);
     const float drop_x =
-        *reinterpret_cast<const float *>(bytes + 0x24) + 224.0f;
+        boss.header.position_x_0024 + 224.0f;
     const float drop_y =
-        *reinterpret_cast<const float *>(bytes + 0x28) + 16.0f;
-    *reinterpret_cast<float *>(bytes + 0x934) = drop_x;
-    *reinterpret_cast<float *>(bytes + 0x938) = drop_y;
-    *reinterpret_cast<u32 *>(bytes + 0x93c) =
-        *reinterpret_cast<const u32 *>(bytes + 0x2c);
+        boss.header.position_y_0028 + 16.0f;
+    boss.vm1_0600.base_pos_x = drop_x;
+    boss.vm1_0600.base_pos_y = drop_y;
+    // The native copies the +0x2c depth as a raw dword.
+    *reinterpret_cast<u32 *>(&boss.vm1_0600.base_pos_z) =
+        *reinterpret_cast<const u32 *>(&boss.header.position_z_002c);
 
     // The wrapped angle lands in the +0x600 VM's +0x2c slot.
-    *reinterpret_cast<float *>(bytes + 0x62c) = WrapAngleSumStackAbi(
-        *reinterpret_cast<const float *>(bytes + 0x3c), 1.5707964f);
+    boss.vm1_0600.rotation_z = WrapAngleSumStackAbi(
+        boss.header.angle_003c, 1.5707964f);
 
-    u8 *first_vm = bytes + 0x600;
-    *reinterpret_cast<u32 *>(first_vm + 0x35c) |= 4U;
-    DispatchAsciiAnimationVmRenderMode(first_vm, g_RenderOwner);
+    boss.vm1_0600.flags |= 4U;
+    DispatchAsciiAnimationVmRenderMode(&boss.vm1_0600, g_RenderOwner);
 
-    if (*reinterpret_cast<const float *>(bytes + 0x4c) == 0.0f) {
-        *reinterpret_cast<float *>(bytes + 0xce0) = drop_x;
-        *reinterpret_cast<float *>(bytes + 0xce4) = drop_y;
-        *reinterpret_cast<u32 *>(bytes + 0xce8) =
-            *reinterpret_cast<const u32 *>(bytes + 0x2c);
-        u8 *second_vm = bytes + 0x9ac;
-        *reinterpret_cast<u32 *>(second_vm + 0x35c) |= 4U;
-        DispatchAsciiAnimationVmRenderMode(second_vm, g_RenderOwner);
+    if (boss.header.zvel_004c == 0.0f) {
+        boss.vm2_09ac.base_pos_x = drop_x;
+        boss.vm2_09ac.base_pos_y = drop_y;
+        *reinterpret_cast<u32 *>(&boss.vm2_09ac.base_pos_z) =
+            *reinterpret_cast<const u32 *>(&boss.header.position_z_002c);
+        // Native 0x41d83f..0x41d863: the second-VM path goes straight to
+        // the render-mode dispatch with NO +0xd08 (vm2 flags) write — the
+        // flags |= 4 exists only on the vm1 path (0x41d802..0x41d811).
+        DispatchAsciiAnimationVmRenderMode(&boss.vm2_09ac, g_RenderOwner);
     }
     return 0;
 }
@@ -295,18 +309,17 @@ namespace {
 // Shared rotated-box body for the 0x41e4d0 / 0x41f670 twins.
 i32 RotatedBoxHit(const void *object, const float point[2], float radius)
 {
-    const u8 *bytes = static_cast<const u8 *>(object);
-    const float dx = point[0] - *reinterpret_cast<const float *>(bytes + 0x24);
-    const float dy = point[1] - *reinterpret_cast<const float *>(bytes + 0x28);
-    const float angle = -*reinterpret_cast<const float *>(bytes + 0x3c);
+    const StageObjectHeader &obj =
+        *reinterpret_cast<const StageObjectHeader *>(object);
+    const float dx = point[0] - obj.position_x_0024;
+    const float dy = point[1] - obj.position_y_0028;
+    const float angle = -obj.angle_003c;
     const float sine = static_cast<float>(std::sin(angle));
     const float cosine = static_cast<float>(std::cos(angle));
     const float rx = dx * cosine - sine * dy;
     const float ry = cosine * dy + sine * dx;
-    const float half_width =
-        *reinterpret_cast<const float *>(bytes + 0x40);
-    const float half_height =
-        *reinterpret_cast<const float *>(bytes + 0x44);
+    const float half_width = obj.depth_0040;
+    const float half_height = obj.alpha_0044;
     if (rx - radius > half_width)
         return 0;
     if (half_height * 0.5f < ry - radius)

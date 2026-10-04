@@ -2,10 +2,12 @@
 // 0x0041ba50) plus the small effect/score helpers it drives (0x0041beb0,
 // 0x00426660, 0x00405b60, 0x0041be80, 0x00418930, 0x0043dd10, 0x00412ff0)
 // and the two boundaries 0x004054b0 / 0x0042b9c0. Every offset below is
-// from the native disassembly; the bullet array is 0x896 records of
-// 0x3f0 bytes at manager+0x14 (the region zeroed by the title calc body
-// game-start reset), with the two counter dwords at manager+0x21ceb4 and
-// manager+0x21cebc just past the array.
+// from the native disassembly. Slot payloads are accessed through the
+// typed BulletSlot/BulletManager views (src/BulletManager.hpp; layout
+// MSVC-asserted there): the bullet array is 0x896 slots of 0x3f0 bytes
+// at manager+0x14 (the region zeroed by the title calc body game-start
+// reset), with live_count_21ceb4 and spawn_counter_21cebc just past the
+// array.
 //
 // Control-flow note: the native jumps straight back to the loop-advance
 // (skipping the per-bullet animation-VM tick and distance bookkeeping)
@@ -15,6 +17,7 @@
 // explicit goto targets.
 #include <math.h>
 
+#include "BulletManager.hpp"
 #include "EntityHelpers.hpp"
 #include "PlayerFrameworkHelpers.hpp"
 #include "PlayerOptionRecords.hpp"
@@ -128,26 +131,9 @@ extern void AwardExtendLifeEaxEcxAbi(void *frame_state, i32 increment);
 extern u32 *SpawnBulletDeathEntityEdxStackAbi(void *slot, u32 script_id,
                                               u32 *out_id, i32 kind);
 
-// Bullet record field offsets. The native addresses them through
-// ebp = slot + 0x3b0, so the record base is slot + 0x3ac for a slot
-// pointer at manager + 0x14 + i * 0x3f0.
-const u32 kOffX = 0x3ACU;         // float position x
-const u32 kOffY = 0x3B0U;         // float position y
-const u32 kOffZ = 0x3B4U;         // float position z
-const u32 kOffVx = 0x3B8U;        // float velocity x
-const u32 kOffVy = 0x3BCU;        // float velocity y
-const u32 kOffVz = 0x3C0U;        // float velocity z
-const u32 kOffCounter = 0x3C8U;   // int distance counter (copy target)
-const u32 kOffDistanceI = 0x3CCU; // int distance (integer part)
-const u32 kOffDistance = 0x3D0U;  // float distance
-const u32 kOffSpeedPtr = 0x3D4U;  // pointer to the speed limiter float
-const u32 kOffState = 0x3DCU;     // movement state
-const u32 kOffKind = 0x3E0U;      // bonus/script kind
-const u32 kOffSpeed = 0x3E8U;     // float speed
-const u32 kOffDelay = 0x3ECU;     // spawn delay
-
+// Slot count of the bullet array walked by the frame update (0x41afd0:
+// ESI = manager+0x14, stride 0x3f0, 0x896 iterations).
 const u32 kBullets = 0x896U;
-const u32 kStride = 0x3F0U;
 
 // Shared fixed addresses of the 0x474c40 frame-state block and the
 // 0x492590 effect manager (the native embeds them as immediates).
@@ -156,14 +142,14 @@ const void *kEffectManager = reinterpret_cast<const void *>(0x00492590U);
 
 // Native state-1/2/3/4 movement: position += scale * velocity, with the
 // scale being the flt_476f78 rate (the z component last).
-void MoveByScaledVelocity(u8 *bullet)
+void MoveByScaledVelocity(BulletSlot &slot)
 {
-    StoreFloatAt(bullet, kOffX, LoadFloatAt(bullet, kOffX)
-        + g_SceneFadeScale * LoadFloatAt(bullet, kOffVx));
-    StoreFloatAt(bullet, kOffY, LoadFloatAt(bullet, kOffY)
-        + g_SceneFadeScale * LoadFloatAt(bullet, kOffVy));
-    StoreFloatAt(bullet, kOffZ, LoadFloatAt(bullet, kOffZ)
-        + g_SceneFadeScale * LoadFloatAt(bullet, kOffVz));
+    slot.position_x_03ac = slot.position_x_03ac
+        + g_SceneFadeScale * slot.velocity_x_03b8;
+    slot.position_y_03b0 = slot.position_y_03b0
+        + g_SceneFadeScale * slot.velocity_y_03bc;
+    slot.position_z_03b4 = slot.position_z_03b4
+        + g_SceneFadeScale * slot.velocity_z_03c0;
 }
 
 } // namespace
@@ -186,30 +172,30 @@ i32 BulletCalcRecordCallbackEcxStackAbi(void *bullet_manager)
 // TH10 0x0041afd0.
 i32 UpdateBulletManagerStackAbi(void *bullet_manager)
 {
-    u8 *const manager = static_cast<u8 *>(bullet_manager);
+    BulletManager &mgr = *reinterpret_cast<BulletManager *>(bullet_manager);
 
-    StoreU32At(manager, 0x21CEBCU, 0U);
-    StoreU32At(manager, 0x21CEB4U, 0U);
+    mgr.spawn_counter_21cebc = 0;
+    mgr.live_count_21ceb4 = 0;
 
     // Deferred "run 0x0041ba50" flag (native var_54), set when the
     // life-fragment ladder crosses 100 inside the bonus switch.
     i32 deferred_cleanup = 0;
 
-    u8 *bullet = manager + 0x14U;
-    for (u32 remaining = kBullets; remaining != 0U; --remaining) {
-        const i32 state = LoadI32At(bullet, kOffState);
+    for (u32 index = 0; index != kBullets; ++index) {
+        BulletSlot &slot = mgr.slots[index];
+        const i32 state = slot.state_03dc;
         if (state == 0)
             goto advance; // native: straight to the loop tail, no tick
 
         if (state == 5) {
             // Spawn pending: count the delay down; when it expires,
             // initialize the bullet's player script VM (0x00404f30).
-            StoreI32At(bullet, kOffDelay, LoadI32At(bullet, kOffDelay) - 1);
-            if (LoadI32At(bullet, kOffDelay) >= 0)
+            slot.spawn_delay_03ec = slot.spawn_delay_03ec - 1;
+            if (slot.spawn_delay_03ec >= 0)
                 goto advance;
-            StoreI32At(bullet, kOffState, 2);
+            slot.state_03dc = 2;
             InitializePlayerScriptVmEaxEsiStackAbi(
-                LoadI32At(bullet, kOffKind) + 0x176, bullet,
+                slot.kind_03e0 + 0x176, &slot,
                 LoadU32At(*static_cast<void **>(g_StageRecordHolder),
                               0x3E0B50U));
             goto advance;
@@ -225,36 +211,34 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
                     && player.position_y < kLandingLineY) {
                     // Home in on the player and fall through to the
                     // state-3 angle update (with the option-state 4 exit).
-                    StoreU32At(bullet, kOffSpeed,
-                               LoadU32At(player.shot_data, 8U));
-                    StoreI32At(bullet, kOffState, 3);
+                    slot.speed_03e8 = LoadFloatAt(player.shot_data, 8U);
+                    slot.state_03dc = 3;
                     goto state3;
                 }
-                MoveByScaledVelocity(bullet);
-                StoreFloatAt(bullet, kOffVy, LoadFloatAt(bullet, kOffVy)
-                    + g_SceneFadeScale * kGravityStep);
-                if (LoadFloatAt(bullet, kOffVy) >= kZero)
-                    StoreU32At(bullet, kOffVx, 0U); // native stores ecx == 0
-                if (LoadFloatAt(bullet, kOffVy) > kTwo)
-                    StoreFloatAt(bullet, kOffVy, kTwo);
-                if (LoadFloatAt(bullet, kOffVx) > kTerminalX) {
-                    StoreI32At(bullet, kOffState, 0);
+                MoveByScaledVelocity(slot);
+                slot.velocity_y_03bc = slot.velocity_y_03bc
+                    + g_SceneFadeScale * kGravityStep;
+                if (slot.velocity_y_03bc >= kZero)
+                    slot.velocity_x_03b8 = 0.0f; // native stores ecx == 0
+                if (slot.velocity_y_03bc > kTwo)
+                    slot.velocity_y_03bc = kTwo;
+                if (slot.velocity_x_03b8 > kTerminalX) {
+                    slot.state_03dc = 0;
                     goto advance; // native: no tick on deactivation
                 }
                 goto kind_gate;
             }
             if (state == 2) {
-                MoveByScaledVelocity(bullet);
-                StoreFloatAt(bullet, kOffVy, LoadFloatAt(bullet, kOffVy)
-                    + g_SceneFadeScale * kGravityStep);
-                if (LoadFloatAt(bullet, kOffVy) >= kZero) {
-                    StoreU32At(bullet, kOffSpeed,
-                               LoadU32At(player.shot_data, 8U));
-                    StoreI32At(bullet, kOffState, 3);
+                MoveByScaledVelocity(slot);
+                slot.velocity_y_03bc = slot.velocity_y_03bc
+                    + g_SceneFadeScale * kGravityStep;
+                if (slot.velocity_y_03bc >= kZero) {
+                    slot.speed_03e8 = LoadFloatAt(player.shot_data, 8U);
+                    slot.state_03dc = 3;
                     goto state3;
                 }
-                if (LoadFloatAt(bullet, kOffY) > kTerminalX) {
-                    StoreI32At(bullet, kOffState, 0);
+                if (slot.position_y_03b0 > kTerminalX) {
+                    slot.state_03dc = 0;
                     AddPowerValueEaxEcxAbi(
                         const_cast<void *>(kFrameState), -4);
                     goto advance; // native: no tick
@@ -263,22 +247,16 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
             }
             if (state == 4) {
                 const float angle = AngleToPlayerPositionEaxEcxAbi(
-                    reinterpret_cast<const float *>(
-                        static_cast<u8 *>(bullet) + kOffX),
-                    opt_mgr);
+                    &slot.position_x_03ac, opt_mgr);
                 SetPolarVectorThiscall(
-                    reinterpret_cast<float *>(
-                        static_cast<u8 *>(bullet) + kOffVx),
-                    angle, LoadFloatAt(bullet, kOffSpeed));
-                MoveByScaledVelocity(bullet);
-                if (LoadFloatAt(bullet, kOffSpeed) >= kAccelGate)
-                    StoreFloatAt(bullet, kOffSpeed,
-                                 LoadFloatAt(bullet, kOffSpeed)
-                                     + kAccelStep);
+                    &slot.velocity_x_03b8, angle, slot.speed_03e8);
+                MoveByScaledVelocity(slot);
+                if (slot.speed_03e8 >= kAccelGate)
+                    slot.speed_03e8 = slot.speed_03e8 + kAccelStep;
                 if (player.mode == 4) {
-                    StoreI32At(bullet, kOffState, 1);
-                    StoreU32At(bullet, kOffVx, 0U);
-                    StoreU32At(bullet, kOffVy, 0U);
+                    slot.state_03dc = 1;
+                    slot.velocity_x_03b8 = 0.0f;
+                    slot.velocity_y_03bc = 0.0f;
                 }
                 goto kind_gate;
             }
@@ -286,9 +264,9 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
         state3:
             {
                 const float dx = player.position_x
-                    - LoadFloatAt(bullet, kOffX);
+                    - slot.position_x_03ac;
                 const float dy = player.position_y
-                    - LoadFloatAt(bullet, kOffY);
+                    - slot.position_y_03b0;
                 float angle;
                 if (dx == kZero && dy == kZero)
                     // 0x3FC90FDB is pi/2 (1.5707963f), not pi; the native
@@ -300,18 +278,15 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
                         std::atan2(static_cast<double>(dy),
                                    static_cast<double>(dx)));
                 SetPolarVectorThiscall(
-                    reinterpret_cast<float *>(
-                        static_cast<u8 *>(bullet) + kOffVx),
-                    angle, LoadFloatAt(bullet, kOffSpeed));
-                MoveByScaledVelocity(bullet);
-                if (LoadFloatAt(bullet, kOffSpeed) >= kAccelGate)
-                    StoreFloatAt(bullet, kOffSpeed,
-                                 LoadFloatAt(bullet, kOffSpeed)
-                                     + kAccelStep);
+                    &slot.velocity_x_03b8,
+                    angle, slot.speed_03e8);
+                MoveByScaledVelocity(slot);
+                if (slot.speed_03e8 >= kAccelGate)
+                    slot.speed_03e8 = slot.speed_03e8 + kAccelStep;
                 if (player.mode == 4) {
-                    StoreI32At(bullet, kOffState, 1);
-                    StoreU32At(bullet, kOffVx, 0U);
-                    StoreU32At(bullet, kOffVy, 0U);
+                    slot.state_03dc = 1;
+                    slot.velocity_x_03b8 = 0.0f;
+                    slot.velocity_y_03bc = 0.0f;
                 }
             }
         }
@@ -327,8 +302,8 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
             void *opt_mgr = g_OptionPositionManager;
             PlayerRecord &player =
                 *reinterpret_cast<PlayerRecord *>(opt_mgr);
-            const float x = LoadFloatAt(bullet, kOffX);
-            const float y = LoadFloatAt(bullet, kOffY);
+            const float x = slot.position_x_03ac;
+            const float y = slot.position_y_03b0;
             const bool inside = x <= player.graze_box[0]
                 && y <= player.graze_box[1]
                 && x > player.graze_box[3]
@@ -336,7 +311,7 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
             if (!inside)
                 goto offscreen;
 
-            const i32 kind = LoadI32At(bullet, kOffKind);
+            const i32 kind = slot.kind_03e0;
             void *const frame = const_cast<void *>(kFrameState);
             switch (kind) {
             case 1:
@@ -351,9 +326,9 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
                     RebuildPlayerOptionRecords(g_OptionPositionManager);
                     QueueBulletDeathEffectEbxEsiStackAbi(
                         0x1D, const_cast<void *>(kEffectManager),
-                        LoadFloatAt(bullet, kOffX));
+                        slot.position_x_03ac);
                     SetPointItemDigitsEaxEdiEsiStackAbi(
-                        -480, static_cast<u8 *>(bullet) + kOffVx,
+                        -480, &slot.velocity_x_03b8,
                         g_PointItemDigitState,
                         static_cast<i32>(0xFFFFFF40U));
                     if (word >= 100)
@@ -362,7 +337,7 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
                 } else {
                     SetPointItemDigitsEaxEdiEsiStackAbi(
                         (word < 0 ? -word : word) / 2,
-                        static_cast<u8 *>(bullet) + kOffVx,
+                        &slot.velocity_x_03b8,
                         g_PointItemDigitState,
                         static_cast<i32>(0xFFFF4040U));
                 }
@@ -395,7 +370,7 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
                     power_delta = 1;
                 }
                 SetPointItemDigitsEaxEdiEsiStackAbi(
-                    value, static_cast<u8 *>(bullet) + kOffVx,
+                    value, &slot.velocity_x_03b8,
                     g_PointItemDigitState, color);
                 AddPowerValueEaxEcxAbi(frame, power_delta);
                 AddScoreBlockValueEcxStackAbi(frame, value);
@@ -406,7 +381,7 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
                 const i32 piv = LoadI32At(frame, 0x0CU);
                 const i32 value = piv * 10 - ((piv * 10) % 10);
                 SetPointItemDigitsEaxEdiEsiStackAbi(
-                    value, static_cast<u8 *>(bullet) + kOffVx,
+                    value, &slot.velocity_x_03b8,
                     g_PointItemDigitState, static_cast<i32>(0xFFFFFF00U));
                 AddPowerValueEaxEcxAbi(frame, 8);
                 AddScoreBlockValueEcxStackAbi(frame, value);
@@ -421,7 +396,7 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
                          || g_CurrentDifficulty == 4U)
                     value = 10000;
                 SetPointItemDigitsEaxEdiEsiStackAbi(
-                    value, static_cast<u8 *>(bullet) + kOffVx,
+                    value, &slot.velocity_x_03b8,
                     g_PointItemDigitState, static_cast<i32>(0xFF00FF00U));
                 AddPivValueEcxStackAbi(frame, value);
                 AdvanceScorePopupTimerEdiStackAbi(frame, 0x78);
@@ -434,7 +409,7 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
                 break;
             case 9:
                 SetPointItemDigitsEaxEdiEsiStackAbi(
-                    100, static_cast<u8 *>(bullet) + kOffVx,
+                    100, &slot.velocity_x_03b8,
                     g_PointItemDigitState, static_cast<i32>(0xFF00FF00U));
                 AddPivValueEcxStackAbi(frame, 100);
                 AdvanceScorePopupTimerEdiStackAbi(frame, 0x3C);
@@ -451,9 +426,9 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
                     RebuildPlayerOptionRecords(g_OptionPositionManager);
                     QueueBulletDeathEffectEbxEsiStackAbi(
                         0x1D, const_cast<void *>(kEffectManager),
-                        LoadFloatAt(bullet, kOffX));
+                        slot.position_x_03ac);
                     SetPointItemDigitsEaxEdiEsiStackAbi(
-                        -480, static_cast<u8 *>(bullet) + kOffVx,
+                        -480, &slot.velocity_x_03b8,
                         g_PointItemDigitState,
                         static_cast<i32>(0xFFFFFF40U));
                     AddPowerValueEaxEcxAbi(frame, 0x18);
@@ -463,7 +438,7 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
                 } else {
                     SetPointItemDigitsEaxEdiEsiStackAbi(
                         (word < 0 ? -word : word) / 2,
-                        static_cast<u8 *>(bullet) + kOffVx,
+                        &slot.velocity_x_03b8,
                         g_PointItemDigitState,
                         static_cast<i32>(0xFFFF4040U));
                     AdvanceScorePopupTimerEdiStackAbi(frame, 0x14);
@@ -480,24 +455,23 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
                 // Case 6 and every unhandled kind.
                 QueueBulletDeathEffectEbxEsiStackAbi(
                     0x14, const_cast<void *>(kEffectManager),
-                    LoadFloatAt(bullet, kOffX));
-                StoreI32At(bullet, kOffState, 0);
+                    slot.position_x_03ac);
+                slot.state_03dc = 0;
                 break;
             }
             goto advance; // every switch exit skips the VM tick
         }
 
     offscreen:
-        if (LoadI32At(bullet, kOffState) == 4
-            || LoadI32At(bullet, kOffState) == 3)
+        if (slot.state_03dc == 4 || slot.state_03dc == 3)
             goto tick;
         {
             void *opt_mgr = g_OptionPositionManager;
             PlayerRecord &player =
                 *reinterpret_cast<PlayerRecord *>(opt_mgr);
             const u32 gate = g_SceneGateFlags & 4U;
-            const float x = LoadFloatAt(bullet, kOffX);
-            const float y = LoadFloatAt(bullet, kOffY);
+            const float x = slot.position_x_03ac;
+            const float y = slot.position_y_03b0;
             bool retarget;
             if (gate != 0U) {
                 retarget = x <= player.item_box[0]
@@ -513,15 +487,14 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
                     && y > player.autocollect_box[4];
             }
             if (retarget) {
-                StoreI32At(bullet, kOffState, 4);
-                StoreFloatAt(bullet, kOffSpeed,
-                             LoadFloatAt(player.shot_data, 8U)
-                                 * kRetargetScale);
+                slot.state_03dc = 4;
+                slot.speed_03e8 = LoadFloatAt(player.shot_data, 8U)
+                    * kRetargetScale;
             }
         }
 
     tick:
-        TickBulletAnimationVmStackAbi(bullet);
+        TickBulletAnimationVmStackAbi(&slot);
 
         // Distance bookkeeping: counter copy, then either an integer frame
         // advance or a fractional advance re-deriving the counter from the
@@ -532,29 +505,26 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
         // That mixed >=/> pair is faithful, not an inversion: the first
         // compare is redundant (1.01f > 0.99f), and the effective threshold
         // is speed >= 1.01f — this is not a [0.99, 1.01] window.
-        StoreI32At(bullet, kOffCounter, LoadI32At(bullet, kOffDistanceI));
+        slot.timer_03c8.prev = slot.timer_03c8.count;
         {
-            const float speed = LoadFloatAt(
-                *reinterpret_cast<void **>(
-                    static_cast<u8 *>(bullet) + kOffSpeedPtr),
-                0U);
+            const float speed = *slot.timer_03c8.rate;
             if (speed > kIntAdvanceLow && speed >= kIntAdvanceHigh) {
-                StoreI32At(bullet, kOffDistanceI,
-                           LoadI32At(bullet, kOffDistanceI) + 1);
-                StoreFloatAt(bullet, kOffDistance,
-                             LoadFloatAt(bullet, kOffDistance) + kOne);
+                slot.timer_03c8.count = slot.timer_03c8.count + 1;
+                *reinterpret_cast<float *>(&slot.timer_03c8.accum) =
+                    *reinterpret_cast<const float *>(
+                        &slot.timer_03c8.accum) + kOne;
             } else {
-                StoreFloatAt(bullet, kOffDistance,
-                             LoadFloatAt(bullet, kOffDistance) + speed);
-                StoreI32At(bullet, kOffDistanceI,
-                           static_cast<i32>(LoadFloatAt(bullet,
-                                                        kOffDistance)));
+                *reinterpret_cast<float *>(&slot.timer_03c8.accum) =
+                    *reinterpret_cast<const float *>(
+                        &slot.timer_03c8.accum) + speed;
+                slot.timer_03c8.count = static_cast<i32>(
+                    *reinterpret_cast<const float *>(
+                        &slot.timer_03c8.accum));
             }
         }
 
     advance:
-        StoreI32At(manager, 0x21CEB4U, LoadI32At(manager, 0x21CEB4U) + 1);
-        bullet += kStride;
+        mgr.live_count_21ceb4 = mgr.live_count_21ceb4 + 1;
     }
 
     if (deferred_cleanup != 0)
@@ -565,28 +535,42 @@ i32 UpdateBulletManagerStackAbi(void *bullet_manager)
 // TH10 0x0041ba50.
 void KillPendingBulletsEsiAbi(void *bullet_manager)
 {
-    // The native walks 150 position pointers (manager+0x3c0, stride 0x3f0);
-    // slot+0x30/+0x34 are the state/kind dwords of the same records the
-    // frame update walks (slot = record + 0x3ac).
-    u8 *slot = static_cast<u8 *>(bullet_manager) + 0x3C0U;
-    for (u32 i = 150U; i != 0U; --i) {
-        if (LoadU32At(slot, 0x30U) != 0U) {
-            const i32 kind = LoadI32At(slot, 0x34U);
-            if (kind == 1 || kind == 4) {
-                StoreU32At(slot, 0x30U, 0U);
-                SpawnExplosionParticleEaxEcxEfxAbi(
-                    bullet_manager, slot, 9, 0xFFFFFFFFU, -1.5707964f, 2.2f);
-                u32 spawned = 0;
-                SpawnBulletDeathEntityEdxStackAbi(
-                    slot,
-                    LoadU32At(
-                        *reinterpret_cast<void **>(
-                            reinterpret_cast<u8 *>(&g_AsciiHudOwner) + 16U),
-                        4066128U),
-                    &spawned, 393);
-            }
-        }
-        slot += kStride;
+    // The native walks the first 150 slots through an edi biased to
+    // manager+0x3c0 with stride 0x3f0, so its +0x30/+0x34 test dwords are
+    // the state_03dc/kind_03e0 of the same slots the frame update walks.
+    // Kinds 1/4 respawn as kind 9 and kinds 10/11 (0xa/0xb) as kind 5
+    // (0x41baa5-0x41babb); the spawn tail is shared: state zeroed
+    // (0x41ba77 — position_x_03ac is NOT cleared), then the 0x41bb00
+    // spawner with color -1, angle -pi/2 (0xbfc90fdb) and speed 2.2
+    // (0x400ccccd), and one death-entity spawn (kind 393) per killed
+    // bullet.
+    BulletManager &mgr = *reinterpret_cast<BulletManager *>(bullet_manager);
+    for (u32 index = 0; index != 150U; ++index) {
+        BulletSlot &slot = mgr.slots[index];
+        if (slot.state_03dc == 0)
+            continue;
+        const i32 kind = slot.kind_03e0;
+        i32 respawn_kind;
+        if (kind == 1 || kind == 4)
+            respawn_kind = 9;
+        else if (kind == 10 || kind == 11)
+            respawn_kind = 5;
+        else
+            continue; // native: straight to the loop tail (0x41bae2)
+        slot.state_03dc = 0;
+        SpawnExplosionParticleEaxEcxEfxAbi(
+            bullet_manager, &slot.position_x_03ac, respawn_kind,
+            0xFFFFFFFFU, -1.5707964f, 2.2f);
+        u32 spawned = 0;
+        SpawnBulletDeathEntityEdxStackAbi(
+            &slot.position_x_03ac,
+            // Native 0x41bacc-0x41bad2 (and 0x41bc2c-0x41bc31 in the
+            // spawner) reads the effect manager root's
+            // bullet_resource_3e0b50 as [g_StageRecordHolder] + 0x3e0b50,
+            // the same source the 0x41afd0 body uses.
+            LoadU32At(*static_cast<void **>(g_StageRecordHolder),
+                      0x3E0B50U),
+            &spawned, 393);
     }
 }
 

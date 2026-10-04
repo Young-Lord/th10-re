@@ -20,8 +20,10 @@
 
 #include "AsciiAnimationVm.hpp"
 #include "AsciiRenderModeDispatcher.hpp"
+#include "BulletManager.hpp"
 #include "EffectManagerRoot.hpp"
 #include "EffectPoolEntityUpdate.hpp"
+#include "StageObjectManagerObject.hpp"
 #include "VmRecord.hpp"
 
 namespace th10 {
@@ -32,28 +34,6 @@ extern void *g_MainChainRenderOwner; // TH10 DAT_00491c10
 extern void *g_EffectManagerRoot;    // TH10 DAT_004776f0
 
 extern void FreeMainChainObject(void *object); // TH10 0x4524a1
-
-inline u32 LoadU32At(const void *base, u32 offset)
-{
-    return *reinterpret_cast<const u32 *>(
-        static_cast<const u8 *>(base) + offset);
-}
-
-inline void StoreU32At(void *base, u32 offset, u32 value)
-{
-    *reinterpret_cast<u32 *>(static_cast<u8 *>(base) + offset) = value;
-}
-
-inline float LoadF32At(const void *base, u32 offset)
-{
-    return *reinterpret_cast<const float *>(
-        static_cast<const u8 *>(base) + offset);
-}
-
-inline void StoreF32At(void *base, u32 offset, float value)
-{
-    *reinterpret_cast<float *>(static_cast<u8 *>(base) + offset) = value;
-}
 
 // TH10 0x463b2c: round half away from zero (x87 conversion).
 i32 FloatToI32RoundHalfAway(float value)
@@ -71,20 +51,14 @@ const float k_fade_scale_a = 0.03125f;     // 0x470d20
 const float k_fade_scale_b = 255.0f;       // 0x470bf8
 
 const u32 k_slot_count = 0x896U;
-const u32 k_slot_stride = 0x3f0U;
-const u32 k_slot_base = 0x14U;
 
-// VM record offsets inside each slot.
-const u32 k_vm_alpha_byte = 0x2ffU;  // high byte of the +0x2fc timer dword
-const u32 k_vm_position = 0x334U;    // {x, y, z} world floats
-const u32 k_vm_script_word = 0x384U; // bound script id word
-
-// Effect payload offsets after the 0x3ac-byte VM record.
-const u32 k_effect_script_id = 0x3e4U; // u32
-const u32 k_effect_position = 0x3acU;  // {x, y, z} floats — native republish
-                                       //   reads slot+0x3ac/+0x3b0/+0x3b4
-                                       //   (TH10 0x41b917/0x41b923/0x41b928)
-const u32 k_effect_live_flag = 0x3dcU; // u32
+// Slot field map (BulletSlot): live flag state_03dc (+0x3dc), scripted
+// position position_x/y/z_03ac/3b0/3b4 — native republish reads
+// slot+0x3ac/+0x3b0/+0x3b4 (TH10 0x41b917/0x41b923/0x41b928) — effect
+// script id bound_kind_03e4 (+0x3e4). VM fields ride slot.vm: alpha
+// byte vm+0x2ff (high byte of the +0x2fc primary_color dword), world
+// position vm.base_pos_x/y/z (+0x334/+0x338/+0x33c), bound script id
+// word vm.sprite_entry_id (+0x384).
 
 // VM-init script bases: entry 0x43e5a0 receives script_id + 0x157/0x160,
 // while the slot+0x384 bound-script word is compared against script_id +
@@ -96,31 +70,33 @@ const u32 k_script_id_bound_upper = 0x161U; // faded bottom slots (compare)
 
 } // namespace
 
-// TH10 0x0041b8e0. Native EAX = the bullet manager slot-array base; the
-// VM-init context is the effect manager root's +0x3e0b50 resource pointer,
-// which the native reads from DAT_004776f0 at each spawn site.
+// TH10 0x0041b8e0. Native EAX = the bullet manager base; the walked
+// 0x896 x 0x3f0 slot array starts at manager+0x14 (BulletManager::
+// slots). The VM-init context is the effect manager root's +0x3e0b50
+// resource pointer, which the native reads from DAT_004776f0 at each
+// spawn site.
 i32 TickEffectPoolSlots(void *pool)
 {
     EffectManagerRoot &root = *static_cast<EffectManagerRoot *>(
         g_EffectManagerRoot);
-    u8 *slot = static_cast<u8 *>(pool) + k_slot_base;
+    BulletManager &mgr = *reinterpret_cast<BulletManager *>(pool);
 
     for (u32 i = 0; i != k_slot_count; ++i) {
-        VmRecord &vm = *reinterpret_cast<VmRecord *>(slot);
-        if (LoadU32At(slot, k_effect_live_flag) != 0U) {
-            // Republish the scripted position with the playfield offset.
-            vm.base_pos_x = LoadF32At(slot, k_effect_position + 0U)
-                + k_playfield_x_offset;
-            vm.base_pos_y = LoadF32At(slot, k_effect_position + 4U)
-                + k_playfield_y_offset;
-            vm.base_pos_z = LoadF32At(slot, k_effect_position + 8U);
+        BulletSlot &slot = mgr.slots[i];
+        VmRecord &vm = slot.vm;
+        if (slot.state_03dc != 0) {
+            // Republish the scripted position with the playfield offset;
+            // the native reads slot+0x3ac/+0x3b0/+0x3b4
+            // (TH10 0x41b917/0x41b923/0x41b928).
+            vm.base_pos_x = slot.position_x_03ac + k_playfield_x_offset;
+            vm.base_pos_y = slot.position_y_03b0 + k_playfield_y_offset;
+            vm.base_pos_z = slot.position_z_03b4;
 
-            const u32 script_id = LoadU32At(slot, k_effect_script_id);
+            const u32 script_id = slot.bound_kind_03e4;
             const i32 bound_script = static_cast<i32>(
                 static_cast<short>(vm.sprite_entry_id));
             const float scripted_y =
-                LoadF32At(slot, k_effect_position + 4U)
-                    + k_playfield_y_offset;
+                slot.position_y_03b0 + k_playfield_y_offset;
 
             if (scripted_y < k_bottom_fade_y) { // ordered less only
                 // TH10 0x41b93c: the VM base_pos_y (slot+0x338) is clamped
@@ -134,29 +110,29 @@ i32 TickEffectPoolSlots(void *pool)
                 } else {
                     alpha = 0xffU;
                 }
-                *(slot + k_vm_alpha_byte) = alpha;
+                // vm+0x2ff: the high byte of the +0x2fc primary_color
+                // dword; the native writes the single byte.
+                *(reinterpret_cast<u8 *>(&vm.primary_color) + 3) = alpha;
 
                 if (bound_script !=
                     static_cast<i32>(script_id) + k_script_id_bound_upper) {
                     (void)InitializeAsciiAnimationVmEntry(
-                        slot, script_id + k_script_id_base_upper,
+                        &slot, script_id + k_script_id_base_upper,
                         root.bullet_resource_3e0b50);
                 }
             } else {
                 if (bound_script !=
                     static_cast<i32>(script_id) + k_script_id_bound_lower) {
                     (void)InitializeAsciiAnimationVmEntry(
-                        slot, script_id + k_script_id_base_lower,
+                        &slot, script_id + k_script_id_base_lower,
                         root.bullet_resource_3e0b50);
-                    *(slot + k_vm_alpha_byte) = 0xffU;
+                    *(reinterpret_cast<u8 *>(&vm.primary_color) + 3) = 0xffU;
                 }
             }
 
             (void)DispatchAsciiAnimationVmRenderMode(
-                slot, g_MainChainRenderOwner);
+                &slot, g_MainChainRenderOwner);
         }
-
-        slot += k_slot_stride;
     }
     return 1;
 }
@@ -167,20 +143,14 @@ const float k_rate_window_low = 0.99f;  // 0x470b68
 const float k_rate_window_high = 1.01f; // 0x470b64
 const float k_rate_step = 1.0f;         // 0x470afc
 
-// Node layout.
-const u32 k_node_previous = 4U;
-const u32 k_node_next = 8U;
-const u32 k_node_kind = 0xcU;             // 1 = always finish
-const u32 k_node_timer_previous = 0x10U;  // published previous timer
-const u32 k_node_timer = 0x14U;           // integer part
-const u32 k_node_accumulator = 0x18U;
-const u32 k_node_rate_pointer = 0x1cU;
-const u32 k_node_finish_latch = 0x50U;    // byte
-
-// Container layout.
-const u32 k_list_head = 0x18U;
-const u32 k_list_tail = 0x434U;
-const u32 k_list_count = 0x438U;
+// Node field map (StageObjectHeader): links list_prev_0004 (+0x004) /
+// list_next_0008 (+0x008), kind state_000c (+0x00c; 1 = always
+// finish), timer record timer_0010 (+0x010: published previous timer
+// +0x010, integer part +0x014, accumulator +0x018, rate pointer
+// +0x01c), finish latch done_latch_0050 (+0x050, byte). Container
+// (StageObjectManager): first node list_sentinel_0010.list_next_0008
+// (+0x18), tail list_head_0434 (+0x434), count node_count_0438
+// (+0x438).
 
 typedef i32 (*NodeVirtualFn)(void *node);
 
@@ -193,44 +163,43 @@ NodeVirtualFn GetNodeSlot(void *node, u32 byte_offset)
 }
 
 // Shared finish + unlink + free tail of the removal paths.
-void FinishAndRemoveNode(void *container, void *node)
+void FinishAndRemoveNode(StageObjectManager &owner, StageObjectHeader &node)
 {
-    u8 *const owner = static_cast<u8 *>(container);
-    u8 *const bytes = static_cast<u8 *>(node);
+    GetNodeSlot(&node, 0x10U)(&node); // finish vtable slot
+    --owner.node_count_0438;
 
-    GetNodeSlot(node, 0x10U)(node); // finish vtable slot
-    StoreU32At(owner, k_list_count,
-               LoadU32At(owner, k_list_count) - 1U);
-
-    u8 *const next =
-        reinterpret_cast<u8 *>(LoadU32At(bytes, k_node_next));
-    u8 *const previous =
-        reinterpret_cast<u8 *>(LoadU32At(bytes, k_node_previous));
+    StageObjectHeader *const next =
+        static_cast<StageObjectHeader *>(node.list_next_0008);
+    StageObjectHeader *const previous =
+        static_cast<StageObjectHeader *>(node.list_prev_0004);
     if (previous != 0)
-        StoreU32At(previous, k_node_next,
-                   reinterpret_cast<u32>(next));
+        previous->list_next_0008 = next;
     if (next != 0)
-        StoreU32At(next, k_node_previous,
-                   reinterpret_cast<u32>(previous));
-    if (reinterpret_cast<u8 *>(LoadU32At(owner, k_list_tail)) == bytes)
-        StoreU32At(owner, k_list_tail,
-                   reinterpret_cast<u32>(previous));
-    FreeMainChainObject(node);
+        next->list_prev_0004 = previous;
+    if (owner.list_head_0434 == &node)
+        owner.list_head_0434 = previous;
+    FreeMainChainObject(&node);
 }
 
 } // namespace
 
-// TH10 0x0041c330.
+// TH10 0x0041c330. The container is the stage-object manager
+// (DAT_0047781c): the first node is list_sentinel_0010.list_next_0008
+// (manager+0x18), the tail is list_head_0434 (+0x434) and the count is
+// node_count_0438 (+0x438).
 i32 TickEffectNodeList(void *container)
 {
-    u8 *owner = static_cast<u8 *>(container);
-    u8 *node = reinterpret_cast<u8 *>(LoadU32At(owner, k_list_head));
+    StageObjectManager &owner =
+        *reinterpret_cast<StageObjectManager *>(container);
+    StageObjectHeader *node = static_cast<StageObjectHeader *>(
+        owner.list_sentinel_0010.list_next_0008);
     if (node == 0)
         return 1;
 
     for (;;) {
-        u8 latch = node[k_node_finish_latch];
-        u8 *next = reinterpret_cast<u8 *>(LoadU32At(node, k_node_next));
+        u8 latch = node->done_latch_0050;
+        StageObjectHeader *next =
+            static_cast<StageObjectHeader *>(node->list_next_0008);
         bool finished = false;
 
         if (latch != 0U) {
@@ -238,44 +207,44 @@ i32 TickEffectNodeList(void *container)
             // comparison, so a 0xff latch falls through to the kind
             // check exactly like the original.
             ++latch;
-            node[k_node_finish_latch] = latch;
+            node->done_latch_0050 = latch;
             if (latch >= 2U)
                 finished = true;
         }
 
         if (!finished) {
-            if (LoadU32At(node, k_node_kind) == 1U) {
+            if (node->state_000c == 1) { // kind 1 = always finish
                 finished = true;
             } else if (GetNodeSlot(node, 0x8U)(node) != 0) {
                 finished = true;
             } else {
                 // Publish the previous timer, then advance the
                 // {timer, accumulator, rate} record.
-                StoreU32At(node, k_node_timer_previous,
-                           LoadU32At(node, k_node_timer));
-                const float rate = LoadF32At(
-                    reinterpret_cast<const void *>(
-                        LoadU32At(node, k_node_rate_pointer)), 0U);
+                node->timer_0010.prev = node->timer_0010.count;
+                const float rate = *node->timer_0010.rate;
                 if (rate > k_rate_window_low
                     && rate < k_rate_window_high) {
-                    StoreU32At(node, k_node_timer,
-                               LoadU32At(node, k_node_timer) + 1U);
-                    StoreF32At(node, k_node_accumulator,
-                               LoadF32At(node, k_node_accumulator)
-                                   + k_rate_step);
+                    node->timer_0010.count = node->timer_0010.count + 1;
+                    *reinterpret_cast<float *>(&node->timer_0010.accum) =
+                        *reinterpret_cast<const float *>(
+                            &node->timer_0010.accum) + k_rate_step;
                 } else {
                     const float advanced =
-                        LoadF32At(node, k_node_accumulator) + rate;
-                    StoreF32At(node, k_node_accumulator, advanced);
-                    StoreU32At(node, k_node_timer,
-                               static_cast<u32>(
-                                   FloatToI32RoundHalfAway(advanced)));
+                        *reinterpret_cast<const float *>(
+                            &node->timer_0010.accum) + rate;
+                    *reinterpret_cast<float *>(&node->timer_0010.accum) =
+                        advanced;
+                    // TH10 0x41c42d: the __ftol2 (0x463b2c) result is
+                    // stored as a plain dword into the +0x14 count; the
+                    // +0x18 float accumulator keeps the unrounded sum.
+                    node->timer_0010.count =
+                        FloatToI32RoundHalfAway(advanced);
                 }
             }
         }
 
         if (finished)
-            FinishAndRemoveNode(owner, node);
+            FinishAndRemoveNode(owner, *node);
 
         if (next == 0)
             break;

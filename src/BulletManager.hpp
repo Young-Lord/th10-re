@@ -30,8 +30,11 @@ namespace th10 {
 // speed, angle}; ret 0x14): kind != 8 scans the first 150 slots for
 // state_03dc == 0 (kind 8 uses the 2048-entry ring over slots 150..2197
 // with state 5 + tiered spawn delay). Deferred kill 0x41ba50 walks the
-// first 150 slots, deactivating state != 0 && kind in {1,4} (zeroes
-// +0x3ac, spawns kind 9 with angle -pi/2, speed 2.2).
+// first 150 slots, deactivating state != 0 && kind in {1,4,10,11}: the
+// state_03dc dword is zeroed (+0x3ac is NOT cleared) and the 0x41bb00
+// spawner is invoked with kind 9 for kinds 1/4 and kind 5 for kinds
+// 10/11 (angle -pi/2, speed 2.2, color -1), then one death-entity spawn
+// per killed bullet.
 //
 // The game-start reset (title calc body 0x417870 family / EclSelectMenu)
 // wipes exactly [+0x14, +0x21CEB4) — the slot array only.
@@ -43,9 +46,13 @@ namespace th10 {
 // +0x334..0x33c the vm base position, +0x384 the bound-script u16).
 struct BulletSlot {
     VmRecord vm;                  // +0x000..0x3ac
-    u32 timer_published_03c4;     // +0x3c4 zeroed on spawn alongside the
-                                  //   timer tail (the published-prev dword
-                                  //   of the node-timer idiom)
+    float position_x_03ac;        // +0x3ac spawn position (x clamped to
+    float position_y_03b0;        //   [-192, 192] by 0x41bb00; republished
+    float position_z_03b4;        //   +224/+16 by the draw pass 0x41b8e0)
+    float velocity_x_03b8;        // +0x3b8 SetPolarVectorThiscall target
+    float velocity_y_03bc;        // +0x3bc
+    float velocity_z_03c0;        // +0x3c0 (zeroed on spawn)
+    u32 timer_tail_zero_03c4;     // +0x3c4 zeroed alongside the timer tail
     TimerNode timer_03c8;         // +0x3c8..0x3dc (prev poison 0xfff0bdc1 ->
                                   //   -1; count doubles as the integer
                                   //   distance, accum as the float distance;
@@ -63,6 +70,10 @@ struct BulletSlot {
 typedef char AssertBulletSlotSize[sizeof(BulletSlot) == 0x3f0 ? 1 : -1];
 typedef char AssertBulletSlotVmOffset[
     offsetof(BulletSlot, vm) == 0x0 ? 1 : -1];
+typedef char AssertBulletSlotPosOffset[
+    offsetof(BulletSlot, position_x_03ac) == 0x3ac ? 1 : -1];
+typedef char AssertBulletSlotVelOffset[
+    offsetof(BulletSlot, velocity_x_03b8) == 0x3b8 ? 1 : -1];
 typedef char AssertBulletSlotTimerOffset[
     offsetof(BulletSlot, timer_03c8) == 0x3c8 ? 1 : -1];
 typedef char AssertBulletSlotStateOffset[

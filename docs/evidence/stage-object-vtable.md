@@ -157,7 +157,7 @@ roles: slot 5 = bullet-clear spread, slot 7 = radial entrance sweep.
   spread: from the object position, every 12 degrees while the step start
   plus 6 degrees stays below +0x40, spawn the ring VM (script kind*2+0x11
   through the 0x448db0 composition: pool alloc DAT_00491c10, +0x35c |=
-  0x40000000, position +224/+16, ANM bind from [DAT_00477818+0x458], list-A
+  0x40000000, position +224/+16, ANM bind from [DAT_0047781C+0x458] (the stage-object manager's bullet.anm work; corrected round 11 — 0x477818 has no modeled +0x458), list-A
   registration). Flag argument gates the explosion particle 0x41bb00
   (kind 8, colour -1, angle -pi, speed 0.6, gated by 0x41f7a0 with a 32.0f
   box). Kind B additionally gates each spawn with the 16-degree playfield

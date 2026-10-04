@@ -652,3 +652,39 @@ ABI 语法经验：__usercall 必须带返回位置注解（@<eax>），否则�
   spawner 0x41bb00;slot 0x3f0 全图)。TitleBulletUpdate KillPendingBullets
   注释 +0x30/+0x34 → +0x3dc/+0x3e0 待改。
   证据:docs/evidence/ecl-script-object-stage-bullet.md。
+
+## 第 11 轮(2026-10-04)— StageObjectManager 0x45c / stage 对象 0xd58·0xd74 / BulletManager 0x21CEC0
+
+- 新头文件(全部 MSVC offsetof 断言,冒烟 exit 0):
+  src/BulletManager.hpp(BulletSlot 0x3f0 = VmRecord 0x3ac + pos/vel 三元组
+  0x3ac..0x3c0 + TimerNode timer_03c8{prev,count,accum,rate,flags}(count/accum
+  双用作整数/浮点距离)+ state_03dc/kind_03e0/bound_kind_03e4/speed_03e8/
+  spawn_delay_03ec;BulletManager 0x21CEC0:calc@8 prio 0x15 / draw@c prio 0x19、
+  slots[2198]@0x14、live_count_21ceb4/ring_cursor_21ceb8/spawn_counter_21cebc);
+  src/StageObjectObject.hpp(StageObjectHeader 0x424、A/B 描述符 0x1dc/0x1f8、
+  StageObjectKindA 0xd58 / KindB 0xd74);src/StageObjectManagerObject.hpp
+  (0x45c:哨兵 header@0x10、head_0434、count_0438 cap256、cursor_043c、
+  广播 pos/vel 0x440/0x44c、bullet_anm_work_0458)。
+- IDB(resources/th10.exe.i64):声明 8 个新类型;绑定 0x47781c →
+  StageObjectManager *、0x477818 → BulletManager *;两全局注释;已保存。
+  (idalib 服务本轮重启过一次,重新 open 同一 DB,第 10 轮类型库完好。)
+- 改写:StageObjectVtable.cpp ~90 处(kSobOff* 删除)、StageObjectManager.cpp
+  12 处、EffectPoolEntityUpdate.cpp 2 函数、TitleBulletUpdate.cpp ~60 处
+  (kOff* 删除)、PlayerFrameworkHelpers.cpp spawner 1 函数;门全 exit 0。
+- 本轮修正(全部 0x41xxxx 反汇编裁定):①0x404f30 ABI:ESI=记录基、EAX=脚本
+  id、栈=[root+0x3E0B50] → PlayerFrameworkHelpers 去掉既有 +0x14 偏差并改传
+  root 的 bullet.anm work;②ring-VM anm 句柄基 = [DAT_0047781C+0x458](纠正
+  第 10 轮 "477818+0x458" 笔误,0x41c8fd 等 6 处);③0x41bb00 的 EAX=manager
+  本体(旧 *deref 传了 flags_0000;StageObjectVtable + PlayerStageHelpers:245
+  已修);④0x41d7c0 仅 vm1 有 flags|=4(0x41d802),vm2 路径 0x41d83f..863 无
+  +0xd08 写 → 删除 vm2 flags 写;⑤0x41ba50 击杀四种 kind:1/4→9、10/11→5,
+  清零的是 state(+0x3dc) 而非 +0x3ac,死体脚本 0x189 取自 [root+0x3E0B50]
+  (0x41bacc);⑥0x41c330 超窗分支:fst 存 accum 原始和、ftol2(0x463b2c) 存
+  count;⑦0x41c480/0x41c4e0、0x41ba00/0x41ba30 gate 细节(位 0x400 以 test
+  ah,4 形式)入库。
+- 保留 raw:header.raw_0068 覆盖区(drift 0x8c..0xb4 / shrink 0xf4..0x128 /
+  0x8000 计时 0x15c/0x160)、脚本记录 0x460..0x610(别名描述符尾与 vm1 前
+  0x10 字节)、g_TransitionRoot 效果环 0x620/0x650/0x680/0x408、0x3f0
+  stage-entity 记录(DAT_00477820)访问器、全部 vtable 派发。
+- 全量构建 exit 0(233 obj,含冒烟 obj)。
+  证据:docs/evidence/stage-object-bullet-structs.md。

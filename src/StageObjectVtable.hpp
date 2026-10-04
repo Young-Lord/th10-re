@@ -7,35 +7,18 @@ namespace th10 {
 // Stage/background object family (TH10 0x41c030..0x41f670).
 //
 // The DAT_0047781c manager owns 0xd58-byte (kind A, table 0x46da60) and
-// 0xd74-byte (kind B, table 0x46da10) objects. Each object starts with a
-// 19-entry callback table pointer followed by the manager list node, and the
-// table is null-terminated exactly like the binary blobs at 0x46da10 /
-// 0x46da60 / 0x46dab0. All offsets are native object offsets.
-
-// Header layout shared by both kinds.
-const u32 kSobOffTable = 0x00U;        // callback table pointer
-const u32 kSobOffListPrev = 0x04U;     // manager list node (head manager+0x434)
-const u32 kSobOffListNext = 0x08U;
-const u32 kSobOffState = 0x0cU;        // state machine dword
-const u32 kSobOffTimer = 0x10U;        // 0x14-byte timer record (+0x10..+0x24)
-const u32 kSobOffPos = 0x24U;          // float position xyz (+0x24/+0x28/+0x2c)
-const u32 kSobOffVel = 0x30U;          // float velocity xyz
-const u32 kSobOffAngle = 0x3cU;        // float angle
-const u32 kSobOffDepth = 0x40U;        // float depth (z progress)
-const u32 kSobOffAlpha = 0x44U;        // float alpha/scale
-const u32 kSobOffZSpeed = 0x48U;       // float depth rate
-const u32 kSobOffZVel = 0x4cU;         // float accumulated depth velocity
-const u32 kSobOffDone = 0x50U;         // byte sweep-completion latch
-const u32 kSobOffFlags = 0x404U;       // feature dispatch flags
-const u32 kSobOffKind = 0x40cU;        // effect-cutoff kind dword
-const u32 kSobOffDesc = 0x424U;        // descriptor copy (A: 0x1dc, B: 0x1f8)
-const u32 kSobOffRecA_A = 0x600U;      // kind A animation VM record 1
-const u32 kSobOffRecA_B = 0x9acU;      // kind A animation VM record 2
-const u32 kSobOffRecB_A = 0x61cU;      // kind B animation VM record 1
-const u32 kSobOffRecB_B = 0x9c8U;      // kind B animation VM record 2
+// 0xd74-byte (kind B, table 0x46da10) objects. The object layout (shared
+// 0x424-byte header with the manager list node at +0x04/+0x08, the
+// per-kind descriptor images at +0x424, the embedded animation VM records)
+// and the 0x45c-byte manager are modeled field-by-field in
+// StageObjectObject.hpp / StageObjectManagerObject.hpp; the functions below
+// take void* and cast to those typed views. The callback tables are
+// null-terminated exactly like the binary blobs at 0x46da10 / 0x46da60 /
+// 0x46dab0. All offsets referenced in the comments are native object
+// offsets.
 
 // TH10 0x0041c030. EDX = header block (either a bare object or the
-// manager+0x10 sub-block). Preserves the native dead stores: the table
+// manager+0x10 sentinel). Preserves the native dead stores: the table
 // pointer, the flag-bit clears and the mid-body stores are all erased by the
 // trailing 0x424-byte memset; only the final timer defaults survive.
 void *InitStageObjectHeaderDefaultsEdxAbi(void *block);

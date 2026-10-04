@@ -16,16 +16,23 @@ i32 BulletCalcRecordCallbackEcxStackAbi(void *bullet_manager);
 
 // TH10 0x0041afd0. Native one stack argument (the bullet manager whose
 // 0x896 bullets of 0x3f0 bytes start at +0x14), __stdcall ret 4, returns 1.
-// Per-bullet movement state machine (+0x3dc), the 11-case item/bonus switch
-// on the bullet kind (+0x3e0) for on-screen bullets, the off-screen state-4
-// retargeting, the animation-VM tick and the +0x3c8/+0x3cc/+0x3d0 distance
-// bookkeeping; a deferred flag runs 0x0041ba50 over the first 150 bullets.
+// Per-bullet movement state machine (slot state_03dc, native +0x3dc), the
+// 11-case item/bonus switch on the bullet kind (kind_03e0, native +0x3e0)
+// for on-screen bullets, the off-screen state-4 retargeting, the
+// animation-VM tick and the timer_03c8 distance bookkeeping (native
+// +0x3c8/+0x3cc/+0x3d0); a deferred flag runs 0x0041ba50 over the first
+// 150 bullets.
 i32 UpdateBulletManagerStackAbi(void *bullet_manager);
 
 // TH10 0x0041ba50. Native ESI = the bullet manager; plain ret. For the
-// first 150 bullet slots: an active bullet (slot+0x30 != 0) whose kind
-// (slot+0x34) is 1 or 4 is deactivated, the death sound 0x0041bb00 is
-// queued and a death entity is spawned through 0x00448db0.
+// first 150 bullet slots (record = manager+0x14 + i*0x3f0): an active
+// bullet (state_03dc != 0; the tested dwords are the slot state_03dc /
+// kind_03e0 the frame update walks) whose kind is 1 or 4 is deactivated
+// (state zeroed) and respawned as kind 9, and kinds 10/11 are respawned
+// as kind 5; both share the tail: the death sound 0x0041bb00 is queued
+// (angle -pi/2 0xbfc90fdb, speed 2.2 0x400ccccd, color -1) and a death
+// entity is spawned through 0x00448db0. The killed slot's state is
+// zeroed and +0x3ac (position_x_03ac) is NOT cleared.
 void KillPendingBulletsEsiAbi(void *bullet_manager);
 
 // TH10 0x0041beb0. Native thiscall ECX = float[2] vector, two stack floats.

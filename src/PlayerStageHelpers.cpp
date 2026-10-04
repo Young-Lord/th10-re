@@ -241,8 +241,10 @@ void ScanIntroActivations(void *enemy_manager_memory,
             float position[3] = {ReadFloat(enemy, 0x3b4),
                                  ReadFloat(enemy, 0x3b8),
                                  ReadFloat(enemy, 0x3bc)};
+            // The native 0x41bb00 call shape (0x4081e7/0x4083ae) passes the
+            // DAT_00477818 manager base itself in EAX — no dereference.
             SpawnExplosionParticleEaxEcxEfxAbi(
-                *static_cast<void *const *>(g_BulletManagerSlot), position,
+                g_BulletManagerSlot, position,
                 8, 0xffffffffU, -1.5707964f, 0.6f);
         }
     }

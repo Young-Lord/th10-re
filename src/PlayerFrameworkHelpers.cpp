@@ -3,6 +3,7 @@
 #include "PlayerShotData.hpp"
 
 #include "EntityHelpers.hpp"
+#include "BulletManager.hpp"
 #include "MainChainContext.hpp"
 #include "PlayerRecord.hpp"
 #include "StageEffectHelpers.hpp"
@@ -180,16 +181,17 @@ void SpawnExplosionParticleEaxEcxEfxAbi(void *manager_memory,
                                         void *position_memory, i32 kind,
                                         u32 color, float angle, float speed)
 {
-    u8 *const manager = static_cast<u8 *>(manager_memory);
+    BulletManager &mgr = *reinterpret_cast<BulletManager *>(manager_memory);
     const u8 *const position =
         static_cast<const u8 *>(position_memory);
     if (kind == 8) {
-        const u32 ring_index =
-            ReadUintAt(manager, 0x21ceb8);
-        u8 *const record = manager + 0x24eb4 + ring_index * 0x3f0;
-        if (ReadInt(record, 0x3dc) == 0) {
-            const u32 count = ReadUintAt(manager, 0x21cebc) + 1;
-            WriteUintAt(manager, 0x21cebc, count);
+        // Path B ring: manager+0x24eb4 is &mgr.slots[150]; the 2048-entry
+        // ring covers slots 150..2197 with the modulo wrap below.
+        const u32 ring_index = mgr.ring_cursor_21ceb8;
+        BulletSlot &record = mgr.slots[150 + ring_index];
+        if (record.state_03dc == 0) {
+            const u32 count = mgr.spawn_counter_21cebc + 1;
+            mgr.spawn_counter_21cebc = count;
             i32 spread;
             if (count >= 0x400)
                 spread = static_cast<i32>(count % 256);
@@ -199,39 +201,39 @@ void SpawnExplosionParticleEaxEcxEfxAbi(void *manager_memory,
                 spread = static_cast<i32>(count % 64) + 8;
             else
                 spread = static_cast<i32>(count % 32) + 16;
-            WriteInt(record, 0x3ec, spread);
-            WriteInt(record, 0x3e0, 8);
-            WriteInt(record, 0x3e4, 8);
-            WriteInt(record, 0x3dc, 5);
-            WriteFloat(record, 0x3ac, ReadFloat(position, 0));
-            WriteFloat(record, 0x3b0, ReadFloat(position, 4));
-            WriteFloat(record, 0x3b4, ReadFloat(position, 8));
-            InitMovementBlock(record + 0x3b8, angle, speed);
-            WriteInt(record, 0x3c0, 0);
-            InitializeRecordTimer(record + 0x3c8);
+            record.spawn_delay_03ec = spread;
+            record.kind_03e0 = 8;
+            record.bound_kind_03e4 = 8;
+            record.state_03dc = 5;
+            record.position_x_03ac = ReadFloat(position, 0);
+            record.position_y_03b0 = ReadFloat(position, 4);
+            record.position_z_03b4 = ReadFloat(position, 8);
+            InitMovementBlock(&record.velocity_x_03b8, angle, speed);
+            record.velocity_z_03c0 = 0.0f;
+            InitializeRecordTimer(
+                reinterpret_cast<u8 *>(&record.timer_03c8));
         }
-        *reinterpret_cast<u32 *>(manager + 0x21ceb8) =
-            (ring_index + 1) % 2048U;
+        mgr.ring_cursor_21ceb8 = (ring_index + 1) % 2048U;
         return;
     }
 
     for (u32 index = 0; index != 150; ++index) {
-        u8 *const record = manager + 0x14 + index * 0x3f0;
-        if (ReadInt(record, 0x3dc) != 0)
+        BulletSlot &record = mgr.slots[index];
+        if (record.state_03dc != 0)
             continue;
-        WriteInt(record, 0x3dc, 1);
-        WriteFloat(record, 0x3ac, ReadFloat(position, 0));
-        WriteFloat(record, 0x3b0, ReadFloat(position, 4));
-        WriteFloat(record, 0x3b4, ReadFloat(position, 8));
-        float x = ReadFloat(record, 0x3ac);
+        record.state_03dc = 1;
+        record.position_x_03ac = ReadFloat(position, 0);
+        record.position_y_03b0 = ReadFloat(position, 4);
+        record.position_z_03b4 = ReadFloat(position, 8);
+        float x = record.position_x_03ac;
         if (x <= -192.0f)
             x = -192.0f;
         else if (x >= 192.0f)
             x = 192.0f;
-        WriteFloat(record, 0x3ac, x);
-        InitMovementBlock(record + 0x3b8, angle, speed);
-        WriteInt(record, 0x3c0, 0);
-        InitializeRecordTimer(record + 0x3c8);
+        record.position_x_03ac = x;
+        InitMovementBlock(&record.velocity_x_03b8, angle, speed);
+        record.velocity_z_03c0 = 0.0f;
+        InitializeRecordTimer(reinterpret_cast<u8 *>(&record.timer_03c8));
 
         i32 script_kind = kind;
         if (g_PlayerPowerGaugeDword > 99 && kind >= 1 && kind <= 0xb) {
@@ -240,27 +242,31 @@ void SpawnExplosionParticleEaxEcxEfxAbi(void *manager_memory,
             else if (kind == 10 || kind == 0xb)
                 script_kind = 5;
         }
-        if (ReadInt(record, 0x3e0) == 3)
+        if (record.kind_03e0 == 3)
             (void)SpawnStageEffectEdxEbxAbi(
                 *reinterpret_cast<void *const *>(
                     static_cast<u8 *>(g_EffectManagerRoot) + 0x3e0b50),
                 &angle, 0x189);
         i32 script_id = 0x176 + script_kind;
         if (script_kind == 10) {
-            WriteInt(record, 0x3e4, 1);
+            record.bound_kind_03e4 = 1;
             script_id = 0x177;
         } else if (script_kind == 0xb) {
-            WriteInt(record, 0x3e4, 4);
+            record.bound_kind_03e4 = 4;
             script_id = 0x17a;
         }
-        WriteInt(record, 0x3e0, script_kind);
-        // The effect context that owns the script table is the manager
-        // root itself; the native call shape (0x404f30) is ESI=vm,
-        // stack=context, EAX=script id.
-        InitializePlayerMainVmEsiStackAbi(record + 0x14, manager,
-                                          script_id);
-        VmRecord &record_vm = *reinterpret_cast<VmRecord *>(record);
-        record_vm.primary_color = color;
+        record.kind_03e0 = script_kind;
+        // Native 0x41bcae..0x41bcb5: ESI = the slot base itself (the VM
+        // record lives at slot+0x00 — 0x404f30 writes ESI+0x340..0x354 /
+        // +0x38a / +0x3a0), EAX = script id, one stack argument =
+        // [DAT_004776F0+0x3E0B50] (the effect manager root's bullet.anm
+        // work), NOT the bullet manager.
+        InitializePlayerMainVmEsiStackAbi(
+            reinterpret_cast<u8 *>(&record),
+            *reinterpret_cast<void *const *>(
+                static_cast<u8 *>(g_EffectManagerRoot) + 0x3e0b50),
+            script_id);
+        record.vm.primary_color = color;
         return;
     }
 }

@@ -5,10 +5,12 @@
 //   kind B: 0xd74 bytes, callback table 0x46da10,
 // plus the all-stub default table 0x46dab0 installed by 0x41c030. Each table
 // is 19 function pointers followed by a null terminator in .rdata. The
-// per-kind objects share the header layout documented in StageObjectVtable.hpp
-// and differ in the descriptor copy size (0x1dc vs 0x1f8), the animation VM
-// record bases (+0x600/+0x9ac vs +0x61c/+0x9c8) and the ring-effect kind word
-// (+0x44a vs +0x466).
+// per-kind objects share the header layout modeled by StageObjectObject.hpp
+// (StageObjectHeader / StageObjectKindADescriptor / StageObjectKindBDescriptor
+// / StageObjectKindA / StageObjectKindB) and differ in the descriptor copy
+// size (0x1dc vs 0x1f8), the animation VM record bases (+0x600/+0x9ac vs
+// +0x61c/+0x9c8) and the ring-effect kind word (descriptor_0424.
+// script_kind_0026 at +0x44a vs descriptor_0424.script_kind_0042 at +0x466).
 //
 // The sweep family (slots 5/6/7) walks the ray angle in 12-degree steps
 // (flt_470cd8), stops once the step start passes object+0x40 plus the 6.0f
@@ -33,6 +35,8 @@
 #include "SceneTriggerFeatures.hpp"
 #include "SceneTriggerUpdate.hpp"
 #include "StageEffectHelpers.hpp"
+#include "StageObjectManagerObject.hpp"
+#include "StageObjectObject.hpp"
 #include "Th10Types.hpp"
 #include "TimelineRenderObjectSetup.hpp"
 #include "TitleBulletUpdate.hpp"
@@ -164,7 +168,8 @@ void ZeroBlock(void *dst, u32 bytes)
 // ---- per-kind constants --------------------------------------------------
 
 struct SweepKindMap {
-    u32 kind_word;      // +0x44a (A) / +0x466 (B)
+    u32 kind_word;      // A: descriptor_0424.script_kind_0026 (+0x44a) /
+                        //   B: descriptor_0424.script_kind_0042 (+0x466)
     u32 descriptor_size;
 };
 
@@ -193,7 +198,11 @@ i32 TH10_STDCALL ClassifyPositionInPlayerRegionEaxEcxStackAbi(
 // TH10 0x0043e710/0x448db0 composition used by the sweep/spread spawn path:
 // pool VM alloc (manager DAT_00491c10), +0x35c |= 0x40000000, +0x20 = 0,
 // position at +0x340..+0x348 with the +224/+16 offsets, ANM script bind from
-// [DAT_00477818+0x458] and list-A registration (id counter +0x732454).
+// the stage object manager's bullet.anm work handle [DAT_0047781c+0x458]
+// (native loads dword_47781C+0x458 at 0x41dabd / 0x41e305 / 0x41ed3e;
+// DAT_00477818 has no handle at +0x458 - that offset lands inside
+// BulletSlot[1]'s VM record - so this read targets the stage object manager)
+// and list-A registration (id counter +0x732454).
 void SpawnRingEffectVm(i32 script_index, const float position[3], float z)
 {
     u8 *rec = static_cast<u8 *>(AllocatePoolVmEsiAbi(g_MainChainRenderOwner));
@@ -203,8 +212,9 @@ void SpawnRingEffectVm(i32 script_index, const float position[3], float z)
     vm.delta_pos_x = position[0] + kSpawnZ;
     vm.delta_pos_y = position[1] + kTipGateZ;
     vm.delta_pos_z = z;
-    void *anm_work = *reinterpret_cast<void **>(
-        static_cast<u8 *>(g_BulletManagerSlot) + 0x458U);
+    StageObjectManager &stage_mgr =
+        *reinterpret_cast<StageObjectManager *>(g_BulletListRootSlot);
+    void *anm_work = stage_mgr.bullet_anm_work_0458;
     AssignAnmScriptToVmEcxEaxBbxAbi(anm_work, rec, script_index);
     u32 out_id = 0;
     LinkEntityAndAssignIdEaxEsiAbi(&out_id, rec);
@@ -237,12 +247,13 @@ void StageObjectSlotNoop(void *object)
 // TH10 0x41bf30. Unlinks the embedded node at object+4/+8 from its list.
 void StageObjectSlotUnlinkThiscall(void *object)
 {
-    u8 *node = static_cast<u8 *>(object);
-    const u32 next = LoadU32At(node, 0x08U);
-    StoreU32At(reinterpret_cast<void *>(LoadU32At(node, 0x04U)), 0x08U, next);
-    if (next != 0U)
-        StoreU32At(reinterpret_cast<void *>(next), 0x04U,
-                   LoadU32At(node, 0x04U));
+    StageObjectHeader &node = *reinterpret_cast<StageObjectHeader *>(object);
+    void *const next = node.list_next_0008;
+    static_cast<StageObjectHeader *>(node.list_prev_0004)->list_next_0008 =
+        next;
+    if (next != 0)
+        static_cast<StageObjectHeader *>(next)->list_prev_0004 =
+            node.list_prev_0004;
 }
 
 // TH10 0x0041f7a0.
@@ -299,37 +310,42 @@ void TH10_STDCALL QueueEffectRingValueEcxStackAbi(i32 kind, i32 value)
 // native order.
 void *InitStageObjectHeaderDefaultsEdxAbi(void *block)
 {
-    u8 *obj = static_cast<u8 *>(block);
-    StoreU32At(obj, kSobOffTable, 0x0046DAB0U); // dead: erased below
-    StoreU32At(obj, 0x20U, LoadU32At(obj, 0x20U) & 0xFFFFFFFEU);
+    StageObjectHeader &hdr = *reinterpret_cast<StageObjectHeader *>(block);
+    u8 *obj = static_cast<u8 *>(block); // raw_0068 / wipe base
+    hdr.callback_table_0000 =
+        reinterpret_cast<void *>(0x0046DAB0U); // dead: erased below
+    hdr.timer_0010.flags &= 0xFFFFFFFEU;
     for (i32 i = 0; i < 0x12; ++i) {
+        // Eighteen 0x34-stride feature records inside header.raw_0068
+        // (0x68..0x404); flag dword at each record start.
         const u32 off = 0x68U + 0x34U * static_cast<u32>(i);
         StoreU32At(obj, off, LoadU32At(obj, off) & 0xFFFFFFFEU);
     }
-    StoreU32At(obj, 0x420U, LoadU32At(obj, 0x420U) & 0xFFFFFFFEU);
+    hdr.entrance_timer_0410.flags &= 0xFFFFFFFEU;
     ZeroBlock(obj, 0x424U);
 
-    u32 flags = LoadU32At(obj, 0x20U); // 0 after the wipe
+    u32 flags = hdr.timer_0010.flags; // 0 after the wipe
     if ((flags & 1U) == 0U) {
         flags |= 1U;
-        StoreI32At(obj, 0x14U, 0);
-        StoreU32At(obj, 0x10U, 0xFFF0BDC1U);
-        StoreI32At(obj, 0x18U, 0);
-        StoreU32At(obj, 0x1cU, reinterpret_cast<u32>(&g_FrameTimeScale));
-        StoreU32At(obj, 0x20U, flags);
+        hdr.timer_0010.count = 0;
+        *reinterpret_cast<u32 *>(&hdr.timer_0010.prev) = 0xFFF0BDC1U;
+        hdr.timer_0010.accum = 0;
+        hdr.timer_0010.rate = &g_FrameTimeScale;
+        hdr.timer_0010.flags = flags;
     }
-    StoreI32At(obj, 0x14U, 0);
-    StoreI32At(obj, 0x18U, 0);
-    StoreI32At(obj, 0x10U, -1);
+    hdr.timer_0010.count = 0;
+    hdr.timer_0010.accum = 0;
+    hdr.timer_0010.prev = -1;
     return obj;
 }
 
 // TH10 0x0041c100.
 void *CreateStageObjectManagerInPlaceEsiAbi(void *manager)
 {
+    StageObjectManager &mgr = *reinterpret_cast<StageObjectManager *>(manager);
     InitStageObjectHeaderDefaultsEdxAbi(
-        static_cast<u8 *>(manager) + 0x10U); // dead: erased below
-    ZeroBlock(manager, 0x45cU);
+        &mgr.list_sentinel_0010); // dead: erased below
+    ZeroBlock(&mgr, 0x45cU);
     g_BulletListRootSlot = manager;
     return manager;
 }
@@ -364,46 +380,48 @@ void ResetVmRecord(u8 *record)
 // TH10 0x0041c5b0.
 void *InitStageObjectKindA_EbxAbi(void *object)
 {
-    u8 *obj = static_cast<u8 *>(object);
-    InitStageObjectHeaderDefaultsEdxAbi(obj);
-    StoreU32At(obj, kSobOffTable, 0x0046DA60U);
+    StageObjectKindA &so = *reinterpret_cast<StageObjectKindA *>(object);
+    InitStageObjectHeaderDefaultsEdxAbi(&so.header);
+    so.header.callback_table_0000 = reinterpret_cast<void *>(0x0046DA60U);
 
-    ZeroBlock(obj + kSobOffDesc, 0x1dcU); // region A (0x424..0x600)
-    ResetVmRecord(obj + kSobOffRecA_A);
-    // Native reads obj+0xa18 (rec2+0x6c) before the second wipe - dead.
-    (void)LoadU32At(obj, 0xa18U);
-    ResetVmRecord(obj + kSobOffRecA_B);
-    return obj;
+    ZeroBlock(&so.descriptor_0424, 0x1dcU); // region A (0x424..0x600)
+    ResetVmRecord(reinterpret_cast<u8 *>(&so.vm1_0600));
+    // Native reads vm2+0x6c (obj+0xa18) before the second wipe - dead.
+    (void)so.vm2_09ac.timer_flags;
+    ResetVmRecord(reinterpret_cast<u8 *>(&so.vm2_09ac));
+    return object;
 }
 
 // TH10 0x0041c680.
 void *InitStageObjectKindB_EbxAbi(void *object)
 {
-    u8 *obj = static_cast<u8 *>(object);
-    InitStageObjectHeaderDefaultsEdxAbi(obj);
-    StoreU32At(obj, kSobOffTable, 0x0046DA10U);
+    StageObjectKindB &so = *reinterpret_cast<StageObjectKindB *>(object);
+    InitStageObjectHeaderDefaultsEdxAbi(&so.header);
+    so.header.callback_table_0000 = reinterpret_cast<void *>(0x0046DA10U);
 
-    ZeroBlock(obj + kSobOffDesc, 0x1f8U);
-    StoreU32At(obj, kSobOffDesc + 0x2cU, 0x41000000U); // 8.0f at +0x450
-    (void)LoadU32At(obj, 0x688U);  // dead reads of the wiped flag words
-    ResetVmRecord(obj + kSobOffRecB_A);
-    (void)LoadU32At(obj, 0xa34U);
-    ResetVmRecord(obj + kSobOffRecB_B);
-    return obj;
+    ZeroBlock(&so.descriptor_0424, 0x1f8U);
+    // 8.0f seeded at +0x450 (descriptor_0424.zspeed_002c).
+    so.descriptor_0424.zspeed_002c = FloatFromBits(0x41000000U);
+    (void)so.vm1_061c.timer_flags; // dead read of the wiped flag word
+                                   // (obj+0x688)
+    ResetVmRecord(reinterpret_cast<u8 *>(&so.vm1_061c));
+    (void)so.vm2_09c8.timer_flags; // obj+0xa34
+    ResetVmRecord(reinterpret_cast<u8 *>(&so.vm2_09c8));
+    return object;
 }
 
 // TH10 0x0041c510. ESI = manager, EDI forwarded, stack = kind.
 void *SpawnStageObjectEsiEdiStackAbi(void *manager, void *forwarded_edi,
                                      i32 kind)
 {
-    u8 *mgr = static_cast<u8 *>(manager);
-    if (LoadI32At(mgr, 0x438U) >= 0x100)
+    StageObjectManager &mgr = *reinterpret_cast<StageObjectManager *>(manager);
+    if (static_cast<i32>(mgr.node_count_0438) >= 0x100)
         return 0;
 
-    u32 cursor = LoadU32At(mgr, 0x43cU) + 1U;
+    u32 cursor = mgr.spawn_id_cursor_043c + 1U;
     if (cursor == 0U)
         cursor = 1U;
-    StoreU32At(mgr, 0x43cU, cursor);
+    mgr.spawn_id_cursor_043c = cursor;
 
     void *object = 0;
     if (kind == 0) {
@@ -419,21 +437,23 @@ void *SpawnStageObjectEsiEdiStackAbi(void *manager, void *forwarded_edi,
         return 0;
     }
 
-    u8 *obj = static_cast<u8 *>(object);
-    // Native dereferences the object even when allocation failed (+0x54).
-    StoreU32At(obj, 0x54U, cursor);
-    StoreU32At(obj, kSobOffListPrev, LoadU32At(mgr, 0x434U));
-    StoreU32At(reinterpret_cast<void *>(LoadU32At(mgr, 0x434U)),
-               kSobOffListNext, reinterpret_cast<u32>(obj));
-    StoreU32At(mgr, 0x438U, LoadU32At(mgr, 0x438U) + 1U);
-    StoreU32At(mgr, 0x434U, reinterpret_cast<u32>(obj));
+    // Native dereferences the object even when allocation failed (+0x54):
+    // the node reference is formed from the possibly-null pointer exactly as
+    // the native does, so a failed allocation still faults on the store.
+    StageObjectHeader &node = *reinterpret_cast<StageObjectHeader *>(object);
+    node.spawn_id_0054 = cursor;
+    node.list_prev_0004 = mgr.list_head_0434;
+    reinterpret_cast<StageObjectHeader *>(mgr.list_head_0434)
+        ->list_next_0008 = &node;
+    mgr.node_count_0438 = mgr.node_count_0438 + 1U;
+    mgr.list_head_0434 = &node;
 
     // Slot-1 dispatch through the installed table; the native forwards the
     // caller's EDI verbatim as the descriptor argument.
     typedef i32 (TH10_STDCALL *InitFn)(void *, const void *);
-    const u32 table = LoadU32At(obj, kSobOffTable);
-    const InitFn init = *reinterpret_cast<const InitFn *>(table + 4U);
-    init(obj, forwarded_edi);
+    const InitFn init = *reinterpret_cast<const InitFn *>(
+        static_cast<u8 *>(node.callback_table_0000) + 4U);
+    init(&node, forwarded_edi);
 
     return object;
 }
@@ -442,36 +462,41 @@ void *SpawnStageObjectEsiEdiStackAbi(void *manager, void *forwarded_edi,
 i32 TH10_STDCALL StageObjectSpawnDescriptorA(void *object,
                                              const void *descriptor)
 {
-    u8 *obj = static_cast<u8 *>(object);
-    CopyBlock(obj + kSobOffDesc, descriptor, 0x1dcU);
+    StageObjectKindA &so = *reinterpret_cast<StageObjectKindA *>(object);
+    StageObjectHeader &hdr = so.header;
+    StageObjectKindADescriptor &desc = so.descriptor_0424;
+    CopyBlock(&desc, descriptor, 0x1dcU);
 
-    StoreI32At(obj, kSobOffState, 2);
+    hdr.state_000c = 2;
 
-    void *anm_work = *reinterpret_cast<void **>(
-        static_cast<u8 *>(g_BulletListRootSlot) + 0x458U);
+    // The bullet.anm work handle lives in the stage object manager
+    // (DAT_0047781c; native loads [dword_47781C+0x458] at 0x41c8fd).
+    StageObjectManager &stage_mgr =
+        *reinterpret_cast<StageObjectManager *>(g_BulletListRootSlot);
+    void *anm_work = stage_mgr.bullet_anm_work_0458;
 
     // VM 1: script = DAT_00474170[(i16)+0x448] + (i16)+0x44a.
     {
-        u8 *rec = obj + kSobOffRecA_A;
-        VmRecord &rec_vm = *reinterpret_cast<VmRecord *>(rec);
-        const i16 slot = static_cast<i16>(LoadU16At(obj, 0x448U));
-        const i16 kind = static_cast<i16>(LoadU16At(obj, 0x44aU));
+        u8 *rec = reinterpret_cast<u8 *>(&so.vm1_0600);
+        VmRecord &rec_vm = so.vm1_0600;
+        const i16 slot = static_cast<i16>(desc.script_slot_0024);
+        const i16 kind = static_cast<i16>(desc.script_kind_0026);
         const i32 script = static_cast<i32>(
             LoadU32At(g_TriggerVmScriptTable, 4U * static_cast<u32>(slot)))
             + kind;
         InitializePlayerMainVmEsiStackAbi(rec, anm_work, script);
         FinalizeTimelineRenderObjectSetup(rec);
         rec_vm.state_word = 2; // rec1+0x304 mode word
-        if ((LoadU32At(obj, 0x44cU) & 1U) != 0U)
+        if ((desc.flags_0028 & 1U) != 0U)
             rec_vm.flags = (rec_vm.flags & 0xFFFFFFDFU) | 0x10U;
         rec_vm.flags = (rec_vm.flags & 0xFC63FFFFU) | 0x600000U;
     }
 
     // VM 2: script = (i16)+0x44a + 0x103.
     {
-        u8 *rec = obj + kSobOffRecA_B;
-        VmRecord &rec_vm = *reinterpret_cast<VmRecord *>(rec);
-        const i16 kind = static_cast<i16>(LoadU16At(obj, 0x44aU));
+        u8 *rec = reinterpret_cast<u8 *>(&so.vm2_09ac);
+        VmRecord &rec_vm = so.vm2_09ac;
+        const i16 kind = static_cast<i16>(desc.script_kind_0026);
         InitializePlayerMainVmEsiStackAbi(rec, anm_work, kind + 0x103);
         FinalizeTimelineRenderObjectSetup(rec);
         rec_vm.state_word = 2; // rec2+0x304 mode word
@@ -480,35 +505,35 @@ i32 TH10_STDCALL StageObjectSpawnDescriptorA(void *object,
     }
 
     // Lazy timer arm (+0x410 record), then the spawn defaults.
-    if ((LoadU32At(obj, 0x420U) & 1U) == 0U) {
-        StoreI32At(obj, 0x414U, 0);
-        StoreU32At(obj, 0x410U, 0xFFF0BDC1U);
-        StoreI32At(obj, 0x418U, 0);
-        StoreU32At(obj, 0x41cU, reinterpret_cast<u32>(&g_FrameTimeScale));
-        StoreU32At(obj, 0x420U, LoadU32At(obj, 0x420U) | 1U);
+    if ((hdr.entrance_timer_0410.flags & 1U) == 0U) {
+        hdr.entrance_timer_0410.count = 0;
+        *reinterpret_cast<u32 *>(&hdr.entrance_timer_0410.prev) =
+            0xFFF0BDC1U;
+        hdr.entrance_timer_0410.accum = 0;
+        hdr.entrance_timer_0410.rate = &g_FrameTimeScale;
+        hdr.entrance_timer_0410.flags |= 1U;
     }
-    StoreI32At(obj, 0x414U, 0x1e);
-    StoreU32At(obj, 0x418U, 0x41F00000U); // 30.0f
-    StoreI32At(obj, 0x410U, 0x1d);
+    hdr.entrance_timer_0410.count = 0x1e;
+    *reinterpret_cast<u32 *>(&hdr.entrance_timer_0410.accum) =
+        0x41F00000U; // 30.0f
+    hdr.entrance_timer_0410.prev = 0x1d;
 
-    const float depth = LoadFloatAt(obj, 0x438U);
-    StoreFloatAt(obj, kSobOffDepth, depth);
-    StoreFloatAt(obj, kSobOffPos + 0x00U, LoadFloatAt(obj, kSobOffDesc + 0U));
-    StoreFloatAt(obj, kSobOffPos + 0x04U, LoadFloatAt(obj, kSobOffDesc + 4U));
-    StoreFloatAt(obj, kSobOffPos + 0x08U, LoadFloatAt(obj, kSobOffDesc + 8U));
-    StoreFloatAt(obj, kSobOffZSpeed, LoadFloatAt(obj, 0x444U));
-    StoreFloatAt(obj, kSobOffAngle, LoadFloatAt(obj, 0x430U));
-    StoreFloatAt(obj, kSobOffAlpha, LoadFloatAt(obj, 0x440U));
-    StoreU32At(obj, kSobOffKind, 0x18U);
-    StoreFloatAt(obj, kSobOffZVel,
-                 depth > kZero ? FloatFromBits(0x3C23D70AU) : kZero);
+    const float depth = desc.depth_0014;
+    hdr.depth_0040 = depth;
+    hdr.position_x_0024 = desc.spawn_x_0000;
+    hdr.position_y_0028 = desc.spawn_y_0004;
+    hdr.position_z_002c = desc.spawn_z_0008;
+    hdr.zspeed_0048 = desc.zspeed_0020;
+    hdr.angle_003c = desc.angle_000c;
+    hdr.alpha_0044 = desc.alpha_001c;
+    hdr.cutoff_kind_040c = 0x18U;
+    hdr.zvel_004c = depth > kZero ? FloatFromBits(0x3C23D70AU) : kZero;
 
     Float2 velocity;
-    SetVectorFromAngle(&velocity, LoadFloatAt(obj, 0x430U),
-                       LoadFloatAt(obj, 0x444U));
-    StoreFloatAt(obj, kSobOffVel + 0x00U, velocity.x);
-    StoreFloatAt(obj, kSobOffVel + 0x04U, velocity.y);
-    StoreFloatAt(obj, kSobOffVel + 0x08U, 0.0f);
+    SetVectorFromAngle(&velocity, desc.angle_000c, desc.zspeed_0020);
+    hdr.velocity_x_0030 = velocity.x;
+    hdr.velocity_y_0034 = velocity.y;
+    hdr.velocity_z_0038 = 0.0f;
     return 0;
 }
 
@@ -516,33 +541,38 @@ i32 TH10_STDCALL StageObjectSpawnDescriptorA(void *object,
 i32 TH10_STDCALL StageObjectSpawnDescriptorB(void *object,
                                              const void *descriptor)
 {
-    u8 *obj = static_cast<u8 *>(object);
-    CopyBlock(obj + kSobOffDesc, descriptor, 0x1f8U);
+    StageObjectKindB &so = *reinterpret_cast<StageObjectKindB *>(object);
+    StageObjectHeader &hdr = so.header;
+    StageObjectKindBDescriptor &desc = so.descriptor_0424;
+    CopyBlock(&desc, descriptor, 0x1f8U);
 
-    StoreI32At(obj, kSobOffState, 3);
+    hdr.state_000c = 3;
 
-    const i16 slot = static_cast<i16>(LoadU16At(obj, 0x464U));
-    const i16 kind = static_cast<i16>(LoadU16At(obj, 0x466U));
-    void *anm_work = *reinterpret_cast<void **>(
-        static_cast<u8 *>(g_BulletListRootSlot) + 0x458U);
+    const i16 slot = static_cast<i16>(desc.script_slot_0040);
+    const i16 kind = static_cast<i16>(desc.script_kind_0042);
+    // The bullet.anm work handle lives in the stage object manager
+    // (DAT_0047781c; native loads [dword_47781C+0x458] at 0x41e5fb).
+    StageObjectManager &stage_mgr =
+        *reinterpret_cast<StageObjectManager *>(g_BulletListRootSlot);
+    void *anm_work = stage_mgr.bullet_anm_work_0458;
 
     {
-        u8 *rec = obj + kSobOffRecB_A;
-        VmRecord &rec_vm = *reinterpret_cast<VmRecord *>(rec);
+        u8 *rec = reinterpret_cast<u8 *>(&so.vm1_061c);
+        VmRecord &rec_vm = so.vm1_061c;
         const i32 script = static_cast<i32>(
             LoadU32At(g_TriggerVmScriptTable, 4U * static_cast<u32>(slot)))
             + kind;
         InitializePlayerMainVmEsiStackAbi(rec, anm_work, script);
         FinalizeTimelineRenderObjectSetup(rec);
         rec_vm.state_word = 2; // rec1+0x304
-        if ((LoadU32At(obj, 0x468U) & 2U) != 0U)
+        if ((desc.flags_0044 & 2U) != 0U)
             rec_vm.flags = (rec_vm.flags & 0xFFFFFFDFU) | 0x10U;
         rec_vm.flags = (rec_vm.flags & 0xFC63FFFFU) | 0x600000U;
     }
 
     {
-        u8 *rec = obj + kSobOffRecB_B;
-        VmRecord &rec_vm = *reinterpret_cast<VmRecord *>(rec);
+        u8 *rec = reinterpret_cast<u8 *>(&so.vm2_09c8);
+        VmRecord &rec_vm = so.vm2_09c8;
         InitializePlayerMainVmEsiStackAbi(rec, anm_work, kind + 0x103);
         FinalizeTimelineRenderObjectSetup(rec);
         rec_vm.state_word = 2; // rec2+0x304
@@ -550,107 +580,104 @@ i32 TH10_STDCALL StageObjectSpawnDescriptorB(void *object,
         rec_vm.flags = (rec_vm.flags & 0xFC7FFFFFU) | 0x400000U;
     }
 
-    StoreFloatAt(obj, kSobOffPos + 0x00U, LoadFloatAt(obj, kSobOffDesc + 0U));
-    StoreFloatAt(obj, kSobOffPos + 0x04U, LoadFloatAt(obj, kSobOffDesc + 4U));
-    StoreFloatAt(obj, kSobOffPos + 0x08U, LoadFloatAt(obj, kSobOffDesc + 8U));
-    StoreFloatAt(obj, kSobOffAngle, LoadFloatAt(obj, 0x43cU));
-    StoreFloatAt(obj, kSobOffDepth, LoadFloatAt(obj, 0x448U));
-    StoreU32At(obj, kSobOffKind, 0x18U);
-    StoreFloatAt(obj, kSobOffAlpha, 2.0f); // 0x40000000
-    StoreFloatAt(obj, kSobOffZSpeed, LoadFloatAt(obj, 0x450U));
+    hdr.position_x_0024 = LoadFloatAt(desc.raw_0000, 0x00U);
+    hdr.position_y_0028 = LoadFloatAt(desc.raw_0000, 0x04U);
+    hdr.position_z_002c = LoadFloatAt(desc.raw_0000, 0x08U);
+    hdr.angle_003c = desc.angle_0018;
+    hdr.depth_0040 = desc.depth_0024;
+    hdr.cutoff_kind_040c = 0x18U;
+    hdr.alpha_0044 = 2.0f; // 0x40000000
+    hdr.zspeed_0048 = desc.zspeed_002c;
     return 0;
 }
 
 // TH10 0x0041d3d0.
 i32 TH10_STDCALL StageObjectUpdateA(void *object)
 {
-    u8 *obj = static_cast<u8 *>(object);
+    StageObjectKindA &so = *reinterpret_cast<StageObjectKindA *>(object);
+    StageObjectHeader &hdr = so.header;
+    u8 *const bytes = reinterpret_cast<u8 *>(&so); // raw_0068 / descriptor
+                                                   // raw-tail base
 
     // Slot 0 dispatch through the installed table (0x41ca80 for kind A).
     {
         typedef void (*SlotFn)(void *);
-        const u32 table = LoadU32At(obj, kSobOffTable);
-        const SlotFn slot0 = *reinterpret_cast<const SlotFn *>(table);
-        slot0(obj);
+        const SlotFn slot0 =
+            *reinterpret_cast<SlotFn *>(hdr.callback_table_0000);
+        slot0(bytes);
     }
 
-    const u32 flags0 = LoadU32At(obj, kSobOffFlags);
+    const u32 flags0 = hdr.feature_flags_0404;
     if (flags0 != 0U) {
         // Ten-way feature dispatch, native order (bit 0x80 arrives through
         // the `test al,al; jns` idiom).
         typedef void (*SlotFn)(void *);
-        const u32 table = LoadU32At(obj, kSobOffTable);
+        const SlotFn *const slots =
+            reinterpret_cast<const SlotFn *>(hdr.callback_table_0000);
         if ((flags0 & 1U) != 0U)
-            (*reinterpret_cast<const SlotFn *>(table + 9U * 4U))(obj);
+            slots[9U](bytes);
         if ((flags0 & 0x10U) != 0U)
-            (*reinterpret_cast<const SlotFn *>(table + 10U * 4U))(obj);
+            slots[10U](bytes);
         if ((flags0 & 0x20U) != 0U)
-            (*reinterpret_cast<const SlotFn *>(table + 11U * 4U))(obj);
+            slots[11U](bytes);
         if ((flags0 & 0x40U) != 0U)
-            (*reinterpret_cast<const SlotFn *>(table + 12U * 4U))(obj);
+            slots[12U](bytes);
         if ((flags0 & 0x100U) != 0U)
-            (*reinterpret_cast<const SlotFn *>(table + 13U * 4U))(obj);
+            slots[13U](bytes);
         if (static_cast<i32>(flags0) < 0) // test al,al; jns: bit 0x80
-            (*reinterpret_cast<const SlotFn *>(table + 14U * 4U))(obj);
+            slots[14U](bytes);
         if ((flags0 & 0x8000C00U) != 0U)
-            (*reinterpret_cast<const SlotFn *>(table + 15U * 4U))(obj);
+            slots[15U](bytes);
         if ((flags0 & 0x100000U) != 0U)
-            (*reinterpret_cast<const SlotFn *>(table + 16U * 4U))(obj);
+            slots[16U](bytes);
         if ((flags0 & 0x200000U) != 0U)
-            (*reinterpret_cast<const SlotFn *>(table + 17U * 4U))(obj);
+            slots[17U](bytes);
         if ((flags0 & 0x4000000U) != 0U)
-            (*reinterpret_cast<const SlotFn *>(table + 18U * 4U))(obj);
+            slots[18U](bytes);
 
-        // Bit 0x8000: shift the +0x15c timer by -1 while +0x160 > 0.
-        u32 flags = LoadU32At(obj, kSobOffFlags);
+        // Bit 0x8000: shift the +0x15c timer by -1 while +0x160 > 0 (both
+        // offsets live inside header.raw_0068).
+        u32 flags = hdr.feature_flags_0404;
         if ((flags & 0x8000U) != 0U) {
-            if (LoadI32At(obj, 0x160U) > 0) {
-                ShiftTimerByEsiStackAbi(obj + 0x15cU, -1.0f);
+            if (LoadI32At(bytes, 0x160U) > 0) {
+                ShiftTimerByEsiStackAbi(bytes + 0x15cU, -1.0f);
             } else {
-                StoreU32At(obj, kSobOffFlags, flags ^ 0x8000U);
+                hdr.feature_flags_0404 = flags ^ 0x8000U;
             }
         }
     }
 
-    // Depth/ground handling. zlim at +0x434, ceiling at +0x43c.
+    // Depth/ground handling. zlim at +0x434, ceiling at +0x43c (both inside
+    // the kind A descriptor image; its raw_0010/raw_0018 tail is unmodeled).
     {
-        const float z = LoadFloatAt(obj, kSobOffDepth);
-        const float zlim = LoadFloatAt(obj, 0x434U);
-        const float dz = g_FrameTimeScale * LoadFloatAt(obj, kSobOffZSpeed);
+        const float z = hdr.depth_0040;
+        const float zlim = LoadFloatAt(bytes, 0x434U);
+        const float dz = g_FrameTimeScale * hdr.zspeed_0048;
         if (!(z < zlim)) {
             // z >= zlim: accumulate the depth velocity and drift.
-            StoreFloatAt(obj, kSobOffZVel,
-                         LoadFloatAt(obj, kSobOffZVel) + dz);
-            StoreFloatAt(obj, kSobOffPos + 0x00U,
-                         LoadFloatAt(obj, kSobOffPos + 0x00U)
-                             + g_FrameTimeScale
-                                   * LoadFloatAt(obj, kSobOffVel + 0x00U));
-            StoreFloatAt(obj, kSobOffPos + 0x04U,
-                         LoadFloatAt(obj, kSobOffPos + 0x04U)
-                             + g_FrameTimeScale
-                                   * LoadFloatAt(obj, kSobOffVel + 0x04U));
-            StoreFloatAt(obj, kSobOffPos + 0x08U,
-                         LoadFloatAt(obj, kSobOffPos + 0x08U)
-                             + g_FrameTimeScale
-                                   * LoadFloatAt(obj, kSobOffVel + 0x08U));
-            const float zmax = LoadFloatAt(obj, 0x43cU);
+            hdr.zvel_004c = hdr.zvel_004c + dz;
+            hdr.position_x_0024 = hdr.position_x_0024
+                + g_FrameTimeScale * hdr.velocity_x_0030;
+            hdr.position_y_0028 = hdr.position_y_0028
+                + g_FrameTimeScale * hdr.velocity_y_0034;
+            hdr.position_z_002c = hdr.position_z_002c
+                + g_FrameTimeScale * hdr.velocity_z_0038;
+            const float zmax = LoadFloatAt(bytes, 0x43cU);
             if (zmax > kZero) {
-                const float candidate = LoadFloatAt(obj, kSobOffZVel)
-                    + LoadFloatAt(obj, kSobOffDepth);
+                const float candidate = hdr.zvel_004c + hdr.depth_0040;
                 if (candidate < zmax) {
-                    const float reflected = zmax
-                        - LoadFloatAt(obj, kSobOffZVel);
-                    StoreFloatAt(obj, kSobOffDepth, reflected);
-                    StoreFloatAt(obj, 0x434U, reflected);
+                    const float reflected = zmax - hdr.zvel_004c;
+                    hdr.depth_0040 = reflected;
+                    StoreFloatAt(bytes, 0x434U, reflected);
                     if (!(reflected > kZero))
                         return 1; // fell below zero: release
                 }
             }
         } else {
             const float advanced = z + dz;
-            StoreFloatAt(obj, kSobOffDepth, advanced);
+            hdr.depth_0040 = advanced;
             if (advanced > zlim)
-                StoreFloatAt(obj, kSobOffDepth, zlim);
+                hdr.depth_0040 = zlim;
         }
     }
 
@@ -658,28 +685,28 @@ i32 TH10_STDCALL StageObjectUpdateA(void *object)
     // first tip's z component (seeded from a stale stack slot) into the
     // second tip block, so it is tracked across the two blocks here.
     float first_tip_z = 0.0f;
-    if (LoadI32At(obj, 0x414U) > 0) {
-        ShiftTimerByEsiStackAbi(obj + 0x410U, -1.0f);
+    if (hdr.entrance_timer_0410.count > 0) {
+        ShiftTimerByEsiStackAbi(
+            reinterpret_cast<u8 *>(&hdr.entrance_timer_0410), -1.0f);
     } else {
         Float2 vec;
-        SetVectorFromAngle(&vec, LoadFloatAt(obj, kSobOffAngle),
-                           LoadFloatAt(obj, kSobOffDepth));
+        SetVectorFromAngle(&vec, hdr.angle_003c, hdr.depth_0040);
         float tip[3];
-        tip[0] = vec.x + LoadFloatAt(obj, kSobOffPos + 0x00U);
-        tip[1] = vec.y + LoadFloatAt(obj, kSobOffPos + 0x04U);
+        tip[0] = vec.x + hdr.position_x_0024;
+        tip[1] = vec.y + hdr.position_y_0028;
         // Native seeds tip.z from an uninitialized stack slot; a fresh stack
         // slot contributes zero.
-        tip[2] = first_tip_z + LoadFloatAt(obj, kSobOffPos + 0x08U);
+        tip[2] = first_tip_z + hdr.position_z_002c;
         first_tip_z = tip[2];
 
-        const float extent = LoadFloatAt(obj, kSobOffAlpha);
+        const float extent = hdr.alpha_0044;
         // Native 0x41d5d8 first tests the object's current position
         // (ECX = obj+0x24, loaded at 0x41d5b7) and only when that reports
         // outside re-tests the tip (ECX = the stack tip at 0x41d5e5). Both
         // calls pass the +0x44 alpha as both extents; deleting requires
         // both probes to be outside.
         if (IsBoxOutsidePlayfieldEcxStackAbi(
-                reinterpret_cast<const float *>(obj + kSobOffPos),
+                reinterpret_cast<const float *>(&hdr.position_x_0024),
                 extent, extent) != 0
             && IsBoxOutsidePlayfieldEcxStackAbi(tip, extent, extent) != 0)
             return 1;
@@ -687,45 +714,44 @@ i32 TH10_STDCALL StageObjectUpdateA(void *object)
 
     // Tip 2: the region probe against the player-region classifier.
     {
-        const float z = LoadFloatAt(obj, kSobOffDepth);
-        const float y = LoadFloatAt(obj, kSobOffAlpha);
+        const float z = hdr.depth_0040;
+        const float y = hdr.alpha_0044;
         if (z > kTipGateZ && y > kTipGateY) {
             Float2 vec;
-            SetVectorFromAngle(&vec, LoadFloatAt(obj, kSobOffAngle),
-                               z * kTipScaleZ);
+            SetVectorFromAngle(&vec, hdr.angle_003c, z * kTipScaleZ);
             float tip2[3];
-            tip2[0] = vec.x + LoadFloatAt(obj, kSobOffPos + 0x00U);
-            tip2[1] = vec.y + LoadFloatAt(obj, kSobOffPos + 0x04U);
+            tip2[0] = vec.x + hdr.position_x_0024;
+            tip2[1] = vec.y + hdr.position_y_0028;
             // Native accumulates the z component over the first tip block.
-            tip2[2] = first_tip_z + LoadFloatAt(obj, kSobOffPos + 0x08U);
+            tip2[2] = first_tip_z + hdr.position_z_002c;
 
             const float half_y = y < kTipAlpha
                 ? y * kHalf
                 : y - (y + kTipGateZ) * kHalf;
             const i32 region = ClassifyPositionInPlayerRegionEaxEcxStackAbi(
-                tip2, g_OptionPositionBase, LoadFloatAt(obj, kSobOffAngle),
+                tip2, g_OptionPositionBase, hdr.angle_003c,
                 half_y, z * kTipScaleB);
             if (region == 1) {
                 typedef i32 (TH10_STDCALL *SweepFn)(void *, const float *,
                                                     const float *, i32);
-                const u32 table = LoadU32At(obj, kSobOffTable);
                 const SweepFn sweep =
-                    *reinterpret_cast<const SweepFn *>(table + 6U * 4U);
+                    *reinterpret_cast<const SweepFn *>(
+                        static_cast<u8 *>(hdr.callback_table_0000)
+                            + 6U * 4U);
                 PlayerRecord &player =
                     *reinterpret_cast<PlayerRecord *>(
                         g_OptionPositionBase);
                 const float *target = &player.position_x;
-                sweep(obj, target, tip2, 0);
+                sweep(bytes, target, tip2, 0);
             } else if (region == 2) {
-                if (LoadI32At(obj, 0x14U) % 5 == 0) {
+                if (hdr.timer_0010.count % 5 == 0) {
                     u8 *stage = static_cast<u8 *>(g_EffectManagerRoot);
                     SpawnStageEffectEdxEbxAbi(
                         reinterpret_cast<void *>(LoadU32At(stage,
                                                            0x3e0b50U)),
                         tip2, 0x1b2);
                     QueueBulletDeathEffectEbxEsiStackAbi(
-                        0x1c, EffectManager(),
-                        LoadFloatAt(obj, kSobOffPos + 0x00U));
+                        0x1c, EffectManager(), hdr.position_x_0024);
                 }
             }
         }
@@ -733,19 +759,18 @@ i32 TH10_STDCALL StageObjectUpdateA(void *object)
 
     // VM position publication and ticks.
     {
-        u8 *rec1 = obj + kSobOffRecA_A;
-        VmRecord &rec_vm = *reinterpret_cast<VmRecord *>(rec1);
+        u8 *rec1 = reinterpret_cast<u8 *>(&so.vm1_0600);
+        VmRecord &rec_vm = so.vm1_0600;
         const void *scale_ptr = rec_vm.anim_entry;
         rec_vm.flags |= 8U;
         rec_vm.scale_x =
-            LoadFloatAt(obj, kSobOffAlpha)
-                / LoadFloatAt(scale_ptr, 0x34U);
+            hdr.alpha_0044 / LoadFloatAt(scale_ptr, 0x34U);
         rec_vm.scale_y =
-            LoadFloatAt(obj, kSobOffDepth)
-                / LoadFloatAt(scale_ptr, 0x30U);
+            hdr.depth_0040 / LoadFloatAt(scale_ptr, 0x30U);
         FinalizeTimelineRenderObjectSetup(rec1);
-        if (LoadFloatAt(obj, kSobOffZVel) == kZero)
-            FinalizeTimelineRenderObjectSetup(obj + kSobOffRecA_B);
+        if (hdr.zvel_004c == kZero)
+            FinalizeTimelineRenderObjectSetup(
+                reinterpret_cast<u8 *>(&so.vm2_09ac));
     }
     return 0;
 }
@@ -760,131 +785,127 @@ i32 TH10_STDCALL StageObjectUpdateA(void *object)
 // bits 0x8000000|0xc00 at the end.
 void TH10_STDCALL StageObjectCutoffRespawnA(void *object)
 {
-    u8 *obj = static_cast<u8 *>(object);
+    StageObjectKindA &so = *reinterpret_cast<StageObjectKindA *>(object);
+    StageObjectHeader &hdr = so.header;
+    StageObjectKindADescriptor &desc = so.descriptor_0424;
+    u8 *const bytes = reinterpret_cast<u8 *>(&so);
 
-    const float x = LoadFloatAt(obj, kSobOffPos + 0x00U)
-        + LoadFloatAt(obj, kSobOffVel + 0x00U);
-    const float y = LoadFloatAt(obj, kSobOffPos + 0x04U)
-        + LoadFloatAt(obj, kSobOffVel + 0x04U);
-    const float z = LoadFloatAt(obj, kSobOffPos + 0x08U)
-        + LoadFloatAt(obj, kSobOffVel + 0x08U);
+    const float x = hdr.position_x_0024 + hdr.velocity_x_0030;
+    const float y = hdr.position_y_0028 + hdr.velocity_y_0034;
+    const float z = hdr.position_z_002c + hdr.velocity_z_0038;
 
     const bool inside = x >= kFieldMinX && x < kFieldMaxX && y >= kZero
         && y < kFieldMaxY;
     if (inside)
         return;
 
-    CutoffEffectRing(LoadI32At(obj, kSobOffKind));
+    CutoffEffectRing(static_cast<i32>(hdr.cutoff_kind_040c));
 
     // Snapshot branch 1: the angle reversed by pi.
-    StoreFloatAt(obj, 0x430U,
-                 WrapAngleToPi(-LoadFloatAt(obj, kSobOffAngle) - kPi));
-    StoreFloatAt(obj + kSobOffDesc, 0x00U, x);
-    StoreFloatAt(obj + kSobOffDesc, 0x04U, y);
-    StoreFloatAt(obj + kSobOffDesc, 0x08U, z);
-    StoreU32At(obj, 0x444U, LoadU32At(obj, 0x13cU));
-    SpawnStageObjectEsiEdiStackAbi(g_BulletListRootSlot, obj + kSobOffDesc,
-                                   0);
+    desc.angle_000c = WrapAngleToPi(-hdr.angle_003c - kPi);
+    desc.spawn_x_0000 = x;
+    desc.spawn_y_0004 = y;
+    desc.spawn_z_0008 = z;
+    *reinterpret_cast<u32 *>(&desc.zspeed_0020) = LoadU32At(bytes, 0x13cU);
+    SpawnStageObjectEsiEdiStackAbi(g_BulletListRootSlot, &desc, 0);
 
     // Snapshot branch 2 (only when flag 0x8000000 is clear): the depth
     // window check against the +0x40/+0x4c pair decides whether the second
     // spawn happens; the flag mask is always applied on this path.
-    if ((LoadU32At(obj, kSobOffFlags) & 0x8000000U) == 0U) {
-        const bool depth_inside = LoadFloatAt(obj, kSobOffPos + 0x08U)
-            >= kZero;
+    if ((hdr.feature_flags_0404 & 0x8000000U) == 0U) {
+        const bool depth_inside = hdr.position_z_002c >= kZero;
         (void)depth_inside;
-        CutoffEffectRing(LoadI32At(obj, kSobOffKind));
-        StoreFloatAt(obj + kSobOffDesc, 0x00U, x);
-        StoreFloatAt(obj + kSobOffDesc, 0x04U, y);
-        StoreFloatAt(obj + kSobOffDesc, 0x08U, z);
-        StoreU32At(obj, 0x444U, LoadU32At(obj, 0x13cU));
-        SpawnStageObjectEsiEdiStackAbi(g_BulletListRootSlot,
-                                       obj + kSobOffDesc, 0);
+        CutoffEffectRing(static_cast<i32>(hdr.cutoff_kind_040c));
+        desc.spawn_x_0000 = x;
+        desc.spawn_y_0004 = y;
+        desc.spawn_z_0008 = z;
+        *reinterpret_cast<u32 *>(&desc.zspeed_0020) = LoadU32At(bytes, 0x13cU);
+        SpawnStageObjectEsiEdiStackAbi(g_BulletListRootSlot, &desc, 0);
     }
-    StoreU32At(obj, kSobOffFlags,
-               LoadU32At(obj, kSobOffFlags) & 0xF7FFF3FFU);
+    hdr.feature_flags_0404 &= 0xF7FFF3FFU;
 }
 
 // TH10 0x0041d170 (slot 12; the 0x40 feature flag). Distance-driven shrink:
 // while the +0xf8 timer has not reached +0x11c the motion vector length
 // shrinks as base*(1 - rate/+0x11c); on reach the terminal event fires, the
 // timer re-arms and the vector rebuilds with the full +0x11c length.
+// All of the shrink state (+0xf4..+0x124) lives inside header.raw_0068.
 void TH10_STDCALL StageObjectDistanceShrinkA(void *object)
 {
-    u8 *obj = static_cast<u8 *>(object);
-    const i32 timer = LoadI32At(obj, 0xf8U);
-    const i32 max_distance = LoadI32At(obj, 0x11cU);
+    StageObjectKindA &so = *reinterpret_cast<StageObjectKindA *>(object);
+    StageObjectHeader &hdr = so.header;
+    u8 *const bytes = reinterpret_cast<u8 *>(&so);
+    const i32 timer = LoadI32At(bytes, 0xf8U);
+    const i32 max_distance = LoadI32At(bytes, 0x11cU);
 
     if (timer >= max_distance) {
-        CutoffEffectRing(LoadI32At(obj, kSobOffKind));
-        const i32 counter = LoadI32At(obj, 0x124U) + 1;
-        StoreI32At(obj, 0x124U, counter);
-        if (counter >= LoadI32At(obj, 0x120U))
-            StoreU32At(obj, kSobOffFlags,
-                       LoadU32At(obj, kSobOffFlags) & 0xFFFFFFBFU);
-        StoreFloatAt(obj, kSobOffPos + 0x00U,
-                     LoadFloatAt(obj, 0x10cU)
-                         + LoadFloatAt(obj, kSobOffPos + 0x00U));
-        StoreFloatAt(obj, kSobOffZSpeed, LoadFloatAt(obj, 0x108U));
+        CutoffEffectRing(static_cast<i32>(hdr.cutoff_kind_040c));
+        const i32 counter = LoadI32At(bytes, 0x124U) + 1;
+        StoreI32At(bytes, 0x124U, counter);
+        if (counter >= LoadI32At(bytes, 0x120U))
+            hdr.feature_flags_0404 &= 0xFFFFFFBFU;
+        hdr.position_x_0024 =
+            LoadFloatAt(bytes, 0x10cU) + hdr.position_x_0024;
+        hdr.zspeed_0048 = LoadFloatAt(bytes, 0x108U);
         // Lazy arm of the +0xf4 timer record, then the unconditional reset.
-        if ((LoadU32At(obj, 0x104U) & 1U) == 0U) {
-            StoreI32At(obj, 0xf8U, 0);
-            StoreU32At(obj, 0xf4U, 0xFFF0BDC1U);
-            StoreI32At(obj, 0xfcU, 0);
-            StoreU32At(obj, 0x100U,
+        if ((LoadU32At(bytes, 0x104U) & 1U) == 0U) {
+            StoreI32At(bytes, 0xf8U, 0);
+            StoreU32At(bytes, 0xf4U, 0xFFF0BDC1U);
+            StoreI32At(bytes, 0xfcU, 0);
+            StoreU32At(bytes, 0x100U,
                        reinterpret_cast<u32>(&g_FrameTimeScale));
-            StoreU32At(obj, 0x104U, LoadU32At(obj, 0x104U) | 1U);
+            StoreU32At(bytes, 0x104U, LoadU32At(bytes, 0x104U) | 1U);
         }
-        StoreI32At(obj, 0xf8U, 0);
-        StoreI32At(obj, 0xfcU, 0);
-        StoreI32At(obj, 0xf4U, -1);
+        StoreI32At(bytes, 0xf8U, 0);
+        StoreI32At(bytes, 0xfcU, 0);
+        StoreI32At(bytes, 0xf4U, -1);
         // Native rebuilds the vector with length = max_distance.
         Float2 vec;
-        SetVectorFromAngle(&vec, LoadFloatAt(obj, kSobOffAngle),
+        SetVectorFromAngle(&vec, hdr.angle_003c,
                            static_cast<float>(max_distance));
-        StoreFloatAt(obj, kSobOffVel + 0x00U, vec.x);
-        StoreFloatAt(obj, kSobOffVel + 0x04U, vec.y);
+        hdr.velocity_x_0030 = vec.x;
+        hdr.velocity_y_0034 = vec.y;
     } else {
         // length = base * (1 - rate / max_distance)
-        const float base = LoadFloatAt(obj, kSobOffZSpeed);
-        const float rate = LoadFloatAt(obj, 0xfcU);
+        const float base = hdr.zspeed_0048;
+        const float rate = LoadFloatAt(bytes, 0xfcU);
         Float2 vec;
         SetVectorFromAngle(
-            &vec, LoadFloatAt(obj, kSobOffAngle),
+            &vec, hdr.angle_003c,
             base * (kOne - rate / static_cast<float>(max_distance)));
-        StoreFloatAt(obj, kSobOffVel + 0x00U, vec.x);
-        StoreFloatAt(obj, kSobOffVel + 0x04U, vec.y);
+        hdr.velocity_x_0030 = vec.x;
+        hdr.velocity_y_0034 = vec.y;
         // Native still publishes [+0xf4] = [+0xf8] before the rate advance.
-        StoreI32At(obj, 0xf4U, LoadI32At(obj, 0xf8U));
+        StoreI32At(bytes, 0xf4U, LoadI32At(bytes, 0xf8U));
         const float rate_value = LoadFloatAt(
-            *reinterpret_cast<void **>(static_cast<u8 *>(obj) + 0x100U), 0U);
+            *reinterpret_cast<void **>(bytes + 0x100U), 0U);
         if (rate_value > kRateLow && rate_value < kRateHigh) {
-            StoreI32At(obj, 0xf8U, LoadI32At(obj, 0xf8U) + 1);
-            StoreFloatAt(obj, 0xfcU, LoadFloatAt(obj, 0xfcU) + kOne);
+            StoreI32At(bytes, 0xf8U, LoadI32At(bytes, 0xf8U) + 1);
+            StoreFloatAt(bytes, 0xfcU, LoadFloatAt(bytes, 0xfcU) + kOne);
         } else {
-            StoreFloatAt(obj, 0xfcU,
-                         rate_value + LoadFloatAt(obj, 0xfcU));
+            StoreFloatAt(bytes, 0xfcU,
+                         rate_value + LoadFloatAt(bytes, 0xfcU));
             // Native rounds half-away-from-zero through 0x463b2c.
             const double rounded = ::floor(
-                static_cast<double>(LoadFloatAt(obj, 0xfcU)) + 0.5);
-            StoreI32At(obj, 0xf8U, static_cast<i32>(rounded));
+                static_cast<double>(LoadFloatAt(bytes, 0xfcU)) + 0.5);
+            StoreI32At(bytes, 0xf8U, static_cast<i32>(rounded));
         }
         return;
     }
 
     // Shared tail on the terminal path: publish [+0xf4] = [+0xf8] and
     // advance the rate record identically.
-    StoreI32At(obj, 0xf4U, LoadI32At(obj, 0xf8U));
+    StoreI32At(bytes, 0xf4U, LoadI32At(bytes, 0xf8U));
     const float rate_value = LoadFloatAt(
-        *reinterpret_cast<void **>(static_cast<u8 *>(obj) + 0x100U), 0U);
+        *reinterpret_cast<void **>(bytes + 0x100U), 0U);
     if (rate_value > kRateLow && rate_value < kRateHigh) {
-        StoreI32At(obj, 0xf8U, LoadI32At(obj, 0xf8U) + 1);
-        StoreFloatAt(obj, 0xfcU, LoadFloatAt(obj, 0xfcU) + kOne);
+        StoreI32At(bytes, 0xf8U, LoadI32At(bytes, 0xf8U) + 1);
+        StoreFloatAt(bytes, 0xfcU, LoadFloatAt(bytes, 0xfcU) + kOne);
     } else {
-        StoreFloatAt(obj, 0xfcU, rate_value + LoadFloatAt(obj, 0xfcU));
+        StoreFloatAt(bytes, 0xfcU, rate_value + LoadFloatAt(bytes, 0xfcU));
         const double rounded = ::floor(
-            static_cast<double>(LoadFloatAt(obj, 0xfcU)) + 0.5);
-        StoreI32At(obj, 0xf8U, static_cast<i32>(rounded));
+            static_cast<double>(LoadFloatAt(bytes, 0xfcU)) + 0.5);
+        StoreI32At(bytes, 0xf8U, static_cast<i32>(rounded));
     }
 }
 
@@ -904,9 +925,17 @@ enum SweepMode {
 // arg2: box mode - three-float extent (half = extent * 0.5); radial mode -
 //       the radius (squared once).
 // flag: gates the per-hit explosion particle.
+//
+// The kind word and the descriptor copy size stay byte-mapped per kind
+// (kMapA: descriptor_0424.script_kind_0026 at +0x44a with the 0x1dc copy,
+//  kMapB: descriptor_0424.script_kind_0042 at +0x466 with the 0x1f8 copy).
+// The shared-header fields are typed through StageObjectHeader; the +0x434
+// publish slot (inside the descriptor image) and the raw_0068 feature-record
+// region stay raw.
 i32 SweepCommon(u8 *obj, float *arg1, const void *arg2, i32 flag,
                 const SweepKindMap &map, SweepMode mode)
 {
+    StageObjectHeader &hdr = *reinterpret_cast<StageObjectHeader *>(obj);
     const i16 kind = static_cast<i16>(LoadU16At(obj, map.kind_word));
     const i32 script = kind * 2 + 0x11;
 
@@ -927,11 +956,11 @@ i32 SweepCommon(u8 *obj, float *arg1, const void *arg2, i32 flag,
         radius_sq = radius * radius;
     }
 
-    const float start[3] = { LoadFloatAt(obj, kSobOffPos + 0x00U),
-                             LoadFloatAt(obj, kSobOffPos + 0x04U),
-                             LoadFloatAt(obj, kSobOffPos + 0x08U) };
+    const float start[3] = { hdr.position_x_0024,
+                             hdr.position_y_0028,
+                             hdr.position_z_002c };
     Float2 dir;
-    SetVectorFromAngle(&dir, LoadFloatAt(obj, kSobOffAngle), kSweepStep);
+    SetVectorFromAngle(&dir, hdr.angle_003c, kSweepStep);
 
     u8 hits[0x40];
     ZeroBlock(hits, 0x40U);
@@ -940,7 +969,7 @@ i32 SweepCommon(u8 *obj, float *arg1, const void *arg2, i32 flag,
     float point[3] = { start[0], start[1], start[2] };
     float angle = kAngleStep;
 
-    if (kAngleStep < LoadFloatAt(obj, kSobOffDepth)) {
+    if (kAngleStep < hdr.depth_0040) {
         for (;;) {
             const bool hit =
                 mode == kSweepBox
@@ -958,10 +987,11 @@ i32 SweepCommon(u8 *obj, float *arg1, const void *arg2, i32 flag,
                 if (flag != 0
                     && IsBoxOutsidePlayfieldEcxStackAbi(tip, 32.0f, 32.0f)
                            == 0) {
+                    // Native 0x41da95 passes DAT_00477818's content (the
+                    // bullet manager base) straight to 0x41bb00.
                     SpawnExplosionParticleEaxEcxEfxAbi(
-                        *static_cast<void **>(g_BulletManagerSlot),
-                        point, 8, 0xFFFFFFFFU, kExplosionAngle,
-                        kExplosionSpeed);
+                        g_BulletManagerSlot, point, 8, 0xFFFFFFFFU,
+                        kExplosionAngle, kExplosionSpeed);
                 }
                 if (mode == kSweepBox)
                     SpawnRingEffectVm(script, start, start[2]);
@@ -971,7 +1001,7 @@ i32 SweepCommon(u8 *obj, float *arg1, const void *arg2, i32 flag,
             point[0] += dir.x;
             point[1] += dir.y;
             angle += kAngleStep;
-            if (!(angle + kDepthWindow < LoadFloatAt(obj, kSobOffDepth)))
+            if (!(angle + kDepthWindow < hdr.depth_0040))
                 break;
             ++steps;
         }
@@ -980,7 +1010,7 @@ i32 SweepCommon(u8 *obj, float *arg1, const void *arg2, i32 flag,
     if (hit_count == 0)
         return 0;
     if (hit_count >= steps) {
-        StoreU32At(obj, kSobOffDone, 1U);
+        hdr.done_latch_0050 = 1U;
         return 0;
     }
 
@@ -993,14 +1023,14 @@ i32 SweepCommon(u8 *obj, float *arg1, const void *arg2, i32 flag,
     if (leading > 0) {
         arg1[0] += dir.x * static_cast<float>(leading);
         arg1[1] += dir.y * static_cast<float>(leading);
-        const float depth = LoadFloatAt(obj, kSobOffDepth)
+        const float depth = hdr.depth_0040
             - static_cast<float>(leading) * kAngleStep;
-        StoreFloatAt(obj, kSobOffDepth, depth);
+        hdr.depth_0040 = depth;
         if (depth > kDepthLatch) {
             StoreFloatAt(obj, 0x434U, depth);
-            StoreFloatAt(obj, kSobOffZVel, depth);
+            hdr.zvel_004c = depth;
         } else {
-            StoreU32At(obj, kSobOffDone, 1U);
+            hdr.done_latch_0050 = 1U;
             return 0;
         }
     }
@@ -1021,15 +1051,14 @@ i32 SweepCommon(u8 *obj, float *arg1, const void *arg2, i32 flag,
             StoreFloatAt(obj, 0x434U,
                          LoadFloatAt(obj, 0x434U)
                              - static_cast<float>(gap) * kAngleStep);
-            StoreFloatAt(obj, kSobOffDepth,
-                         LoadFloatAt(obj, kSobOffDepth)
-                             - static_cast<float>(gap) * kAngleStep);
-            if (LoadFloatAt(obj, kSobOffDepth) >= kDepthLatch)
-                StoreU32At(obj, kSobOffDone, 1U);
+            hdr.depth_0040 = hdr.depth_0040
+                - static_cast<float>(gap) * kAngleStep;
+            if (hdr.depth_0040 >= kDepthLatch)
+                hdr.done_latch_0050 = 1U;
             if (gap * 12 > 18) {
                 if (mode == kSweepBox) {
                     u8 desc_copy[0x1dcU];
-                    CopyBlock(desc_copy, obj + kSobOffDesc,
+                    CopyBlock(desc_copy, obj + 0x424U, // descriptor_0424 image
                               map.descriptor_size);
                     float spawn_pos[3] = {
                         start[0] + dir.x * static_cast<float>(run_start),
@@ -1062,7 +1091,8 @@ i32 TH10_STDCALL StageObjectSweepBoxA(void *object, const float center[3],
                                       const float extent[3], i32 flag)
 {
     (void)center;
-    return SweepCommon(static_cast<u8 *>(object),
+    StageObjectKindA &so = *reinterpret_cast<StageObjectKindA *>(object);
+    return SweepCommon(reinterpret_cast<u8 *>(&so),
                        const_cast<float *>(extent), extent, flag, kMapA,
                        kSweepBox);
 }
@@ -1071,7 +1101,8 @@ i32 TH10_STDCALL StageObjectSweepBoxA(void *object, const float center[3],
 i32 TH10_STDCALL StageObjectSweepRadialA(void *object, const float target[3],
                                          float radius, i32 flag)
 {
-    return SweepCommon(static_cast<u8 *>(object),
+    StageObjectKindA &so = *reinterpret_cast<StageObjectKindA *>(object);
+    return SweepCommon(reinterpret_cast<u8 *>(&so),
                        const_cast<float *>(target), &radius, flag, kMapA,
                        kSweepRadial);
 }
@@ -1081,7 +1112,8 @@ i32 TH10_STDCALL StageObjectSweepBoxB(void *object, const float center[3],
                                       const float extent[3], i32 flag)
 {
     (void)center;
-    return SweepCommon(static_cast<u8 *>(object),
+    StageObjectKindB &so = *reinterpret_cast<StageObjectKindB *>(object);
+    return SweepCommon(reinterpret_cast<u8 *>(&so),
                        const_cast<float *>(extent), extent, flag, kMapB,
                        kSweepBox);
 }
@@ -1090,7 +1122,8 @@ i32 TH10_STDCALL StageObjectSweepBoxB(void *object, const float center[3],
 i32 TH10_STDCALL StageObjectSweepRadialB(void *object, const float target[3],
                                          float radius, i32 flag)
 {
-    return SweepCommon(static_cast<u8 *>(object),
+    StageObjectKindB &so = *reinterpret_cast<StageObjectKindB *>(object);
+    return SweepCommon(reinterpret_cast<u8 *>(&so),
                        const_cast<float *>(target), &radius, flag, kMapB,
                        kSweepRadial);
 }
@@ -1100,37 +1133,40 @@ i32 TH10_STDCALL StageObjectSweepRadialB(void *object, const float target[3],
 // passes the depth; optionally plays the explosion particle per step.
 i32 TH10_STDCALL StageObjectSpreadA(void *object, i32 enable_explosion)
 {
-    u8 *obj = static_cast<u8 *>(object);
-    const i16 kind = static_cast<i16>(LoadU16At(obj, kMapA.kind_word));
+    StageObjectKindA &so = *reinterpret_cast<StageObjectKindA *>(object);
+    StageObjectHeader &hdr = so.header;
+    const i16 kind = static_cast<i16>(so.descriptor_0424.script_kind_0026);
     const i32 script = kind * 2 + 0x11;
 
-    float point[3] = { LoadFloatAt(obj, kSobOffPos + 0x00U),
-                       LoadFloatAt(obj, kSobOffPos + 0x04U),
-                       LoadFloatAt(obj, kSobOffPos + 0x08U) };
+    float point[3] = { hdr.position_x_0024,
+                       hdr.position_y_0028,
+                       hdr.position_z_002c };
     Float2 dir;
-    SetVectorFromAngle(&dir, LoadFloatAt(obj, kSobOffAngle), kSweepStep);
+    SetVectorFromAngle(&dir, hdr.angle_003c, kSweepStep);
     float angle = kAngleStep;
 
-    if (kAngleStep < LoadFloatAt(obj, kSobOffDepth)) {
+    if (kAngleStep < hdr.depth_0040) {
         for (;;) {
             SpawnRingEffectVm(script, point, point[2]);
             if (enable_explosion != 0) {
                 const float tip[2] = { point[0], point[1] };
                 if (IsBoxOutsidePlayfieldEcxStackAbi(tip, 32.0f, 32.0f)
                         == 0) {
+                    // Native 0x41e445 passes DAT_00477818's content (the
+                    // bullet manager base) straight to 0x41bb00.
                     SpawnExplosionParticleEaxEcxEfxAbi(
-                        *static_cast<void **>(g_BulletManagerSlot), point, 8,
+                        g_BulletManagerSlot, point, 8,
                         0xFFFFFFFFU, kExplosionAngle, kExplosionSpeed);
                 }
             }
             point[0] += dir.x;
             point[1] += dir.y;
             angle += kAngleStep;
-            if (!(angle + kDepthWindow < LoadFloatAt(obj, kSobOffDepth)))
+            if (!(angle + kDepthWindow < hdr.depth_0040))
                 break;
         }
     }
-    StoreI32At(obj, kSobOffState, 1);
+    hdr.state_000c = 1;
     return 0;
 }
 
@@ -1138,18 +1174,19 @@ i32 TH10_STDCALL StageObjectSpreadA(void *object, i32 enable_explosion)
 // each ring VM spawn.
 i32 TH10_STDCALL StageObjectSpreadB(void *object, i32 enable_explosion)
 {
-    u8 *obj = static_cast<u8 *>(object);
-    const i16 kind = static_cast<i16>(LoadU16At(obj, kMapB.kind_word));
+    StageObjectKindB &so = *reinterpret_cast<StageObjectKindB *>(object);
+    StageObjectHeader &hdr = so.header;
+    const i16 kind = static_cast<i16>(so.descriptor_0424.script_kind_0042);
     const i32 script = kind * 2 + 0x11;
 
-    float point[3] = { LoadFloatAt(obj, kSobOffPos + 0x00U),
-                       LoadFloatAt(obj, kSobOffPos + 0x04U),
-                       LoadFloatAt(obj, kSobOffPos + 0x08U) };
+    float point[3] = { hdr.position_x_0024,
+                       hdr.position_y_0028,
+                       hdr.position_z_002c };
     Float2 dir;
-    SetVectorFromAngle(&dir, LoadFloatAt(obj, kSobOffAngle), kSweepStep);
+    SetVectorFromAngle(&dir, hdr.angle_003c, kSweepStep);
     float angle = kAngleStep;
 
-    if (kAngleStep < LoadFloatAt(obj, kSobOffDepth)) {
+    if (kAngleStep < hdr.depth_0040) {
         for (;;) {
             const float tip[2] = { point[0], point[1] };
             if (IsBoxOutsidePlayfieldEcxStackAbi(tip, kTipGateZ, kTipGateZ)
@@ -1158,102 +1195,108 @@ i32 TH10_STDCALL StageObjectSpreadB(void *object, i32 enable_explosion)
                 if (enable_explosion != 0
                     && IsBoxOutsidePlayfieldEcxStackAbi(tip, 32.0f, 32.0f)
                            == 0) {
+                    // Native passes DAT_00477818's content (the bullet
+                    // manager base) straight to 0x41bb00.
                     SpawnExplosionParticleEaxEcxEfxAbi(
-                        *static_cast<void **>(g_BulletManagerSlot), point, 8,
+                        g_BulletManagerSlot, point, 8,
                         0xFFFFFFFFU, kExplosionAngle, kExplosionSpeed);
                 }
             }
             point[0] += dir.x;
             point[1] += dir.y;
             angle += kAngleStep;
-            if (!(angle + kDepthWindow < LoadFloatAt(obj, kSobOffDepth)))
+            if (!(angle + kDepthWindow < hdr.depth_0040))
                 break;
         }
     }
-    StoreI32At(obj, kSobOffState, 1);
+    hdr.state_000c = 1;
     return 0;
 }
 
 // TH10 0x0041e700 (slot 2, kind B).
 i32 TH10_STDCALL StageObjectUpdateB(void *object)
 {
-    u8 *obj = static_cast<u8 *>(object);
+    StageObjectKindB &so = *reinterpret_cast<StageObjectKindB *>(object);
+    StageObjectHeader &hdr = so.header;
+    StageObjectKindBDescriptor &desc = so.descriptor_0424;
 
     // Depth advance: only while below the +0x444 limit, clamped on top.
     {
-        const float z = LoadFloatAt(obj, kSobOffDepth);
-        const float zlim = LoadFloatAt(obj, 0x444U);
+        const float z = hdr.depth_0040;
+        const float zlim = desc.depth_clamp_0020;
         if (z < zlim) {
             const float advanced = z
-                + g_FrameTimeScale * LoadFloatAt(obj, kSobOffZSpeed);
-            StoreFloatAt(obj, kSobOffDepth, advanced);
+                + g_FrameTimeScale * hdr.zspeed_0048;
+            hdr.depth_0040 = advanced;
             if (advanced > zlim)
-                StoreFloatAt(obj, kSobOffDepth, zlim);
+                hdr.depth_0040 = zlim;
         }
     }
 
     // Angle wrap: angle = wrap(angle + rate * +0x440) (0x44bc10).
-    StoreFloatAt(obj, kSobOffAngle,
-                 WrapAngleSumStackAbi(LoadFloatAt(obj, kSobOffAngle),
-                                      g_FrameTimeScale
-                                          * LoadFloatAt(obj, 0x440U)));
+    hdr.angle_003c = WrapAngleSumStackAbi(
+        hdr.angle_003c,
+        g_FrameTimeScale * desc.angle_rate_001c);
 
     // Descriptor flag bit 1: follow the chain position at
     // [DAT_00477704+0x10]+0x1068. The +0x10 slot is published_ids[0] (the
     // primary stage/battle ECL record pointer), a modeled field.
-    if ((LoadU32At(obj, 0x468U) & 1U) != 0U) {
+    if ((desc.flags_0044 & 1U) != 0U) {
         ConditionalState &hud_cond =
             *static_cast<ConditionalState *>(g_AsciiHudConditionalState);
         const u32 chain = hud_cond.published_ids[0];
         if (chain != 0U)
-            CopyBlock(obj + kSobOffPos,
+            CopyBlock(&hdr.position_x_0024,
                       reinterpret_cast<const u8 *>(chain) + 0x1068U, 0x0cU);
     }
 
     // Entrance drift.
     const float rate = g_FrameTimeScale;
-    StoreFloatAt(obj, kSobOffPos + 0x00U,
-                 LoadFloatAt(obj, kSobOffPos + 0x00U)
-                     + rate * LoadFloatAt(obj, 0x430U));
-    StoreFloatAt(obj, kSobOffPos + 0x04U,
-                 LoadFloatAt(obj, kSobOffPos + 0x04U)
-                     + rate * LoadFloatAt(obj, 0x434U));
-    StoreFloatAt(obj, kSobOffPos + 0x08U,
-                 LoadFloatAt(obj, kSobOffPos + 0x08U)
-                     + rate * LoadFloatAt(obj, 0x438U));
+    hdr.position_x_0024 = hdr.position_x_0024
+        + rate * desc.velocity_x_000c;
+    hdr.position_y_0028 = hdr.position_y_0028
+        + rate * desc.velocity_y_0010;
+    hdr.position_z_002c = hdr.position_z_002c
+        + rate * desc.velocity_z_0014;
 
     // Entrance state machine (states 2..5 via the 0x41ea30 jump table);
-    // the tick value lives at +0x14, the timers at +0x454/+0x458/+0x45c/
-    // +0x460 and the alpha scale at +0x44c.
-    switch (LoadI32At(obj, kSobOffState)) {
+    // the tick value lives at +0x14 (timer_0010.count), the timers at
+    // +0x454/+0x458/+0x45c/+0x460 (entrance_timer_a..d_0030..3c) and the
+    // alpha scale at +0x44c (alpha_target_0028).
+    switch (hdr.state_000c) {
     case 3:
-        if (LoadI32At(obj, 0x14U) >= LoadI32At(obj, 0x454U)) {
-            TickPlayerTimerEaxStackAbi(obj + 0x10U, 0);
-            StoreI32At(obj, kSobOffState, 4);
+        if (hdr.timer_0010.count >= desc.entrance_timer_a_0030) {
+            TickPlayerTimerEaxStackAbi(
+                reinterpret_cast<u8 *>(&hdr.timer_0010), 0);
+            hdr.state_000c = 4;
         }
         break;
     case 4:
-        if (LoadI32At(obj, 0x14U) >= LoadI32At(obj, 0x458U)) {
-            TickPlayerTimerEaxStackAbi(obj + 0x10U, 0);
-            StoreI32At(obj, kSobOffState, 2);
-            StoreFloatAt(obj, kSobOffAlpha, LoadFloatAt(obj, 0x44cU));
-            if (LoadI32At(obj, 0x14U) >= LoadI32At(obj, 0x45cU)) {
-                TickPlayerTimerEaxStackAbi(obj + 0x10U, 0);
-                StoreI32At(obj, kSobOffState, 5);
-                if (LoadI32At(obj, 0x14U) >= LoadI32At(obj, 0x460U))
+        if (hdr.timer_0010.count >= desc.entrance_timer_b_0034) {
+            TickPlayerTimerEaxStackAbi(
+                reinterpret_cast<u8 *>(&hdr.timer_0010), 0);
+            hdr.state_000c = 2;
+            hdr.alpha_0044 = desc.alpha_target_0028;
+            if (hdr.timer_0010.count >= desc.entrance_timer_c_0038) {
+                TickPlayerTimerEaxStackAbi(
+                    reinterpret_cast<u8 *>(&hdr.timer_0010), 0);
+                hdr.state_000c = 5;
+                if (hdr.timer_0010.count >= desc.entrance_timer_d_003c)
                     return 1;
-                StoreFloatAt(obj, kSobOffAlpha,
-                             LoadFloatAt(obj, 0x44cU)
-                                 - LoadFloatAt(obj, 0x44cU)
-                                       * LoadFloatAt(obj, 0x18U)
-                                       / static_cast<float>(
-                                           LoadI32At(obj, 0x460U)));
+                hdr.alpha_0044 =
+                    desc.alpha_target_0028
+                        - desc.alpha_target_0028
+                              * LoadFloatAt(&hdr.timer_0010,
+                                            0x08U) // +0x18 accum as float
+                              / static_cast<float>(
+                                    desc.entrance_timer_d_003c);
             } else {
-                StoreFloatAt(obj, kSobOffAlpha,
-                             LoadFloatAt(obj, 0x44cU)
-                                 * LoadFloatAt(obj, 0x18U)
-                                 / static_cast<float>(
-                                     LoadI32At(obj, 0x458U)));
+                hdr.alpha_0044 =
+                    desc.alpha_target_0028
+                        * LoadFloatAt(&hdr.timer_0010,
+                                      0x08U) // +0x18 accum as float
+                        / static_cast<float>(
+                              desc.entrance_timer_b_0034);
             }
         }
         break;
@@ -1262,47 +1305,46 @@ i32 TH10_STDCALL StageObjectUpdateB(void *object)
     }
 
     // Tip emission for states 4 and 2 (same shape as kind A).
-    const i32 state = LoadI32At(obj, kSobOffState);
+    const i32 state = hdr.state_000c;
     if (state == 4 || state == 2) {
-        const float z = LoadFloatAt(obj, kSobOffDepth);
+        const float z = hdr.depth_0040;
         if (z > kTipGateZ) {
             Float2 vec;
-            SetVectorFromAngle(&vec, LoadFloatAt(obj, kSobOffAngle),
-                               z * kTipScaleZ);
+            SetVectorFromAngle(&vec, hdr.angle_003c, z * kTipScaleZ);
             float tip2[3];
-            tip2[0] = vec.x + LoadFloatAt(obj, kSobOffPos + 0x00U);
-            tip2[1] = vec.y + LoadFloatAt(obj, kSobOffPos + 0x04U);
+            tip2[0] = vec.x + hdr.position_x_0024;
+            tip2[1] = vec.y + hdr.position_y_0028;
             // Native accumulates the z component over a stale-seeded block.
-            tip2[2] = 0.0f + LoadFloatAt(obj, kSobOffPos + 0x08U);
+            tip2[2] = 0.0f + hdr.position_z_002c;
 
-            const float y = LoadFloatAt(obj, kSobOffAlpha);
+            const float y = hdr.alpha_0044;
             const float half_y = y < kTipAlpha
                 ? y * kHalf
                 : y - (y + kTipGateZ) * kTipScaleC;
             const i32 region = ClassifyPositionInPlayerRegionEaxEcxStackAbi(
-                tip2, g_OptionPositionBase, LoadFloatAt(obj, kSobOffAngle),
+                tip2, g_OptionPositionBase, hdr.angle_003c,
                 half_y, z * kTipScaleB);
             if (region == 1) {
                 typedef i32 (TH10_STDCALL *SweepFn)(void *, const float *,
                                                     const float *, i32);
-                const u32 table = LoadU32At(obj, kSobOffTable);
                 const SweepFn sweep =
-                    *reinterpret_cast<const SweepFn *>(table + 6U * 4U);
+                    *reinterpret_cast<const SweepFn *>(
+                        static_cast<u8 *>(hdr.callback_table_0000)
+                            + 6U * 4U);
                 PlayerRecord &player =
                     *reinterpret_cast<PlayerRecord *>(
                         g_OptionPositionBase);
                 const float *target = &player.position_x;
-                sweep(obj, target, tip2, 0);
+                sweep(&so, target, tip2, 0);
             } else if (region == 2) {
-                if (LoadI32At(obj, 0x14U) % 5 == 0) {
+                if (hdr.timer_0010.count % 5 == 0) {
                     u8 *stage = static_cast<u8 *>(g_EffectManagerRoot);
                     SpawnStageEffectEdxEbxAbi(
                         reinterpret_cast<void *>(LoadU32At(stage,
                                                            0x3e0b50U)),
                         tip2, 0x1b2);
                     QueueBulletDeathEffectEbxEsiStackAbi(
-                        0x1c, EffectManager(),
-                        LoadFloatAt(obj, kSobOffPos + 0x00U));
+                        0x1c, EffectManager(), hdr.position_x_0024);
                 }
             }
         }
@@ -1310,19 +1352,18 @@ i32 TH10_STDCALL StageObjectUpdateB(void *object)
 
     // VM publication (kind B record bases).
     {
-        u8 *rec1 = obj + kSobOffRecB_A;
-        VmRecord &rec_vm = *reinterpret_cast<VmRecord *>(rec1);
+        u8 *rec1 = reinterpret_cast<u8 *>(&so.vm1_061c);
+        VmRecord &rec_vm = so.vm1_061c;
         const void *scale_ptr = rec_vm.anim_entry;
         rec_vm.flags |= 8U;
         rec_vm.scale_x =
-            LoadFloatAt(obj, kSobOffAlpha)
-                / LoadFloatAt(scale_ptr, 0x34U);
+            hdr.alpha_0044 / LoadFloatAt(scale_ptr, 0x34U);
         rec_vm.scale_y =
-            LoadFloatAt(obj, kSobOffDepth)
-                / LoadFloatAt(scale_ptr, 0x30U);
+            hdr.depth_0040 / LoadFloatAt(scale_ptr, 0x30U);
         FinalizeTimelineRenderObjectSetup(rec1);
-        if (LoadFloatAt(obj, kSobOffZVel) == kZero)
-            FinalizeTimelineRenderObjectSetup(obj + kSobOffRecB_B);
+        if (hdr.zvel_004c == kZero)
+            FinalizeTimelineRenderObjectSetup(
+                reinterpret_cast<u8 *>(&so.vm2_09c8));
     }
     return 0;
 }
@@ -1334,61 +1375,58 @@ i32 TH10_STDCALL StageObjectUpdateB(void *object)
 // angle from atan2(velocity.y, velocity.x) once either component's
 // magnitude passes 7.5f (0x470c58), then advance the +0x8c/+0x90/+0x94/
 // +0x98 rate record. Reaching the limit clears feature flag 0x10 and
-// stops the drift.
+// stops the drift. All of the drift state (+0x8c..+0xb4) lives inside
+// header.raw_0068.
 void TH10_STDCALL StageObjectDriftSlotA(void *object)
 {
-    u8 *obj = static_cast<u8 *>(object);
-    const i32 ticks = LoadI32At(obj, 0x90U);
+    StageObjectKindA &so = *reinterpret_cast<StageObjectKindA *>(object);
+    StageObjectHeader &hdr = so.header;
+    u8 *const bytes = reinterpret_cast<u8 *>(&so); // raw_0068 drift record
+    const i32 ticks = LoadI32At(bytes, 0x90U);
 
-    if (ticks >= LoadI32At(obj, 0xb4U)) {
-        StoreU32At(obj, kSobOffFlags,
-                   LoadU32At(obj, kSobOffFlags) & 0xffffffefU);
+    if (ticks >= LoadI32At(bytes, 0xb4U)) {
+        hdr.feature_flags_0404 &= 0xffffffefU;
         return;
     }
 
     const float scaled = g_FrameTimeScale;
-    StoreFloatAt(obj, kSobOffZSpeed,
-                 LoadFloatAt(obj, kSobOffZSpeed)
-                     + scaled * LoadFloatAt(obj, 0xa0U));
-    StoreFloatAt(obj, kSobOffVel + 0x00U,
-                 LoadFloatAt(obj, kSobOffVel + 0x00U)
-                     + scaled * LoadFloatAt(obj, 0xa8U));
-    StoreFloatAt(obj, kSobOffVel + 0x04U,
-                 LoadFloatAt(obj, kSobOffVel + 0x04U)
-                     + scaled * LoadFloatAt(obj, 0xacU));
-    StoreFloatAt(obj, kSobOffVel + 0x08U,
-                 LoadFloatAt(obj, kSobOffVel + 0x08U)
-                     + scaled * LoadFloatAt(obj, 0xb0U));
+    hdr.zspeed_0048 =
+        hdr.zspeed_0048 + scaled * LoadFloatAt(bytes, 0xa0U);
+    hdr.velocity_x_0030 =
+        hdr.velocity_x_0030 + scaled * LoadFloatAt(bytes, 0xa8U);
+    hdr.velocity_y_0034 =
+        hdr.velocity_y_0034 + scaled * LoadFloatAt(bytes, 0xacU);
+    hdr.velocity_z_0038 =
+        hdr.velocity_z_0038 + scaled * LoadFloatAt(bytes, 0xb0U);
 
-    const float vel_x = LoadFloatAt(obj, kSobOffVel + 0x00U);
-    const float vel_y = LoadFloatAt(obj, kSobOffVel + 0x04U);
+    const float vel_x = hdr.velocity_x_0030;
+    const float vel_y = hdr.velocity_y_0034;
     const float threshold = FloatFromBits(0x40F00000U); // 0x470c58 7.5f
     if ((vel_x < -threshold || vel_x > threshold)
         || (vel_y < -threshold || vel_y > threshold)) {
         // fpatan(y, x) with the result into +0x3c.
-        StoreFloatAt(obj, kSobOffAngle,
-                     static_cast<float>(
-                         std::atan2(static_cast<double>(vel_y),
-                                    static_cast<double>(vel_x))));
+        hdr.angle_003c = static_cast<float>(
+            std::atan2(static_cast<double>(vel_y),
+                       static_cast<double>(vel_x)));
     }
 
     // Publish the pre-advance tick count, then run the shared rate-record
     // step over {+0x90 count, +0x94 accumulator, +0x98 rate pointer}.
-    StoreI32At(obj, 0x8cU, ticks);
+    StoreI32At(bytes, 0x8cU, ticks);
     const float rate_value = LoadFloatAt(
-        reinterpret_cast<void *>(LoadU32At(obj, 0x98U)), 0U);
+        reinterpret_cast<void *>(LoadU32At(bytes, 0x98U)), 0U);
     if (rate_value > kRateLow && rate_value < kRateHigh) {
-        StoreI32At(obj, 0x90U, ticks + 1);
-        StoreFloatAt(obj, 0x94U,
-                     LoadFloatAt(obj, 0x94U) + kOne);
+        StoreI32At(bytes, 0x90U, ticks + 1);
+        StoreFloatAt(bytes, 0x94U,
+                     LoadFloatAt(bytes, 0x94U) + kOne);
     } else {
-        const float advanced = LoadFloatAt(obj, 0x94U) + rate_value;
-        StoreFloatAt(obj, 0x94U, advanced);
+        const float advanced = LoadFloatAt(bytes, 0x94U) + rate_value;
+        StoreFloatAt(bytes, 0x94U, advanced);
         // Native rounds half-away-from-zero through 0x463b2c.
         const double rounded = advanced >= 0.0f
             ? std::floor(static_cast<double>(advanced) + 0.5)
             : std::ceil(static_cast<double>(advanced) - 0.5);
-        StoreI32At(obj, 0x90U, static_cast<i32>(rounded));
+        StoreI32At(bytes, 0x90U, static_cast<i32>(rounded));
     }
 }
 
